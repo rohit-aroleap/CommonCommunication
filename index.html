@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.016</title>
+<title>CommonCommunication v1.017</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -355,7 +355,7 @@
       <svg viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3c-1.6 4.7-6.1 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 8 3.1l5.7-5.7C34.5 6.5 29.6 4.5 24 4.5 13.2 4.5 4.5 13.2 4.5 24S13.2 43.5 24 43.5 43.5 34.8 43.5 24c0-1.2-.1-2.4-.3-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 16 19 12.5 24 12.5c3.1 0 5.8 1.2 8 3.1l5.7-5.7C34.5 6.5 29.6 4.5 24 4.5 16.3 4.5 9.7 9 6.3 14.7z"/><path fill="#4CAF50" d="M24 43.5c5.4 0 10.3-2 14-5.3l-6.5-5.3c-2 1.4-4.6 2.3-7.5 2.3-5.2 0-9.6-3.3-11.2-8L6.2 32C9.6 38 16.3 43.5 24 43.5z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.3 4.3-4.3 5.8l6.5 5.3c4.4-4 7-9.9 7-15.6 0-1.2-.1-2.4-.4-3.5z"/></svg>
       Sign in with Google
     </button>
-    <div class="login-version">v1.016</div>
+    <div class="login-version">v1.017</div>
   </div>
 </div>
 
@@ -363,7 +363,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.016</span>
+    <span class="ver">v1.017</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -543,7 +543,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.016";
+const APP_VERSION = "v1.017";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -1232,20 +1232,18 @@ function renderCustomerBrowser() {
   });
 }
 
-async function addCustomerToChats(phone, name) {
+async function addCustomerToChats(phone /* unused name kept for back-compat */) {
   if (!phone) return;
   const digits = String(phone).replace(/\D/g, "");
   if (digits.length < 8) return;
   const chatId = `${digits}@c.us`;
   const chatKey = chatId.replace(/[.#$\[\]\/]/g, "_");
   const existing = chatsCache[chatKey] || {};
-  const updates = {
-    chatId,
-    phone: digits,
-    contactName: existing.contactName || name || null,
-  };
-  // Only set lastMsgAt if the chat is brand new — don't overwrite real activity.
-  // No placeholder lastMsgPreview; the preview stays empty until a real message arrives.
+  const updates = { chatId, phone: digits };
+  // Deliberately NOT writing contactName. The Ferra name is looked up at render
+  // time, so the chat row shows the real name with no brackets. contactName is
+  // reserved for explicit manual entries (via "+" or the ✏️ edit button),
+  // which render in (parens) to signal team-provided labels.
   if (!existing.lastMsgAt) {
     updates.lastMsgAt = Date.now();
   }
@@ -1319,12 +1317,16 @@ function listenChats() {
 //   2. Ferra user name                                          → "Name" (no brackets)
 //   3. phone digits                                             → "919..."
 // Brackets on the manual case signal "this is our internal label, not an authoritative
-// name from Ferra."
+// name from Ferra." Edge case: if the manual name exactly equals the Ferra name (e.g.
+// legacy rows from the Ferra browser before v1.017 used to write contactName), treat
+// it as Ferra-sourced and skip the brackets.
 function resolveDisplayName(phone, explicitName) {
-  if (explicitName && String(explicitName).trim()) {
-    return `(${String(explicitName).trim()})`;
-  }
   const ferra = getFerraDisplayName(phone);
+  const manual = explicitName && String(explicitName).trim();
+  if (manual) {
+    if (ferra && manual.toLowerCase() === String(ferra).toLowerCase()) return ferra;
+    return `(${manual})`;
+  }
   if (ferra) return ferra;
   return phone || "?";
 }
