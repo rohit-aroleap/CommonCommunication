@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.010</title>
+<title>CommonCommunication v1.011</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -318,7 +318,7 @@
       <svg viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3c-1.6 4.7-6.1 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 8 3.1l5.7-5.7C34.5 6.5 29.6 4.5 24 4.5 13.2 4.5 4.5 13.2 4.5 24S13.2 43.5 24 43.5 43.5 34.8 43.5 24c0-1.2-.1-2.4-.3-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 16 19 12.5 24 12.5c3.1 0 5.8 1.2 8 3.1l5.7-5.7C34.5 6.5 29.6 4.5 24 4.5 16.3 4.5 9.7 9 6.3 14.7z"/><path fill="#4CAF50" d="M24 43.5c5.4 0 10.3-2 14-5.3l-6.5-5.3c-2 1.4-4.6 2.3-7.5 2.3-5.2 0-9.6-3.3-11.2-8L6.2 32C9.6 38 16.3 43.5 24 43.5z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.3 4.3-4.3 5.8l6.5 5.3c4.4-4 7-9.9 7-15.6 0-1.2-.1-2.4-.4-3.5z"/></svg>
       Sign in with Google
     </button>
-    <div class="login-version">v1.010</div>
+    <div class="login-version">v1.011</div>
   </div>
 </div>
 
@@ -326,8 +326,10 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.010</span>
+    <span class="ver">v1.011</span>
     <span class="spacer"></span>
+    <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
+    <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
     <span id="workerStatus" style="font-size:11px; opacity:.85;"></span>
     <span class="user">
       <button class="logout" id="backfillBtn" style="display:none; margin-right:6px;" title="Import chat history from Periskope">📥 Backfill</button>
@@ -484,7 +486,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.010";
+const APP_VERSION = "v1.011";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -540,6 +542,8 @@ const allowedListEl = $("allowedList");
 const newAllowEmail = $("newAllowEmail");
 const addAllowBtn = $("addAllowBtn");
 const backfillBtn = $("backfillBtn");
+const ferraSyncStatus = $("ferraSyncStatus");
+const ferraRefreshBtn = $("ferraRefreshBtn");
 const backfillModal = $("backfillModal");
 const bfClose = $("bfClose");
 const bfStart = $("bfStart");
@@ -574,6 +578,8 @@ onAuthStateChanged(auth, async (user) => {
     userName.textContent = user.displayName || user.email;
     teamBtn.style.display = isAdmin(user.email) ? "" : "none";
     backfillBtn.style.display = isAdmin(user.email) ? "" : "none";
+    ferraRefreshBtn.style.display = isAdmin(user.email) ? "" : "none";
+    listenFerraData();
     await update(ref(db, `${ROOT}/users/${user.uid}`), {
       name: user.displayName || user.email,
       email: user.email,
@@ -825,6 +831,161 @@ function logLine(html) {
   bfLog.appendChild(div);
   bfLog.scrollTop = bfLog.scrollHeight;
 }
+
+// ====== SHARED FERRA DATA (read-only consumer) ======================
+// The motherofdashboard project has a central ferra-sync Cloudflare worker that
+// writes Ferra customer/habit data to two shared Firebase paths. We read live
+// snapshots here so chat-context features can look up subscription stage,
+// habit history, etc. by customer phone — without doing our own API fetches.
+const FERRA_SYNC_WORKER = "https://ferra-sync.rohitpatel-mailid297.workers.dev/";
+
+let sharedSubs = null;            // ferraSubscriptions/v1 — small (~50 KB)
+let habitMeta = null;             // ferraHabitData/v1/_meta
+let habitUsers = null;            // ferraHabitData/v1/users
+let habitMonthlySummaries = null; // ferraHabitData/v1/userMonthlySummaries
+let habitHistory = null;          // ferraHabitData/v1/userHabitHistory
+let phoneToUidIdx = {};           // built from habitUsers for O(1) phone lookup
+let ferraListenersAttached = false;
+
+function normalizeFerraPhone(p) {
+  let n = String(p || "").replace(/\D/g, "");
+  n = n.replace(/^0+/, "");
+  if (n.length === 10) n = "91" + n;
+  return n;
+}
+
+function listenFerraData() {
+  if (ferraListenersAttached) return;
+  ferraListenersAttached = true;
+
+  onValue(ref(db, "ferraSubscriptions/v1"), (snap) => {
+    sharedSubs = snap.val();
+    updateFerraSyncIndicator();
+  });
+  onValue(ref(db, "ferraHabitData/v1/_meta"), (snap) => {
+    habitMeta = snap.val();
+    updateFerraSyncIndicator();
+  });
+  onValue(ref(db, "ferraHabitData/v1/users"), (snap) => {
+    habitUsers = snap.val();
+    rebuildPhoneToUidIdx();
+  });
+  onValue(ref(db, "ferraHabitData/v1/userMonthlySummaries"), (snap) => {
+    habitMonthlySummaries = snap.val();
+  });
+  onValue(ref(db, "ferraHabitData/v1/userHabitHistory"), (snap) => {
+    habitHistory = snap.val();
+  });
+}
+
+function rebuildPhoneToUidIdx() {
+  phoneToUidIdx = {};
+  if (!habitUsers) return;
+  const list = Array.isArray(habitUsers) ? habitUsers : Object.values(habitUsers);
+  for (const u of list) {
+    if (!u) continue;
+    const uid = u.uid || u.userId;
+    if (!uid) continue;
+    const norm = normalizeFerraPhone(u.phone || u.phoneNumber || "");
+    if (norm) phoneToUidIdx[norm] = uid;
+  }
+}
+
+function getSubscriptionTag(phone) {
+  if (!sharedSubs || !sharedSubs.byPhone) return null;
+  return sharedSubs.byPhone[normalizeFerraPhone(phone)] || null;
+}
+
+function findFerraUserByPhone(phone) {
+  if (!habitUsers) return null;
+  const uid = phoneToUidIdx[normalizeFerraPhone(phone)];
+  if (!uid) return null;
+  if (Array.isArray(habitUsers)) return habitUsers.find(u => u && (u.uid === uid || u.userId === uid)) || null;
+  return habitUsers[uid] || null;
+}
+
+// userMonthlySummaries[uid] is a LIST of month objects, each with dailyActivity dict
+function getDailyActivity(uid, dateStr) {
+  if (!habitMonthlySummaries || !uid) return null;
+  const months = habitMonthlySummaries[uid];
+  if (!months) return null;
+  const list = Array.isArray(months) ? months : Object.values(months);
+  for (const m of list) {
+    if (m && m.dailyActivity && m.dailyActivity[dateStr]) return m.dailyActivity[dateStr];
+  }
+  return null;
+}
+
+// userHabitHistory[uid] is a LIST of month objects with FLAT keys like
+// "dailyScores_2026-04-11" (underscore — Firebase forbids dot in keys)
+function getDailyScore(uid, dateStr) {
+  if (!habitHistory || !uid) return null;
+  const months = habitHistory[uid];
+  if (!months) return null;
+  const list = Array.isArray(months) ? months : Object.values(months);
+  const safeKey = `dailyScores_${dateStr}`;
+  for (const m of list) {
+    if (m && m[safeKey]) return m[safeKey];
+  }
+  return null;
+}
+
+function formatIstTime(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso);
+  const ist = new Date(d.getTime() + 5.5 * 60 * 60 * 1000);
+  const Y = ist.getUTCFullYear();
+  const M = String(ist.getUTCMonth() + 1).padStart(2, "0");
+  const D = String(ist.getUTCDate()).padStart(2, "0");
+  const h = String(ist.getUTCHours()).padStart(2, "0");
+  const m = String(ist.getUTCMinutes()).padStart(2, "0");
+  return `${Y}-${M}-${D} ${h}:${m} IST`;
+}
+
+function updateFerraSyncIndicator() {
+  const subsAt = sharedSubs?.uploadedAt;
+  const habitAt = habitMeta?._syncedAt;
+  const latest = [subsAt, habitAt].filter(Boolean).sort().reverse()[0];
+  ferraSyncStatus.textContent = latest ? `Ferra: ${formatIstTime(latest).replace(" IST","")}` : "Ferra: not loaded";
+  ferraSyncStatus.title = latest
+    ? `Subs synced: ${formatIstTime(subsAt)}\nHabit synced: ${formatIstTime(habitAt)}`
+    : "Ferra data not yet loaded from Firebase";
+}
+
+async function refreshFerraNow() {
+  const orig = ferraRefreshBtn.textContent;
+  ferraRefreshBtn.disabled = true;
+  ferraRefreshBtn.textContent = "…";
+  try {
+    const r = await fetch(FERRA_SYNC_WORKER, { method: "POST" });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) console.warn("Ferra refresh failed:", j);
+  } catch (e) {
+    console.warn("Ferra refresh error:", e);
+  } finally {
+    ferraRefreshBtn.disabled = false;
+    ferraRefreshBtn.textContent = orig;
+  }
+}
+ferraRefreshBtn.onclick = refreshFerraNow;
+
+// Expose to window for DevTools inspection. When you build chat-context UI
+// later, call these helpers from your render functions.
+window._ferra = {
+  get subs()    { return sharedSubs; },
+  get meta()    { return habitMeta; },
+  get users()   { return habitUsers; },
+  get monthly() { return habitMonthlySummaries; },
+  get history() { return habitHistory; },
+  get phoneIdx(){ return phoneToUidIdx; },
+  normalizePhone: normalizeFerraPhone,
+  getSubscriptionTag,
+  findUserByPhone: findFerraUserByPhone,
+  getDailyActivity,
+  getDailyScore,
+  refreshNow: refreshFerraNow,
+};
 
 // ====== WORKER HEALTH ======
 async function pingWorker() {
