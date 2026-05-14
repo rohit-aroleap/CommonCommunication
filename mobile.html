@@ -755,6 +755,16 @@ const FERRA_TAG_STAGE = {
   "Uninstallation Pending":"offboarding","Pickup Pending":"offboarding","Received in Warehouse":"offboarding",
 };
 
+// "Daily Workout Ferra C…" cohort groups are clubbed together and hidden from
+// every other view, matching the desktop behaviour (see DAILY_GROUP_PREFIX in
+// index.html). They're only shown when the user explicitly picks the "Daily
+// groups" option in the subscription dropdown.
+const DAILY_GROUP_PREFIX = "Daily Workout Ferra C";
+const DAILY_SENTINEL = "__daily_groups__";
+function isDailyGroup(r) {
+  return r && r.chatType === "group" && String(r.groupName || "").startsWith(DAILY_GROUP_PREFIX);
+}
+
 // ====== ELEMENTS ======
 const $ = (id) => document.getElementById(id);
 const loginScreen = $("loginScreen");
@@ -1092,15 +1102,23 @@ function resolveDisplayName(phone, explicitName, opts) {
 // data so we don't show empty buckets. "All" is always first; defaults to "All".
 function rebuildStatusFilterOptions() {
   const counts = {};
+  let dailyCount = 0;
   for (const r of lastChatRows) {
+    if (isDailyGroup(r)) { dailyCount++; continue; }   // counted separately, excluded from status buckets
     const s = getSubscriptionStatusFor(r.phone);
     if (s) counts[s] = (counts[s] || 0) + 1;
   }
   const statuses = Object.keys(counts).sort();
   const prev = statusFilter.value;
-  statusFilter.innerHTML = `<option value="">All subscriptions</option>` +
-    statuses.map(s => `<option value="${escapeHtml(s)}">${prettyStatus(s)} (${counts[s]})</option>`).join("");
-  if (statuses.includes(prev)) statusFilter.value = prev;
+  let html = `<option value="">All subscriptions</option>`;
+  if (dailyCount > 0) {
+    html += `<option value="${DAILY_SENTINEL}">Daily groups (${dailyCount})</option>`;
+  }
+  html += statuses.map(s => `<option value="${escapeHtml(s)}">${prettyStatus(s)} (${counts[s]})</option>`).join("");
+  statusFilter.innerHTML = html;
+  // Restore previous selection if it's still a valid option.
+  if (prev === DAILY_SENTINEL && dailyCount > 0) statusFilter.value = DAILY_SENTINEL;
+  else if (statuses.includes(prev)) statusFilter.value = prev;
   statusFilter.classList.toggle("active", !!statusFilter.value);
   stageFilter.classList.toggle("active", !!stageFilter.value);
 }
@@ -1138,14 +1156,23 @@ function renderChats() {
   // privacy filter — non-admins don't see chats marked private
   if (!isAdminUser) rows = rows.filter(r => !r.private);
 
-  if (statusFilterVal) {
-    rows = rows.filter(r => getSubscriptionStatusFor(r.phone) === statusFilterVal);
-  }
-  if (stageFilterVal) {
-    rows = rows.filter(r => {
-      const tag = getSubscriptionTag(r.phone);
-      return tag && FERRA_TAG_STAGE[tag] === stageFilterVal;
-    });
+  // Daily workout cohort groups: hidden by default; shown only when the user
+  // explicitly picks "Daily groups" in the dropdown. When the daily-groups
+  // option is selected, the stage filter is bypassed (groups don't carry
+  // subscription tags, so combining them would always return empty).
+  if (statusFilterVal === DAILY_SENTINEL) {
+    rows = rows.filter(isDailyGroup);
+  } else {
+    rows = rows.filter(r => !isDailyGroup(r));
+    if (statusFilterVal) {
+      rows = rows.filter(r => getSubscriptionStatusFor(r.phone) === statusFilterVal);
+    }
+    if (stageFilterVal) {
+      rows = rows.filter(r => {
+        const tag = getSubscriptionTag(r.phone);
+        return tag && FERRA_TAG_STAGE[tag] === stageFilterVal;
+      });
+    }
   }
   if (q) {
     rows = rows.filter(r => {
