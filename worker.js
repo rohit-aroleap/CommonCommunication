@@ -216,75 +216,84 @@ async function handleBackfillBatch(request, env) {
 async function backfillOneChat(env, chat, msgsPerChat) {
   const chatId = chat.chat_id;
   if (!chatId) return { error: "no chatId" };
+  const chatKey = encodeKey(chatId);
 
+  // (1) Fetch messages from Periskope
   const msgsRes = await fetch(
     `${PERISKOPE_BASE}/chats/${encodeURIComponent(chatId)}/messages?offset=0&limit=${msgsPerChat}`,
     { headers: periskopeHeaders(env) }
   );
   const msgsJson = await safeJson(msgsRes);
   if (!msgsRes.ok) return { chatId, error: "msgs_fetch_failed" };
-
   const messages = msgsJson?.messages || [];
 
-  // Parallel dedup check
-  const checks = await Promise.all(messages.map(async (m) => {
-    const id = m.message_id || m.unique_id || m.id?.serialized || null;
-    if (!id) return null;
-    const existing = await fbGet(env, `${ROOT}/byPeriskopeId/${encodeKey(id)}`);
-    return existing ? null : { m, id };
-  }));
-  const toWrite = checks.filter(Boolean);
-
-  // Compute latest message for meta (do this before parallel writes to avoid races)
-  let latestTs = 0, latestPreview = "", latestDir = "in";
-  for (const { m } of toWrite) {
-    const ts = parseTs(m.timestamp);
-    if (ts > latestTs) {
-      latestTs = ts;
-      latestPreview = (m.body || `[${m.message_type || "media"}]`).slice(0, 120);
-      latestDir = m.from_me ? "out" : "in";
+  // (2) Fetch existing in-chat messages, build periskopeMsgId set for local dedup
+  const existingMsgs = await fbGet(env, `${ROOT}/chats/${chatKey}/messages`);
+  const existingIds = new Set();
+  if (existingMsgs && typeof existingMsgs === "object") {
+    for (const m of Object.values(existingMsgs)) {
+      if (m && m.periskopeMsgId) existingIds.add(m.periskopeMsgId);
     }
   }
 
-  // Parallel writes
-  await Promise.all(toWrite.map(async ({ m, id }) => {
+  // (3) Fetch existing meta
+  const existingMeta = await fbGet(env, `${ROOT}/chats/${chatKey}/meta`);
+
+  // Build multi-path update
+  const updates = {};
+  let written = 0, latestTs = 0, latestPreview = "", latestDir = "in";
+
+  for (const m of messages) {
+    const id = m.message_id || m.unique_id || m.id?.serialized || null;
+    if (!id || existingIds.has(id)) continue;
+
     const isFromMe = m.from_me === true;
-    const record = {
+    const text = m.body || "";
+    const ts = parseTs(m.timestamp);
+    const senderPhone = m.sender_phone ? String(m.sender_phone).split("@")[0] : chatIdToPhone(chatId);
+    const msgKey = encodeKey(id);
+
+    updates[`${ROOT}/chats/${chatKey}/messages/${msgKey}`] = {
       direction: isFromMe ? "out" : "in",
-      text: m.body || "",
-      ts: parseTs(m.timestamp),
+      text, ts,
       periskopeMsgId: id,
       messageType: m.message_type || "text",
-      senderPhone: m.sender_phone ? String(m.sender_phone).split("@")[0] : chatIdToPhone(chatId),
+      senderPhone,
       backfilled: true,
     };
-    const pushed = await fbPush(env, `${ROOT}/chats/${encodeKey(chatId)}/messages`, record);
-    if (pushed?.name) {
-      await fbPut(env, `${ROOT}/byPeriskopeId/${encodeKey(id)}`, { chatId, msgKey: pushed.name });
-    }
-  }));
+    updates[`${ROOT}/byPeriskopeId/${msgKey}`] = { chatId, msgKey };
+    written++;
 
-  // Update chat meta only if we have something new and it's actually newer than what's there
-  if (toWrite.length > 0) {
-    const existingMeta = await fbGet(env, `${ROOT}/chats/${encodeKey(chatId)}/meta`);
-    const meta = {
-      chatId,
-      phone: chatIdToPhone(chatId),
-      contactName: chat.chat_name || existingMeta?.contactName || null,
-    };
-    if (latestTs > 0 && (!existingMeta?.lastMsgAt || latestTs > existingMeta.lastMsgAt)) {
-      meta.lastMsgAt = latestTs;
-      meta.lastMsgPreview = latestPreview;
-      meta.lastMsgDirection = latestDir;
+    if (ts > latestTs) {
+      latestTs = ts;
+      latestPreview = (text || `[${m.message_type || "media"}]`).slice(0, 120);
+      latestDir = isFromMe ? "out" : "in";
     }
-    await fbPatch(env, `${ROOT}/chats/${encodeKey(chatId)}/meta`, meta);
+  }
+
+  if (written > 0) {
+    updates[`${ROOT}/chats/${chatKey}/meta/chatId`] = chatId;
+    updates[`${ROOT}/chats/${chatKey}/meta/phone`] = chatIdToPhone(chatId);
+    if (chat.chat_name && !existingMeta?.contactName) {
+      updates[`${ROOT}/chats/${chatKey}/meta/contactName`] = chat.chat_name;
+    }
+    if (latestTs > 0 && (!existingMeta?.lastMsgAt || latestTs > existingMeta.lastMsgAt)) {
+      updates[`${ROOT}/chats/${chatKey}/meta/lastMsgAt`] = latestTs;
+      updates[`${ROOT}/chats/${chatKey}/meta/lastMsgPreview`] = latestPreview;
+      updates[`${ROOT}/chats/${chatKey}/meta/lastMsgDirection`] = latestDir;
+    }
+  }
+
+  // (4) Atomic multi-path PATCH at root - one subrequest for all writes
+  if (Object.keys(updates).length > 0) {
+    await fbPatchRoot(env, updates);
   }
 
   return {
     chatId,
     name: chat.chat_name || chatIdToPhone(chatId),
-    written: toWrite.length,
-    skipped: messages.length - toWrite.length,
+    written,
+    skipped: messages.length - written,
     fetched: messages.length,
   };
 }
@@ -346,6 +355,13 @@ async function fbPatch(env, path, value) {
 }
 async function fbGet(env, path) {
   const r = await fetch(fbUrl(env, path));
+  return safeJson(r);
+}
+// Multi-path PATCH at the root of the database. Body keys are deep paths relative to root.
+// One HTTP request → many writes atomically. Critical for fitting under the Worker subrequest limit.
+async function fbPatchRoot(env, updates) {
+  const url = `${env.FIREBASE_DB_URL}/.json?auth=${env.FIREBASE_DB_SECRET}`;
+  const r = await fetch(url, { method: "PATCH", body: JSON.stringify(updates) });
   return safeJson(r);
 }
 
