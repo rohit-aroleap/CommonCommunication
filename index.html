@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.060</title>
+<title>CommonCommunication v1.061</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -794,7 +794,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.060</div>
+    <div class="login-version">v1.061</div>
   </div>
 </div>
 
@@ -802,7 +802,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.060</span>
+    <span class="ver">v1.061</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -1063,7 +1063,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.060";
+const APP_VERSION = "v1.061";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -3013,7 +3013,7 @@ function formatNoteTime(ts) {
 //   3. phone digits                                             → "919..."
 // Brackets on the manual case signal "this is our internal label, not an authoritative
 // name from Ferra." Edge case: if the manual name exactly equals the Ferra name (e.g.
-// legacy rows from the Ferra browser before v1.060 used to write contactName), treat
+// legacy rows from the Ferra browser before v1.061 used to write contactName), treat
 // it as Ferra-sourced and skip the brackets.
 function resolveDisplayName(phone, explicitName, opts) {
   // Groups get their stored groupName (no brackets, no Ferra lookup)
@@ -3037,12 +3037,36 @@ function avatarInitial(name) {
   return String(name || "?").replace(/[()]/g, "").trim().charAt(0).toUpperCase() || "?";
 }
 
+// Compute the set of chatKeys where the current user has an open ticket.
+// Single source of truth — used by BOTH the My-tickets pill count and the
+// My-tickets filter. Avoids drift between the two code paths.
+function myOpenTicketChatKeysSet() {
+  const out = new Set();
+  const myUid = currentUser?.uid;
+  if (!myUid || !ticketsCache) return out;
+  for (const t of Object.values(ticketsCache)) {
+    if (!t || t.status !== "open") continue;
+    if (t.assignee !== myUid) continue;
+    if (!t.anchorChatId) continue;
+    out.add(encodeKey(t.anchorChatId));
+  }
+  return out;
+}
+
 function renderChatList(rows) {
   // Resolve display name at render time so it updates live when Ferra data arrives
   const enriched = (rows || []).map(r => ({
     ...r,
     name: resolveDisplayName(r.phone, r.explicitName, { chatType: r.chatType, groupName: r.groupName }),
   }));
+  const myChatKeys = myOpenTicketChatKeysSet();
+  // Debug: log the first time my-tickets count and filter could be inconsistent
+  if (currentStatusFilter === "My tickets" && myChatKeys.size > 0) {
+    const sample = enriched.slice(0, 3).map(r => r.chatKey);
+    if (!enriched.some(r => myChatKeys.has(r.chatKey))) {
+      console.warn("[v1.061] My-tickets has keys but no chat-rows match. myChatKeys:", Array.from(myChatKeys), "sample r.chatKey:", sample);
+    }
+  }
   const isCurrentUserAdmin = isAdmin(currentUser?.email);
   // Non-admins never see private chats. Admins see them with a 🔒 indicator.
   const afterPrivacy = isCurrentUserAdmin ? enriched : enriched.filter(r => !r.private);
@@ -3057,8 +3081,7 @@ function renderChatList(rows) {
       const liveCutoff = Date.now() - LIVE_WINDOW_MS;
       v = v.filter(r => (r.lastMsgAt || 0) >= liveCutoff);
     } else if (currentStatusFilter === "My tickets") {
-      const myUid = currentUser?.uid;
-      v = myUid ? v.filter(r => hasMyOpenTicket(r.chatKey, myUid)) : [];
+      v = v.filter(r => myChatKeys.has(r.chatKey));
     } else if (currentStatusFilter !== "All") {
       v = v.filter(r => getSubscriptionStatusFor(r.phone) === currentStatusFilter);
     }
@@ -3070,7 +3093,7 @@ function renderChatList(rows) {
   };
 
   // Row 1 counts: privacy + tag filter applied, then count by status
-  renderFilterPills(computeStatusCounts(applyTagFilter(afterPrivacy)));
+  renderFilterPills(computeStatusCounts(applyTagFilter(afterPrivacy), myChatKeys));
   // Row 2 counts: privacy + status filter applied, then count by tag
   renderTagPills(computeTagCounts(applyStatusFilter(afterPrivacy)));
 
@@ -3203,24 +3226,25 @@ function computeTagCounts(rowsForCounting) {
 // suffix on each filter pill. "All" = total visible; "Live" = activity in the
 // last 7 days; specific statuses only count rows whose phone has that
 // subscriptionStatus in Ferra.
-function computeStatusCounts(visibleRows) {
+function computeStatusCounts(visibleRows, myChatKeys) {
   const counts = { All: 0 };
   for (const s of STATUS_FILTERS) if (s !== "All") counts[s] = 0;
   const liveCutoff = Date.now() - LIVE_WINDOW_MS;
-  const myUid = currentUser?.uid;
+  const set = myChatKeys || myOpenTicketChatKeysSet();
   for (const r of visibleRows) {
     // Daily Groups are their own bucket — kept out of All / Live / status counts
     // so the everyday inbox view isn't cluttered by workout cohort chatter.
     if (isDailyGroup(r)) { counts["Daily Groups"]++; continue; }
     counts.All++;
     if ((r.lastMsgAt || 0) >= liveCutoff) counts.Live++;
-    if (myUid && hasMyOpenTicket(r.chatKey, myUid)) counts["My tickets"]++;
+    if (set.has(r.chatKey)) counts["My tickets"]++;
     const st = getSubscriptionStatusFor(r.phone);
     if (st && counts[st] !== undefined) counts[st]++;
   }
   return counts;
 }
 
+// kept for back-compat with anything else that might call it
 function hasMyOpenTicket(chatKey, uid) {
   const open = chatOpenTickets[chatKey] || [];
   for (const t of open) if (t.assignee === uid) return true;
