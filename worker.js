@@ -40,6 +40,9 @@ export default {
       if (url.pathname === "/backfill-batch" && request.method === "POST") {
         return cors(env, await handleBackfillBatch(request, env));
       }
+      if (url.pathname === "/fetch-chat-info" && request.method === "POST") {
+        return cors(env, await handleFetchChatInfo(request, env));
+      }
       return cors(env, json({ error: "not_found" }, 404));
     } catch (err) {
       return cors(env, json({ error: String(err && err.message || err) }, 500));
@@ -172,6 +175,26 @@ async function handleWebhook(request, env) {
     metaUpdate.phone = chatIdToPhone(chatId); // the group id portion, for reference
   }
   await fbPatch(env, `${ROOT}/chats/${encodeKey(chatId)}/meta`, metaUpdate);
+
+  // Best-effort: if this is a group we haven't named yet, fetch the group name
+  // from Periskope and write it. Webhook payloads don't include chat_name.
+  if (isGroup) {
+    try {
+      const existingMeta = await fbGet(env, `${ROOT}/chats/${encodeKey(chatId)}/meta`);
+      if (!existingMeta?.groupName) {
+        const cr = await fetch(`${PERISKOPE_BASE}/chats/${encodeURIComponent(chatId)}`, {
+          headers: periskopeHeaders(env),
+        });
+        if (cr.ok) {
+          const cj = await safeJson(cr);
+          const chat = cj?.chat || cj;
+          if (chat?.chat_name) {
+            await fbPatch(env, `${ROOT}/chats/${encodeKey(chatId)}/meta`, { groupName: chat.chat_name });
+          }
+        }
+      }
+    } catch { /* swallow — webhook should still succeed even if name lookup fails */ }
+  }
 
   return json({ ok: true, event: evtType });
 }
@@ -321,6 +344,40 @@ async function backfillOneChat(env, chat, msgsPerChat) {
     skipped: messages.length - written,
     fetched: messages.length,
   };
+}
+
+// ---------- /fetch-chat-info (single-chat name/meta refresh from Periskope) ----------
+// Used when we know a chat exists in Firebase but its name is missing (typically
+// groups created from webhook events, since the webhook payload doesn't include
+// the group's chat_name). Caller passes { chatId }. We fetch GET /chats/{id} and
+// write the chat_name into meta.groupName (for groups) or meta.contactName (for users).
+async function handleFetchChatInfo(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const chatId = body?.chatId;
+  if (!chatId) return json({ error: "missing chatId" }, 400);
+
+  const r = await fetch(`${PERISKOPE_BASE}/chats/${encodeURIComponent(chatId)}`, {
+    headers: periskopeHeaders(env),
+  });
+  const j = await safeJson(r);
+  if (!r.ok) return json({ error: "fetch_failed", details: j }, 502);
+
+  // Response can be the chat object directly or wrapped { chat: {...} }
+  const chat = j?.chat || j;
+  const chatName = chat?.chat_name || null;
+  const isGroup = String(chatId).endsWith("@g.us");
+
+  const updates = {
+    chatId,
+    chatType: isGroup ? "group" : "user",
+    phone: chatIdToPhone(chatId),
+  };
+  if (chatName) {
+    if (isGroup) updates.groupName = chatName;
+    else updates.contactName = chatName;
+  }
+  await fbPatch(env, `${ROOT}/chats/${encodeKey(chatId)}/meta`, updates);
+  return json({ ok: true, chatId, chatName, isGroup });
 }
 
 async function handleFetchMessages(request, env) {
