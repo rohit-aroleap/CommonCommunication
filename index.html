@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.047</title>
+<title>CommonCommunication v1.048</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -405,7 +405,14 @@
     padding: 8px 16px;
     display: flex; align-items: center; justify-content: space-between;
     gap: 8px;
+    cursor: pointer;
+    user-select: none;
   }
+  .notes-header .chevron {
+    font-size: 10px; color: #6b5d10; transition: transform .15s;
+  }
+  .notes-panel.collapsed .chevron { transform: rotate(-90deg); }
+  .notes-panel.collapsed .notes-list { display: none; }
   .notes-header .title {
     font-weight: 600; font-size: 12px; color: #6b5d10;
     letter-spacing: .3px;
@@ -538,7 +545,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.047</div>
+    <div class="login-version">v1.048</div>
   </div>
 </div>
 
@@ -546,7 +553,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.047</span>
+    <span class="ver">v1.048</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -615,8 +622,8 @@
           </div>
         </div>
         <div class="notes-panel" id="notesPanel">
-          <div class="notes-header">
-            <span class="title">📝 NOTES <span id="notesCount"></span></span>
+          <div class="notes-header" id="notesHeader">
+            <span class="title"><span class="chevron">▼</span> 📝 NOTES <span id="notesCount"></span></span>
             <button class="add-btn" id="addNoteBtn">+ Add note</button>
           </div>
           <div class="notes-list" id="notesList"></div>
@@ -781,7 +788,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.047";
+const APP_VERSION = "v1.048";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -804,6 +811,7 @@ let notesUnsub = null;    // detach for current notes listener
 let currentNotes = {};    // notes for the currently-open chat
 let addingNote = false;
 let editingNoteId = null;
+let notesExpanded = true; // collapsed mode: shows header bar only, click to expand
 let contactsCache = {};   // phone (digits) -> { name, source, seenAt } from commonComm/contacts
 
 // ====== ELEMENTS ======
@@ -840,6 +848,7 @@ const notesPanel = $("notesPanel");
 const notesCount = $("notesCount");
 const notesList = $("notesList");
 const addNoteBtn = $("addNoteBtn");
+const notesHeader = $("notesHeader");
 const infoBtn = $("infoBtn");
 const infoDrawer = $("infoDrawer");
 const infoCloseBtn = $("infoCloseBtn");
@@ -1954,11 +1963,34 @@ function listenNotes(chatKey) {
   });
 }
 
-addNoteBtn.onclick = () => {
+addNoteBtn.onclick = (e) => {
+  e.stopPropagation(); // don't trigger header toggle
   if (!currentChatId) return;
   addingNote = true;
+  setNotesExpanded(true);
   renderNotes();
 };
+
+// Click on the notes header (anywhere except the "+ Add note" button) toggles
+// the panel between collapsed (just header bar) and expanded (header + notes).
+notesHeader.addEventListener("click", (e) => {
+  if (e.target.closest("#addNoteBtn")) return;
+  setNotesExpanded(!notesExpanded);
+});
+
+// Click outside the panel (e.g. into the message area or composer) auto-
+// collapses, unless the user is in the middle of adding/editing a note.
+document.addEventListener("mousedown", (e) => {
+  if (!notesExpanded) return;
+  if (notesPanel.contains(e.target)) return;
+  if (addingNote || editingNoteId) return;
+  setNotesExpanded(false);
+});
+
+function setNotesExpanded(v) {
+  notesExpanded = !!v;
+  notesPanel.classList.toggle("collapsed", !notesExpanded);
+}
 
 function renderNotes() {
   const notes = Object.entries(currentNotes)
@@ -2227,7 +2259,7 @@ function formatNoteTime(ts) {
 //   3. phone digits                                             → "919..."
 // Brackets on the manual case signal "this is our internal label, not an authoritative
 // name from Ferra." Edge case: if the manual name exactly equals the Ferra name (e.g.
-// legacy rows from the Ferra browser before v1.047 used to write contactName), treat
+// legacy rows from the Ferra browser before v1.048 used to write contactName), treat
 // it as Ferra-sourced and skip the brackets.
 function resolveDisplayName(phone, explicitName, opts) {
   // Groups get their stored groupName (no brackets, no Ferra lookup)
@@ -2435,9 +2467,11 @@ function renderFerraPills(phone) {
 function openChat(chatKey) {
   currentChatId = chatKey;
   // Reset note edit state when switching chats so a half-typed note from one
-  // chat doesn't appear in another.
+  // chat doesn't appear in another. Start expanded so trainers see existing
+  // notes immediately on open; auto-collapses when they click into messages.
   addingNote = false;
   editingNoteId = null;
+  setNotesExpanded(true);
   updateThreadHeader();
   threadEmpty.style.display = "none";
   threadActive.style.display = "flex";
