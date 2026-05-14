@@ -158,21 +158,22 @@ async function handleWebhook(request, env) {
       msgKey: pushed.name,
     });
   }
-  // For groups, senderPhone/senderName is the individual group member who sent
-  // this message — NOT the group's identity. Don't write that as contactName.
-  // The group's display name comes from backfill (chat.chat_name) into groupName.
+  // meta.phone always derives from the chat_id, which IS the customer (1-on-1)
+  // or the group. For outbound messages sent OUTSIDE this dashboard (e.g.
+  // directly from Periskope's UI), the webhook's sender_phone/sender_name are
+  // the ORG's identity — never write that as chat-level meta.
   const metaUpdate = {
     chatId,
     chatType: isGroup ? "group" : "user",
+    phone: chatIdToPhone(chatId),
     lastMsgAt: ts,
     lastMsgPreview: (text || `[${messageType}]`).slice(0, 120),
     lastMsgDirection: isFromMe ? "out" : "in",
   };
-  if (!isGroup) {
-    metaUpdate.phone = senderPhone;
-    metaUpdate.contactName = senderName || null;
-  } else {
-    metaUpdate.phone = chatIdToPhone(chatId); // the group id portion, for reference
+  // contactName: only learn from inbound senders on 1-on-1 chats. Outbound
+  // sender info is OUR org, not the customer.
+  if (!isGroup && !isFromMe && senderName) {
+    metaUpdate.contactName = senderName;
   }
   await fbPatch(env, `${ROOT}/chats/${encodeKey(chatId)}/meta`, metaUpdate);
 
