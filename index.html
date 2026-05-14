@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.053</title>
+<title>CommonCommunication v1.054</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -657,7 +657,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.053</div>
+    <div class="login-version">v1.054</div>
   </div>
 </div>
 
@@ -665,7 +665,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.053</span>
+    <span class="ver">v1.054</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -908,7 +908,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.053";
+const APP_VERSION = "v1.054";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -2301,9 +2301,10 @@ function renderInfoDrawer() {
 
   // Last 7 days workouts — as a 7-box grid (green box w/ count if active,
   // purple arrow badge if progressive overload, gray box if no activity)
+  // Today on the LEFT, oldest on the right (i = 0 is today)
   const today = new Date();
   const days = [];
-  for (let i = 6; i >= 0; i--) {
+  for (let i = 0; i < 7; i++) {
     const d = new Date(today);
     d.setDate(today.getDate() - i);
     const ds = d.toISOString().slice(0, 10);
@@ -2324,9 +2325,10 @@ function renderInfoDrawer() {
     ].filter(Boolean).join(" · ");
     return `<div class="day-box ${hasActivity ? "has-activity" : ""}" title="${escapeHtml(tip)}">${hasActivity ? count : ""}${po > 0 ? `<div class="po-badge" title="Progressive overload">↗</div>` : ""}</div>`;
   }).join("");
-  const labelsHtml = days.map(({ d }) => {
-    const wk = d.toLocaleDateString([], { weekday: "short" }).slice(0, 1);
-    return `<div>${escapeHtml(wk)}</div>`;
+  const labelsHtml = days.map(({ d }, idx) => {
+    const wk = idx === 0 ? "Today" : d.toLocaleDateString([], { weekday: "short" }).slice(0, 1);
+    const style = idx === 0 ? "font-weight:600; color:var(--green-dark);" : "";
+    return `<div style="${style}">${escapeHtml(wk)}</div>`;
   }).join("");
   const daysHtml = `<div class="week-grid">${boxesHtml}</div><div class="week-labels">${labelsHtml}</div>`;
 
@@ -2420,7 +2422,7 @@ function formatNoteTime(ts) {
 //   3. phone digits                                             → "919..."
 // Brackets on the manual case signal "this is our internal label, not an authoritative
 // name from Ferra." Edge case: if the manual name exactly equals the Ferra name (e.g.
-// legacy rows from the Ferra browser before v1.053 used to write contactName), treat
+// legacy rows from the Ferra browser before v1.054 used to write contactName), treat
 // it as Ferra-sourced and skip the brackets.
 function resolveDisplayName(phone, explicitName, opts) {
   // Groups get their stored groupName (no brackets, no Ferra lookup)
