@@ -47,6 +47,9 @@ export default {
       if (url.pathname === "/summarize" && request.method === "POST") {
         return cors(env, await handleSummarize(request, env));
       }
+      if (url.pathname === "/media" && request.method === "GET") {
+        return cors(env, await handleMediaProxy(request, env));
+      }
       return cors(env, json({ error: "not_found" }, 404));
     } catch (err) {
       return cors(env, json({ error: String(err && err.message || err) }, 500));
@@ -184,7 +187,7 @@ async function handleWebhook(request, env) {
     chatType: isGroup ? "group" : "user",
     phone: chatIdToPhone(chatId),
     lastMsgAt: ts,
-    lastMsgPreview: (text || `[${messageType}]`).slice(0, 120),
+    lastMsgPreview: mediaPreview(media, messageType, text).slice(0, 120),
     lastMsgDirection: isFromMe ? "out" : "in",
   };
   // contactName: only learn from inbound senders on 1-on-1 chats. Outbound
@@ -321,21 +324,25 @@ async function backfillOneChat(env, chat, msgsPerChat) {
     const ts = parseTs(m.timestamp);
     const senderPhone = m.sender_phone ? String(m.sender_phone).split("@")[0] : chatIdToPhone(chatId);
     const msgKey = encodeKey(id);
+    const media = extractMedia(m);
 
-    updates[`${ROOT}/chats/${chatKey}/messages/${msgKey}`] = {
+    const msgRecord = {
       direction: isFromMe ? "out" : "in",
-      text, ts,
+      text: media?.caption || text,
+      ts,
       periskopeMsgId: id,
       messageType: m.message_type || "text",
       senderPhone,
       backfilled: true,
     };
+    if (media) msgRecord.media = media;
+    updates[`${ROOT}/chats/${chatKey}/messages/${msgKey}`] = msgRecord;
     updates[`${ROOT}/byPeriskopeId/${msgKey}`] = { chatId, msgKey };
     written++;
 
     if (ts > latestTs) {
       latestTs = ts;
-      latestPreview = (text || `[${m.message_type || "media"}]`).slice(0, 120);
+      latestPreview = mediaPreview(media, m.message_type, text).slice(0, 120);
       latestDir = isFromMe ? "out" : "in";
     }
   }
@@ -438,6 +445,74 @@ async function handleFetchChatInfo(request, env) {
   }
   await fbPatchRoot(env, updates);
   return json({ ok: true, chatId, chatName, isGroup, membersWritten });
+}
+
+// Pull a normalized media descriptor out of a Periskope message payload.
+// Returns null for plain-text messages. We're defensive about field names
+// because the live API shape isn't documented exhaustively.
+function extractMedia(msg) {
+  if (!msg) return null;
+  const mediaObj = msg.media || msg.attachment || null;
+  if (!mediaObj || typeof mediaObj !== "object") return null;
+  const url = mediaObj.url || mediaObj.media_url || mediaObj.link || mediaObj.href || null;
+  if (!url) return null;
+  return {
+    url,
+    mimeType: mediaObj.mime_type || mediaObj.mimeType || mediaObj.contentType || null,
+    fileName: mediaObj.file_name || mediaObj.fileName || mediaObj.name || null,
+    fileSize: mediaObj.file_size || mediaObj.fileSize || null,
+    caption:  mediaObj.caption  || null,
+  };
+}
+
+// Pretty preview string for the chat list when a message is media-only.
+function mediaPreview(media, messageType, fallbackText) {
+  if (fallbackText) return fallbackText;
+  if (media?.caption) return media.caption;
+  const mt = (media?.mimeType || messageType || "").toLowerCase();
+  if (mt.startsWith("image") || mt === "image") return "📷 Photo";
+  if (mt.startsWith("video") || mt === "video") return "🎥 Video";
+  if (mt.startsWith("audio") || mt === "audio" || mt === "ptt") return "🎤 Voice note";
+  if (mt.startsWith("document") || mt === "document") return `📎 ${media?.fileName || "Document"}`;
+  if (mt === "sticker") return "🖼 Sticker";
+  return `📎 ${media?.fileName || "Attachment"}`;
+}
+
+// ---------- /media (proxy media from Periskope through the worker) ----------
+// Periskope media URLs often require the same Bearer + x-phone auth that the
+// REST API uses, so the dashboard can't <img src=> them directly. We proxy
+// the fetch here, attach the auth headers, and stream the bytes back.
+async function handleMediaProxy(request, env) {
+  const url = new URL(request.url);
+  const u = url.searchParams.get("u");
+  if (!u) return new Response("missing ?u", { status: 400 });
+  // Only allow Periskope-hosted URLs (and a sensible CDN allow-list) so this
+  // can't be abused as an open proxy.
+  let host;
+  try { host = new URL(u).hostname; } catch { return new Response("bad url", { status: 400 }); }
+  const ok = (
+    host.endsWith(".periskope.app") ||
+    host.endsWith("periskope.app") ||
+    host.endsWith(".whatsapp.net") ||
+    host.endsWith(".cdninstagram.com") ||
+    host.endsWith(".fbcdn.net") ||
+    host.endsWith(".supabase.co") ||
+    host.endsWith("amazonaws.com")
+  );
+  if (!ok) return new Response("host not allowed: " + host, { status: 403 });
+
+  // Try with Periskope auth first; if the resource is public, retry without.
+  let r = await fetch(u, { headers: periskopeHeaders(env) });
+  if (!r.ok && r.status === 401) r = await fetch(u);
+  if (!r.ok) return new Response(`upstream ${r.status}`, { status: 502 });
+
+  const ct = r.headers.get("Content-Type") || "application/octet-stream";
+  return new Response(r.body, {
+    headers: {
+      "Content-Type": ct,
+      "Cache-Control": "public, max-age=3600",
+    },
+  });
 }
 
 // ---------- /summarize (Claude-powered chat summary) ----------
