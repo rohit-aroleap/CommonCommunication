@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.008</title>
+<title>CommonCommunication v1.009</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -318,7 +318,7 @@
       <svg viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3c-1.6 4.7-6.1 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 8 3.1l5.7-5.7C34.5 6.5 29.6 4.5 24 4.5 13.2 4.5 4.5 13.2 4.5 24S13.2 43.5 24 43.5 43.5 34.8 43.5 24c0-1.2-.1-2.4-.3-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 16 19 12.5 24 12.5c3.1 0 5.8 1.2 8 3.1l5.7-5.7C34.5 6.5 29.6 4.5 24 4.5 16.3 4.5 9.7 9 6.3 14.7z"/><path fill="#4CAF50" d="M24 43.5c5.4 0 10.3-2 14-5.3l-6.5-5.3c-2 1.4-4.6 2.3-7.5 2.3-5.2 0-9.6-3.3-11.2-8L6.2 32C9.6 38 16.3 43.5 24 43.5z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.3 4.3-4.3 5.8l6.5 5.3c4.4-4 7-9.9 7-15.6 0-1.2-.1-2.4-.4-3.5z"/></svg>
       Sign in with Google
     </button>
-    <div class="login-version">v1.008</div>
+    <div class="login-version">v1.009</div>
   </div>
 </div>
 
@@ -326,7 +326,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.008</span>
+    <span class="ver">v1.009</span>
     <span class="spacer"></span>
     <span id="workerStatus" style="font-size:11px; opacity:.85;"></span>
     <span class="user">
@@ -413,6 +413,15 @@
     <div style="font-size:12px; color:var(--muted); margin-bottom:14px;">
       Imports historical messages from your Periskope account into Firebase. Idempotent — running it again skips already-imported messages.
     </div>
+    <label style="margin-bottom:6px;">Scope</label>
+    <div style="display:flex; flex-direction:column; gap:6px; margin-bottom:14px; font-size:13px;">
+      <label style="display:flex; gap:8px; align-items:center; font-weight:normal; color:var(--text);">
+        <input type="radio" name="bfScope" value="existing" checked /> Only chats already in this dashboard <span id="bfExistingCount" style="color:var(--muted); font-size:12px;"></span>
+      </label>
+      <label style="display:flex; gap:8px; align-items:center; font-weight:normal; color:var(--text);">
+        <input type="radio" name="bfScope" value="all" /> All chats from Periskope (every customer, may be hundreds)
+      </label>
+    </div>
     <div style="display:flex; gap:12px; margin-bottom:14px;">
       <div style="flex:1;">
         <label>Messages per chat</label>
@@ -475,7 +484,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.008";
+const APP_VERSION = "v1.009";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -692,6 +701,9 @@ backfillBtn.onclick = () => {
   bfLog.innerHTML = "";
   bfStart.textContent = "Start Backfill";
   bfStart.disabled = false;
+  // Show count of existing chats next to "Only chats already in dashboard"
+  const n = Object.keys(chatsCache).length;
+  document.getElementById("bfExistingCount").textContent = n ? `(${n})` : "(none — nothing to backfill)";
   backfillModal.classList.add("visible");
 };
 bfClose.onclick = () => {
@@ -713,9 +725,28 @@ bfStart.onclick = async () => {
 
   const msgsPerChat = Math.max(1, Math.min(500, parseInt(bfMsgsPerChat.value) || 100));
   const chatsPerBatch = Math.max(1, Math.min(10, parseInt(bfChatsPerBatch.value) || 3));
+  const scope = document.querySelector("input[name='bfScope']:checked")?.value || "existing";
+
+  // Existing-only mode: build a queue of chatIds from the dashboard's cache
+  let existingQueue = [];
+  if (scope === "existing") {
+    existingQueue = Object.values(chatsCache)
+      .map(meta => meta?.chatId)
+      .filter(Boolean);
+    if (!existingQueue.length) {
+      logLine("<i>No chats in dashboard. Switch to 'All Periskope chats' if you want to import everything.</i>");
+      bfRunning = false;
+      bfStart.textContent = "Done — close to dismiss";
+      bfStart.disabled = true;
+      return;
+    }
+    logLine(`Scope: existing chats only (${existingQueue.length} in queue)`);
+  } else {
+    logLine(`Scope: all Periskope chats`);
+  }
 
   let offset = 0;
-  let totalChats = 0;
+  let totalChats = scope === "existing" ? existingQueue.length : 0;
   let chatsProcessed = 0;
   let totalWritten = 0;
   let totalSkipped = 0;
@@ -724,15 +755,27 @@ bfStart.onclick = async () => {
 
   while (!bfStopRequested) {
     try {
+      let body;
+      if (scope === "existing") {
+        const slice = existingQueue.slice(offset, offset + chatsPerBatch);
+        if (slice.length === 0) {
+          logLine(`<b>Done. ${totalWritten} messages imported across ${chatsProcessed} chats.</b>`);
+          break;
+        }
+        body = { chatIds: slice, msgsPerChat };
+      } else {
+        body = { chatOffset: offset, chatLimit: chatsPerBatch, msgsPerChat };
+      }
+
       const res = await fetch(`${WORKER_URL}/backfill-batch`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chatOffset: offset, chatLimit: chatsPerBatch, msgsPerChat }),
+        body: JSON.stringify(body),
       });
       const j = await res.json();
       if (!res.ok) { logLine(`<span style="color:#d9534f;">Error: ${escapeHtml(JSON.stringify(j))}</span>`); break; }
 
-      totalChats = j.total || totalChats;
+      if (scope === "all") totalChats = j.total || totalChats;
       for (const p of (j.processed || [])) {
         chatsProcessed++;
         if (p.error) {
@@ -748,11 +791,19 @@ bfStart.onclick = async () => {
       bfProgressBar.style.width = pct + "%";
       bfProgressText.textContent = `${chatsProcessed} / ${totalChats} chats — ${totalWritten} new, ${totalSkipped} already had`;
 
-      if (j.done) {
-        logLine(`<b>Done. ${totalWritten} messages imported across ${chatsProcessed} chats.</b>`);
-        break;
+      if (scope === "existing") {
+        offset += chatsPerBatch;
+        if (offset >= existingQueue.length) {
+          logLine(`<b>Done. ${totalWritten} messages imported across ${chatsProcessed} chats.</b>`);
+          break;
+        }
+      } else {
+        if (j.done) {
+          logLine(`<b>Done. ${totalWritten} messages imported across ${chatsProcessed} chats.</b>`);
+          break;
+        }
+        offset = j.nextOffset || (offset + chatsPerBatch);
       }
-      offset = j.nextOffset || (offset + chatsPerBatch);
 
       // Gentle pacing
       await new Promise(r => setTimeout(r, 200));

@@ -168,23 +168,40 @@ async function handleWebhook(request, env) {
 
 // ---------- /messages?chatId=...  (reconciliation poller fallback) ----------
 // ---------- /backfill-batch (admin-triggered import from Periskope) ----------
+// Two modes:
+//   1. Existing chats only — pass { chatIds: [...], msgsPerChat }. Skips Periskope chat-list.
+//   2. All Periskope chats — pass { chatOffset, chatLimit, msgsPerChat }. Pages through GET /chats.
 async function handleBackfillBatch(request, env) {
   const body = await request.json().catch(() => ({}));
-  const chatOffset = Math.max(0, Number(body.chatOffset) || 0);
-  const chatLimit = Math.min(10, Math.max(1, Number(body.chatLimit) || 3));
   const msgsPerChat = Math.min(500, Math.max(1, Number(body.msgsPerChat) || 100));
 
-  const chatsRes = await fetch(
-    `${PERISKOPE_BASE}/chats?offset=${chatOffset}&limit=${chatLimit}&chat_type=user`,
-    { headers: periskopeHeaders(env) }
-  );
-  const chatsJson = await safeJson(chatsRes);
-  if (!chatsRes.ok) return json({ error: "list_chats_failed", details: chatsJson }, 502);
+  let chats = [];
+  let total = 0;
+  let nextOffset = null;
+  let done = false;
 
-  const chats = chatsJson?.chats || [];
-  const total = chatsJson?.count || 0;
+  if (Array.isArray(body.chatIds) && body.chatIds.length > 0) {
+    // Mode 1: explicit chat list from dashboard
+    chats = body.chatIds.map(id => ({ chat_id: id, chat_name: null }));
+    total = chats.length;
+    done = true; // dashboard chunks its own batches; no pagination on our side
+  } else {
+    // Mode 2: full Periskope list
+    const chatOffset = Math.max(0, Number(body.chatOffset) || 0);
+    const chatLimit = Math.min(10, Math.max(1, Number(body.chatLimit) || 3));
+    const chatsRes = await fetch(
+      `${PERISKOPE_BASE}/chats?offset=${chatOffset}&limit=${chatLimit}&chat_type=user`,
+      { headers: periskopeHeaders(env) }
+    );
+    const chatsJson = await safeJson(chatsRes);
+    if (!chatsRes.ok) return json({ error: "list_chats_failed", details: chatsJson }, 502);
+    chats = chatsJson?.chats || [];
+    total = chatsJson?.count || 0;
+    nextOffset = chatOffset + chats.length;
+    done = chats.length === 0 || nextOffset >= total;
+  }
+
   const processed = [];
-
   for (const c of chats) {
     try {
       processed.push(await backfillOneChat(env, c, msgsPerChat));
@@ -193,8 +210,6 @@ async function handleBackfillBatch(request, env) {
     }
   }
 
-  const nextOffset = chatOffset + chats.length;
-  const done = chats.length === 0 || nextOffset >= total;
   return json({ processed, total, nextOffset, done });
 }
 
