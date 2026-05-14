@@ -32,7 +32,7 @@ export default {
         return cors(env, json({
           service: "CommonCommunication Worker",
           status: "ok",
-          endpoints: ["/health", "/send (POST)", "/webhook (POST)", "/messages?chatId=... (GET)"],
+          endpoints: ["/health", "/send (POST)", "/webhook (POST)", "/messages?chatId=... (GET)", "/transcribe (POST)"],
         }));
       }
       if (url.pathname === "/messages" && request.method === "GET") {
@@ -49,6 +49,9 @@ export default {
       }
       if (url.pathname === "/suggest-reply" && request.method === "POST") {
         return cors(env, await handleSuggestReply(request, env));
+      }
+      if (url.pathname === "/transcribe" && request.method === "POST") {
+        return cors(env, await handleTranscribe(request, env));
       }
       if (url.pathname === "/media" && request.method === "GET") {
         return cors(env, await handleMediaProxy(request, env));
@@ -734,6 +737,30 @@ Rules:
   }
   const reply = (claudeJson?.content?.[0]?.text || "").trim();
   return json({ reply, count: recent.length, usage: claudeJson?.usage || null });
+}
+
+// ---------- /transcribe (Workers AI Whisper for voice notes) ----------
+// Frontend records audio via MediaRecorder, base64-encodes it, POSTs here.
+// We hand it to whisper-large-v3-turbo and return the transcript. The frontend
+// drops the text into the notes-panel draft — audio is NOT sent to the customer.
+async function handleTranscribe(request, env) {
+  if (!env.AI) {
+    return json({ error: "workers_ai_not_bound", hint: "Add [ai] binding=\"AI\" in wrangler.toml and redeploy" }, 500);
+  }
+  const body = await request.json().catch(() => null);
+  const audioB64 = body?.audio;
+  if (!audioB64 || typeof audioB64 !== "string") {
+    return json({ error: "missing audio (base64 string)" }, 400);
+  }
+  try {
+    const result = await env.AI.run("@cf/openai/whisper-large-v3-turbo", {
+      audio: audioB64,
+    });
+    const text = String(result?.text || "").trim();
+    return json({ text, model: "@cf/openai/whisper-large-v3-turbo" });
+  } catch (e) {
+    return json({ error: "transcribe_failed", details: String(e?.message || e) }, 502);
+  }
 }
 
 async function handleFetchMessages(request, env) {

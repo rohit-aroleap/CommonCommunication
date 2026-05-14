@@ -6,6 +6,9 @@ compatibility_date = "2025-05-01"
 FIREBASE_DB_URL = "https://motherofdashboard-default-rtdb.asia-southeast1.firebasedatabase.app"
 ALLOWED_ORIGIN = "*"
 
+[ai]
+binding = "AI"
+
 # Secrets to set via:
 #   wrangler secret put PERISKOPE_API_KEY
 #   wrangler secret put PERISKOPE_PHONE
