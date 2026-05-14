@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.045</title>
+<title>CommonCommunication v1.046</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -333,6 +333,89 @@
   .filter-pill.active { background: var(--green); color: white; }
   .filter-pill.active:hover { background: var(--green-dark); }
 
+  /* Internal notes panel pinned at top of thread */
+  .notes-panel {
+    background: #fff8e7;
+    border-bottom: 1px solid #f0e3a0;
+    border-left: 1px solid var(--border);
+    flex-shrink: 0;
+    max-height: 40vh;
+    display: flex; flex-direction: column;
+  }
+  .notes-header {
+    padding: 8px 16px;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px;
+  }
+  .notes-header .title {
+    font-weight: 600; font-size: 12px; color: #6b5d10;
+    letter-spacing: .3px;
+  }
+  .notes-header .add-btn {
+    background: #f0c14b; color: #6b5d10; border: none;
+    border-radius: 12px; padding: 3px 10px; font-size: 11px;
+    cursor: pointer; font-family: inherit; font-weight: 600;
+  }
+  .notes-header .add-btn:hover { background: #e8b133; }
+  .notes-list {
+    padding: 0 16px 8px;
+    overflow-y: auto;
+  }
+  .note-item {
+    background: white;
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-bottom: 6px;
+    font-size: 13px;
+    border-left: 3px solid #f0c14b;
+    box-shadow: 0 1px 1px rgba(0,0,0,.04);
+  }
+  .note-item .text { white-space: pre-wrap; word-wrap: break-word; }
+  .note-item .meta {
+    margin-top: 6px;
+    font-size: 11px;
+    color: #99a5ad;
+    display: flex; gap: 8px; align-items: center;
+  }
+  .note-item .meta .author { color: #6b5d10; font-weight: 600; }
+  .note-item .actions {
+    margin-left: auto;
+    display: flex; gap: 8px;
+  }
+  .note-item .actions button {
+    background: none; border: none; cursor: pointer;
+    font-size: 11px; color: #99a5ad; padding: 0;
+    font-family: inherit;
+  }
+  .note-item .actions button:hover { color: #6b5d10; text-decoration: underline; }
+  .note-form {
+    background: white;
+    border-radius: 6px;
+    padding: 8px;
+    margin-bottom: 6px;
+    border-left: 3px solid #f0c14b;
+  }
+  .note-form textarea {
+    width: 100%; min-height: 44px; max-height: 140px;
+    border: 1px solid #dadce0; border-radius: 4px;
+    padding: 6px 8px; font-size: 13px; font-family: inherit;
+    resize: vertical; box-sizing: border-box;
+  }
+  .note-form .actions {
+    display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px;
+  }
+  .note-form .actions button {
+    border: none; border-radius: 4px; padding: 4px 12px;
+    font-size: 12px; cursor: pointer; font-family: inherit;
+  }
+  .note-form .actions .save { background: var(--green); color: white; font-weight: 600; }
+  .note-form .actions .save:hover { background: var(--green-dark); }
+  .note-form .actions .cancel { background: var(--header); color: var(--text); }
+  .note-empty {
+    color: #99a5ad; font-size: 12px; font-style: italic;
+    padding: 0 0 6px 4px;
+  }
+
   /* Second filter row — subscription stage tags, wraps to multiple lines */
   .tag-filter-row {
     display: flex; gap: 5px; padding: 6px 12px;
@@ -396,7 +479,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.045</div>
+    <div class="login-version">v1.046</div>
   </div>
 </div>
 
@@ -404,7 +487,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.045</span>
+    <span class="ver">v1.046</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -463,6 +546,13 @@
             </div>
             <div class="sub" id="threadSub">—</div>
           </div>
+        </div>
+        <div class="notes-panel" id="notesPanel">
+          <div class="notes-header">
+            <span class="title">📝 NOTES <span id="notesCount"></span></span>
+            <button class="add-btn" id="addNoteBtn">+ Add note</button>
+          </div>
+          <div class="notes-list" id="notesList"></div>
         </div>
         <div class="messages" id="messages"></div>
         <div class="composer">
@@ -624,7 +714,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.045";
+const APP_VERSION = "v1.046";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -643,6 +733,10 @@ let currentChatId = null;
 let chatsCache = {};      // chatId -> meta
 let lastChatRows = [];    // last computed row list for re-render on search
 let messagesUnsub = null; // detach for current thread listener
+let notesUnsub = null;    // detach for current notes listener
+let currentNotes = {};    // notes for the currently-open chat
+let addingNote = false;
+let editingNoteId = null;
 let contactsCache = {};   // phone (digits) -> { name, source, seenAt } from commonComm/contacts
 
 // ====== ELEMENTS ======
@@ -675,6 +769,10 @@ const configWarn = $("configWarn");
 const workerStatus = $("workerStatus");
 const mainGrid = $("mainGrid");
 const backBtn = $("backBtn");
+const notesPanel = $("notesPanel");
+const notesCount = $("notesCount");
+const notesList = $("notesList");
+const addNoteBtn = $("addNoteBtn");
 const editNameBtn = $("editNameBtn");
 const privateToggleBtn = $("privateToggleBtn");
 const chatBackfillBtn = $("chatBackfillBtn");
@@ -1765,9 +1863,149 @@ function listenChats() {
 function closeThreadForPrivacy() {
   currentChatId = null;
   if (messagesUnsub) { messagesUnsub(); messagesUnsub = null; }
+  if (notesUnsub) { notesUnsub(); notesUnsub = null; }
   threadEmpty.style.display = "flex";
   threadActive.style.display = "none";
   mainGrid.classList.remove("thread-open");
+}
+
+// ====== PRIVATE NOTES (per chat, internal-only) ======
+// Notes live at commonComm/chats/{chatKey}/notes/{pushKey}. They're never sent
+// to Periskope or shown to the customer — just team handoff context.
+function listenNotes(chatKey) {
+  if (notesUnsub) { notesUnsub(); notesUnsub = null; }
+  if (!chatKey) return;
+  notesUnsub = onValue(ref(db, `${ROOT}/chats/${chatKey}/notes`), (snap) => {
+    currentNotes = snap.val() || {};
+    renderNotes();
+  });
+}
+
+addNoteBtn.onclick = () => {
+  if (!currentChatId) return;
+  addingNote = true;
+  renderNotes();
+};
+
+function renderNotes() {
+  const notes = Object.entries(currentNotes)
+    .map(([id, n]) => ({ id, ...(n || {}) }))
+    .filter(n => n && n.text)
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  notesCount.textContent = notes.length ? `(${notes.length})` : "";
+
+  let html = "";
+  if (addingNote) {
+    html += `
+      <div class="note-form">
+        <textarea id="noteNewInput" placeholder="e.g. Customer prefers Hindi · knee injury · machine installed 2026-04-12"></textarea>
+        <div class="actions">
+          <button class="cancel" data-act="cancel-new">Cancel</button>
+          <button class="save"   data-act="save-new">Save note</button>
+        </div>
+      </div>`;
+  }
+
+  if (!notes.length && !addingNote) {
+    html += `<div class="note-empty">No notes yet. Drop context here so the next trainer doesn't ask the same questions.</div>`;
+  }
+
+  for (const n of notes) {
+    const isMine = currentUser && n.authorUid === currentUser.uid;
+    const canDelete = isMine || (currentUser && isAdmin(currentUser.email));
+    if (editingNoteId === n.id) {
+      html += `
+        <div class="note-form">
+          <textarea id="noteEditInput-${escapeHtml(n.id)}">${escapeHtml(n.text)}</textarea>
+          <div class="actions">
+            <button class="cancel" data-act="cancel-edit">Cancel</button>
+            <button class="save"   data-act="save-edit" data-id="${escapeHtml(n.id)}">Save</button>
+          </div>
+        </div>`;
+    } else {
+      const editedSuffix = n.updatedAt && n.updatedAt > (n.createdAt + 5000) ? " · edited" : "";
+      html += `
+        <div class="note-item">
+          <div class="text">${linkify(escapeHtml(n.text))}</div>
+          <div class="meta">
+            <span class="author">— ${escapeHtml(n.authorName || "unknown")}</span>
+            <span>${escapeHtml(formatNoteTime(n.createdAt) + editedSuffix)}</span>
+            <div class="actions">
+              ${isMine    ? `<button data-act="edit"   data-id="${escapeHtml(n.id)}">Edit</button>` : ""}
+              ${canDelete ? `<button data-act="delete" data-id="${escapeHtml(n.id)}">Delete</button>` : ""}
+            </div>
+          </div>
+        </div>`;
+    }
+  }
+  notesList.innerHTML = html;
+
+  // Wire up form handlers
+  if (addingNote) {
+    const input = document.getElementById("noteNewInput");
+    if (input) {
+      input.focus();
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); saveNewNote(); }
+      });
+    }
+  }
+  notesList.querySelectorAll("[data-act]").forEach(btn => {
+    btn.onclick = () => handleNoteAction(btn.dataset.act, btn.dataset.id);
+  });
+}
+
+async function handleNoteAction(act, id) {
+  if (act === "cancel-new") { addingNote = false; renderNotes(); return; }
+  if (act === "save-new")   { await saveNewNote(); return; }
+  if (act === "cancel-edit"){ editingNoteId = null; renderNotes(); return; }
+  if (act === "save-edit") {
+    const ta = document.getElementById(`noteEditInput-${id}`);
+    const text = ta ? ta.value.trim() : "";
+    if (!text || !currentChatId) { editingNoteId = null; renderNotes(); return; }
+    try {
+      await update(ref(db, `${ROOT}/chats/${currentChatId}/notes/${id}`), {
+        text, updatedAt: Date.now(),
+      });
+    } catch (e) { alert("Save failed: " + (e?.message || e)); }
+    editingNoteId = null;
+    return;
+  }
+  if (act === "edit") { editingNoteId = id; renderNotes(); return; }
+  if (act === "delete") {
+    if (!confirm("Delete this note?")) return;
+    try { await set(ref(db, `${ROOT}/chats/${currentChatId}/notes/${id}`), null); }
+    catch (e) { alert("Delete failed: " + (e?.message || e)); }
+  }
+}
+
+async function saveNewNote() {
+  if (!currentChatId || !currentUser) { addingNote = false; renderNotes(); return; }
+  const input = document.getElementById("noteNewInput");
+  const text = input ? input.value.trim() : "";
+  if (!text) { addingNote = false; renderNotes(); return; }
+  const newRef = push(ref(db, `${ROOT}/chats/${currentChatId}/notes`));
+  try {
+    await set(newRef, {
+      text,
+      authorUid: currentUser.uid,
+      authorName: currentUser.displayName || currentUser.email,
+      createdAt: Date.now(),
+    });
+  } catch (e) { alert("Save failed: " + (e?.message || e)); }
+  addingNote = false;
+  // Live listener will re-render
+}
+
+function formatNoteTime(ts) {
+  if (!ts) return "";
+  const diff = Date.now() - ts;
+  if (diff < 60_000) return "just now";
+  if (diff < 3_600_000) return Math.floor(diff / 60_000) + "m ago";
+  if (diff < 86_400_000) return Math.floor(diff / 3_600_000) + "h ago";
+  if (diff < 7 * 86_400_000) return Math.floor(diff / 86_400_000) + "d ago";
+  const d = new Date(ts);
+  return d.toLocaleDateString();
 }
 
 // Resolve display name with this priority:
@@ -1776,7 +2014,7 @@ function closeThreadForPrivacy() {
 //   3. phone digits                                             → "919..."
 // Brackets on the manual case signal "this is our internal label, not an authoritative
 // name from Ferra." Edge case: if the manual name exactly equals the Ferra name (e.g.
-// legacy rows from the Ferra browser before v1.045 used to write contactName), treat
+// legacy rows from the Ferra browser before v1.046 used to write contactName), treat
 // it as Ferra-sourced and skip the brackets.
 function resolveDisplayName(phone, explicitName, opts) {
   // Groups get their stored groupName (no brackets, no Ferra lookup)
@@ -1983,6 +2221,10 @@ function renderFerraPills(phone) {
 // ====== THREAD ======
 function openChat(chatKey) {
   currentChatId = chatKey;
+  // Reset note edit state when switching chats so a half-typed note from one
+  // chat doesn't appear in another.
+  addingNote = false;
+  editingNoteId = null;
   updateThreadHeader();
   threadEmpty.style.display = "none";
   threadActive.style.display = "flex";
@@ -1991,6 +2233,7 @@ function openChat(chatKey) {
     r.classList.toggle("active", r.dataset.key === chatKey);
   });
   listenMessages(chatKey);
+  listenNotes(chatKey);
   maybeFetchGroupInfo(chatKey);
 }
 
