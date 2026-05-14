@@ -387,6 +387,36 @@
   }
   .composer .send-btn:disabled { background: #8fb3a8; cursor: default; }
   .composer .send-btn:active { transform: scale(0.95); }
+  .composer .attach-btn {
+    width: 40px; height: 40px; border-radius: 50%;
+    background: rgba(255,255,255,.18); color: white; border: none;
+    font-size: 20px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .composer .attach-btn:active { transform: scale(0.95); }
+  .composer .attach-btn.busy { opacity: .5; pointer-events: none; }
+
+  .thread-header .header-actions {
+    display: flex; gap: 4px; align-items: center; padding-right: 4px;
+  }
+  .thread-header .icon-btn {
+    background: rgba(255,255,255,.18); border: none; color: white;
+    width: 36px; height: 36px; border-radius: 50%;
+    font-size: 16px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .thread-header .icon-btn:active { transform: scale(0.95); }
+  .thread-header .icon-btn:disabled { opacity: .5; cursor: default; }
+
+  .summary-body {
+    white-space: pre-wrap; font-size: 14px; line-height: 1.5;
+    max-height: 50vh; overflow-y: auto;
+    margin-bottom: 12px;
+    color: var(--text);
+  }
+  .summary-body.thinking { color: var(--muted); font-style: italic; }
 
   /* Banner shown at top of thread when there are open tickets on this chat */
   .ticket-banner {
@@ -583,6 +613,9 @@
           <div class="name" id="threadName">—</div>
           <div class="sub" id="threadSub"></div>
         </div>
+        <div class="header-actions">
+          <button class="icon-btn" id="summarizeBtn" title="AI summary" aria-label="Summarize">✨</button>
+        </div>
       </div>
     </div>
     <div id="ticketBannerWrap"></div>
@@ -590,9 +623,11 @@
       <div class="empty-thread">Loading messages…</div>
     </div>
     <form class="composer" id="composerForm">
+      <button type="button" class="attach-btn" id="attachBtn" aria-label="Attach">📎</button>
       <textarea id="composerInput" rows="1" placeholder="Type a message" autocomplete="off"></textarea>
       <button class="send-btn" id="sendBtn" type="submit" aria-label="Send">➤</button>
     </form>
+    <input type="file" id="fileInput" style="display:none;" accept="image/*,video/*,audio/*,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/plain" />
   </div>
 </div>
 
@@ -604,6 +639,36 @@
     <button class="sheet-act" data-act="ticket"><span class="glyph">🎫</span> Create ticket from this message</button>
     <button class="sheet-act" data-act="copy"><span class="glyph">📋</span> Copy text</button>
     <button class="sheet-act cancel" data-act="cancel">Cancel</button>
+  </div>
+</div>
+
+<!-- AI summary modal -->
+<div class="modal-back" id="summaryModal">
+  <div class="modal-card">
+    <h3>Chat summary</h3>
+    <div class="sub" id="summarySub">Calling Claude…</div>
+    <div class="summary-body thinking" id="summaryBody">Thinking…</div>
+    <div class="btn-row">
+      <button type="button" id="summaryRegen">Regenerate</button>
+      <button type="button" id="summaryClose" class="primary">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Ticket reassign modal -->
+<div class="modal-back" id="reassignModal">
+  <div class="modal-card">
+    <h3>Reassign ticket</h3>
+    <div class="sub">Pick a new owner</div>
+    <div class="quote-msg" id="reassignTitleEl"></div>
+    <div class="field">
+      <label for="reassignAssignee">Assign to</label>
+      <select id="reassignAssignee"></select>
+    </div>
+    <div class="btn-row">
+      <button type="button" id="reassignCancel">Cancel</button>
+      <button type="button" id="reassignSubmit" class="primary">Reassign</button>
+    </div>
   </div>
 </div>
 
@@ -730,6 +795,19 @@ const ticketAssigneeSelect = $("ticketAssignee");
 const ticketQuote = $("ticketQuote");
 const ticketSubmit = $("ticketSubmit");
 const ticketCancel = $("ticketCancel");
+const attachBtn = $("attachBtn");
+const fileInput = $("fileInput");
+const summarizeBtn = $("summarizeBtn");
+const summaryModal = $("summaryModal");
+const summarySub = $("summarySub");
+const summaryBody = $("summaryBody");
+const summaryClose = $("summaryClose");
+const summaryRegen = $("summaryRegen");
+const reassignModal = $("reassignModal");
+const reassignTitleEl = $("reassignTitleEl");
+const reassignAssignee = $("reassignAssignee");
+const reassignSubmit = $("reassignSubmit");
+const reassignCancel = $("reassignCancel");
 
 // ====== HELPERS ======
 const escapeHtml = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -1400,36 +1478,103 @@ function renderTicketBanner() {
   let html = "";
   for (const t of tickets) {
     const mine = t.assignee === currentUser?.uid;
-    const canResolve = mine;
     html += `<div class="ticket-banner ${mine ? "mine" : ""}">
       🎫 <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
         ${escapeHtml(t.title || "Ticket")}${t.assigneeName ? ` · ${escapeHtml(t.assigneeName)}` : ""}
       </span>
-      ${canResolve ? `<button data-resolve="${escapeHtml(t.id)}">Resolve</button>` : ""}
+      <button data-reassign="${escapeHtml(t.id)}">Reassign</button>
+      <button data-resolve="${escapeHtml(t.id)}">Resolve</button>
     </div>`;
   }
   ticketBannerWrap.innerHTML = html;
 }
 
 ticketBannerWrap.addEventListener("click", async (e) => {
-  const btn = e.target.closest("[data-resolve]");
-  if (!btn) return;
-  const tid = btn.dataset.resolve;
-  const t = ticketsCache[tid];
-  if (!t) return;
-  if (!confirm(`Resolve "${t.title || "this ticket"}"?`)) return;
-  try {
-    const updates = {};
-    updates[`${ROOT}/tickets/${tid}/status`] = "resolved";
-    updates[`${ROOT}/tickets/${tid}/resolvedBy`] = currentUser.uid;
-    updates[`${ROOT}/tickets/${tid}/resolvedByName`] = currentUser.displayName || currentUser.email;
-    updates[`${ROOT}/tickets/${tid}/resolvedAt`] = Date.now();
-    await update(ref(db), updates);
-    showToast("Ticket resolved");
-  } catch (e) {
-    showToast("Resolve failed: " + (e.message || e));
+  const resolveBtn = e.target.closest("[data-resolve]");
+  const reassignBtn = e.target.closest("[data-reassign]");
+  if (resolveBtn) {
+    const tid = resolveBtn.dataset.resolve;
+    const t = ticketsCache[tid];
+    if (!t) return;
+    // Match desktop: warn when resolving someone else's ticket.
+    if (t.assignee && t.assignee !== currentUser?.uid) {
+      if (!confirm(`This ticket is assigned to ${t.assigneeName || "someone else"}. Resolve anyway?`)) return;
+    } else {
+      if (!confirm(`Resolve "${t.title || "this ticket"}"?`)) return;
+    }
+    try {
+      const updates = {};
+      updates[`${ROOT}/tickets/${tid}/status`] = "resolved";
+      updates[`${ROOT}/tickets/${tid}/resolvedBy`] = currentUser.uid;
+      updates[`${ROOT}/tickets/${tid}/resolvedByName`] = currentUser.displayName || currentUser.email;
+      updates[`${ROOT}/tickets/${tid}/resolvedAt`] = Date.now();
+      await update(ref(db), updates);
+      showToast("Ticket resolved");
+    } catch (err) {
+      showToast("Resolve failed: " + (err.message || err));
+    }
+    return;
+  }
+  if (reassignBtn) {
+    openReassignModal(reassignBtn.dataset.reassign);
   }
 });
+
+// ====== REASSIGN ======
+let pendingReassignId = null;
+
+function openReassignModal(ticketId) {
+  const t = ticketsCache[ticketId];
+  if (!t) return;
+  pendingReassignId = ticketId;
+  const assignees = teamAssignees();
+  if (!assignees.length) { showToast("No team members loaded yet"); return; }
+  reassignAssignee.innerHTML = assignees.map(u => {
+    const sel = u.uid === t.assignee ? "selected" : "";
+    const tag = u.uid === currentUser?.uid ? " (me)" : "";
+    return `<option value="${escapeHtml(u.uid)}" data-name="${escapeHtml(u.name)}" ${sel}>${escapeHtml(u.name)}${tag}</option>`;
+  }).join("");
+  reassignTitleEl.textContent = `${t.title || "(no title)"}${t.assigneeName ? ` · currently ${t.assigneeName}` : ""}`;
+  reassignModal.classList.add("visible");
+}
+function closeReassignModal() { reassignModal.classList.remove("visible"); pendingReassignId = null; }
+reassignCancel.onclick = closeReassignModal;
+reassignModal.addEventListener("click", (e) => { if (e.target === reassignModal) closeReassignModal(); });
+
+reassignSubmit.onclick = async () => {
+  if (!pendingReassignId || !currentUser) return;
+  const t = ticketsCache[pendingReassignId];
+  if (!t) return;
+  const newUid = reassignAssignee.value;
+  const opt = reassignAssignee.options[reassignAssignee.selectedIndex];
+  const newName = (opt?.dataset.name || "").trim();
+  if (!newUid) return;
+  if (newUid === t.assignee) { closeReassignModal(); return; }
+  reassignSubmit.disabled = true;
+  try {
+    const reassignEntry = {
+      from: t.assignee || null,
+      fromName: t.assigneeName || null,
+      to: newUid,
+      toName: newName,
+      at: Date.now(),
+      byUid: currentUser.uid,
+      byName: currentUser.displayName || currentUser.email,
+    };
+    const existing = t.reassignments || [];
+    const updates = {};
+    updates[`${ROOT}/tickets/${pendingReassignId}/assignee`] = newUid;
+    updates[`${ROOT}/tickets/${pendingReassignId}/assigneeName`] = newName;
+    updates[`${ROOT}/tickets/${pendingReassignId}/reassignments`] = [...existing, reassignEntry];
+    await update(ref(db), updates);
+    closeReassignModal();
+    showToast(`Reassigned to ${newName}`);
+  } catch (e) {
+    showToast("Reassign failed: " + (e.message || e));
+  } finally {
+    reassignSubmit.disabled = false;
+  }
+};
 
 // ====== SEND ======
 composerInput.addEventListener("input", () => {
@@ -1634,6 +1779,148 @@ async function createTicket(message, assigneeUid, assigneeName, titleOverride) {
   updates[`${ROOT}/tickets/${id}`] = ticket;
   updates[`${ROOT}/chats/${encodeKey(chatId)}/tickets/${id}`] = true;
   await update(ref(db), updates);
+}
+
+// ====== MEDIA SEND ======
+// Periskope's send endpoint takes base64 in body.media.filedata, so we
+// FileReader-encode the picked file and let the existing /send Worker do
+// the upload. Same shape as the desktop's doSendMedia.
+const MAX_MEDIA_BYTES = 25 * 1024 * 1024; // 25 MB — keeps us inside Worker limits
+
+attachBtn.onclick = () => {
+  if (!currentChatKey) return;
+  fileInput.click();
+};
+fileInput.onchange = async () => {
+  const file = fileInput.files?.[0];
+  fileInput.value = ""; // reset so re-picking the same file fires change again
+  if (!file) return;
+  if (file.size > MAX_MEDIA_BYTES) {
+    showToast(`Too large (max ${Math.round(MAX_MEDIA_BYTES / 1024 / 1024)} MB)`);
+    return;
+  }
+  attachBtn.classList.add("busy");
+  try {
+    const base64 = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result).split(",")[1] || "");
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(file);
+    });
+    const mt = file.type || "application/octet-stream";
+    const mediaType = mt.startsWith("image/") ? "image"
+                    : mt.startsWith("video/") ? "video"
+                    : mt.startsWith("audio/") ? "audio"
+                    : "document";
+    await doSendMedia({
+      type: mediaType,
+      filename: file.name,
+      mimetype: mt,
+      filedata: base64,
+    });
+  } catch (e) {
+    showToast("Attach failed: " + (e.message || e));
+  } finally {
+    attachBtn.classList.remove("busy");
+  }
+};
+
+async function doSendMedia(media) {
+  if (!currentChatKey || !currentUser) return;
+  const meta = chatsCache[currentChatKey] || {};
+  const chatId = meta.chatId || chatKeyToChatId(currentChatKey);
+  const phone = meta.phone || chatId.split("@")[0];
+  const caption = composerInput.value.trim();
+  const msgRef = push(ref(db, `${ROOT}/chats/${currentChatKey}/messages`));
+  const localMsgId = msgRef.key;
+  const ts = Date.now();
+  await set(msgRef, {
+    direction: "out", text: caption, ts,
+    sentByUid: currentUser.uid,
+    sentByName: currentUser.displayName || currentUser.email,
+    status: "sending",
+    media: { mimeType: media.mimetype, fileName: media.filename },
+    messageType: media.type,
+  });
+  const previewIcon = media.type === "image" ? "📷"
+                    : media.type === "video" ? "🎥"
+                    : media.type === "audio" ? "🎤" : "📎";
+  await update(ref(db, `${ROOT}/chats/${currentChatKey}/meta`), {
+    chatId, phone,
+    lastMsgAt: ts,
+    lastMsgPreview: caption || `${previewIcon} ${media.filename}`,
+    lastMsgDirection: "out",
+    lastMsgSentByName: currentUser.displayName || currentUser.email,
+  });
+  composerInput.value = "";
+  composerInput.style.height = "auto";
+  showToast(`Sending ${media.type}…`);
+
+  try {
+    const res = await fetch(`${WORKER_URL}/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chatId, phone, message: caption,
+        media,
+        sentByUid: currentUser.uid,
+        sentByName: currentUser.displayName || currentUser.email,
+        localMsgId,
+      }),
+    });
+    if (!res.ok) {
+      const t = await res.text();
+      await update(msgRef, { status: "failed", error: t.slice(0, 300) });
+      showToast("Send failed");
+    }
+  } catch (e) {
+    await update(msgRef, { status: "failed", error: String(e) });
+    showToast("Network error");
+  }
+}
+
+// ====== AI SUMMARIZE ======
+let _lastSummaryChatKey = null;
+summarizeBtn.onclick = () => runSummary(false);
+summaryRegen.onclick = () => runSummary(true);
+summaryClose.onclick = () => summaryModal.classList.remove("visible");
+summaryModal.addEventListener("click", (e) => { if (e.target === summaryModal) summaryModal.classList.remove("visible"); });
+
+async function runSummary(_force) {
+  if (!currentChatKey) return;
+  const meta = chatsCache[currentChatKey] || {};
+  const chatId = meta.chatId || chatKeyToChatId(currentChatKey);
+  _lastSummaryChatKey = currentChatKey;
+  summaryModal.classList.add("visible");
+  summaryBody.classList.add("thinking");
+  summaryBody.textContent = "Thinking…";
+  summarySub.textContent = "Calling Claude via worker…";
+  summaryRegen.disabled = true;
+  try {
+    const res = await fetch(`${WORKER_URL}/summarize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId }),
+    });
+    const j = await res.json();
+    // Drop the response if the user has navigated away from this chat.
+    if (_lastSummaryChatKey !== currentChatKey) return;
+    if (!res.ok) {
+      summaryBody.classList.remove("thinking");
+      summaryBody.textContent = "Failed: " + (j?.error || `HTTP ${res.status}`);
+      summarySub.textContent = "";
+      return;
+    }
+    summaryBody.classList.remove("thinking");
+    summaryBody.textContent = j.summary || "(empty)";
+    summarySub.textContent = `${j.count} of ${j.total} messages summarized`;
+  } catch (e) {
+    summaryBody.classList.remove("thinking");
+    summaryBody.textContent = "Network error: " + (e.message || e);
+    summarySub.textContent = "";
+  } finally {
+    summaryRegen.disabled = false;
+  }
 }
 
 // ====== Service worker (installability) ======
