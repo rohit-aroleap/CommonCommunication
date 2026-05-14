@@ -2789,6 +2789,9 @@ function renderChatList(rows) {
     if (currentStatusFilter === "Live") {
       const liveCutoff = Date.now() - LIVE_WINDOW_MS;
       v = v.filter(r => (r.lastMsgAt || 0) >= liveCutoff);
+    } else if (currentStatusFilter === "My tickets") {
+      const myUid = currentUser?.uid;
+      v = myUid ? v.filter(r => hasMyOpenTicket(r.chatKey, myUid)) : [];
     } else if (currentStatusFilter !== "All") {
       v = v.filter(r => getSubscriptionStatusFor(r.phone) === currentStatusFilter);
     }
