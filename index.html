@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.059</title>
+<title>CommonCommunication v1.060</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -469,6 +469,70 @@
   body.compact .pill-sm { font-size: 9px; padding: 1px 6px; }
 
 
+  /* Centralized tickets modal table */
+  .tt-table {
+    border: 1px solid var(--border); border-radius: 6px;
+    overflow: hidden;
+  }
+  .tt-row {
+    display: grid;
+    grid-template-columns: 1.4fr 2fr 1fr 0.8fr 0.9fr auto;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .tt-row:last-child { border-bottom: none; }
+  .tt-row.head {
+    background: var(--header); font-weight: 600; font-size: 11px;
+    color: var(--muted); text-transform: uppercase; letter-spacing: .3px;
+    padding: 6px 12px;
+  }
+  .tt-row.body { cursor: pointer; }
+  .tt-row.body:hover { background: var(--hover); }
+  .tt-row .customer { font-weight: 500; }
+  .tt-row .title-cell {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .tt-status {
+    display: inline-block;
+    padding: 1px 8px; border-radius: 10px;
+    font-size: 10px; font-weight: 600;
+  }
+  .tt-status.open { background: #fee2e2; color: #991b1b; }
+  .tt-status.resolved { background: #d1fae5; color: #065f46; }
+  .tt-actions { display: flex; gap: 4px; }
+  .tt-actions button {
+    background: none; border: 1px solid var(--border);
+    border-radius: 4px; padding: 3px 8px;
+    font-size: 11px; cursor: pointer; font-family: inherit;
+  }
+  .tt-actions button:hover { background: var(--header); }
+
+  /* Tickets section in the info drawer */
+  .info-section .ticket-card {
+    background: var(--header);
+    border-radius: 6px; padding: 8px 10px;
+    margin-bottom: 6px; font-size: 12px;
+  }
+  .info-section .ticket-card .top {
+    display: flex; justify-content: space-between; align-items: center; gap: 8px;
+    margin-bottom: 4px;
+  }
+  .info-section .ticket-card .ttl {
+    flex: 1; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-weight: 500; cursor: pointer;
+  }
+  .info-section .ticket-card .ttl:hover { color: #b91c1c; }
+  .info-section .ticket-card .meta { color: var(--muted); font-size: 11px; }
+  .info-section .ticket-card .note {
+    margin-top: 4px; padding: 4px 6px;
+    background: rgba(255,255,255,.5); border-radius: 4px;
+    font-style: italic; color: #4b5563;
+  }
+
   /* Tickets banner above the thread (when there are open tickets) */
   .tickets-banner {
     background: #fef2f2;
@@ -730,7 +794,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.059</div>
+    <div class="login-version">v1.060</div>
   </div>
 </div>
 
@@ -738,13 +802,14 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.059</span>
+    <span class="ver">v1.060</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
     <span id="workerStatus" style="font-size:11px; opacity:.85;"></span>
     <span class="user">
       <button class="logout" id="densityBtn" style="margin-right:6px;" title="Toggle compact / comfortable density">⇕</button>
+      <button class="logout" id="ticketsBtn" style="margin-right:6px;" title="All tickets">🎫 Tickets</button>
       <button class="logout" id="namesBtn" style="display:none; margin-right:6px;" title="Name unknown contacts">📝 Names</button>
       <button class="logout" id="backfillBtn" style="display:none; margin-right:6px;" title="Import chat history from Periskope">📥 Backfill</button>
       <button class="logout" id="teamBtn" style="display:none; margin-right:6px;" title="Manage team">👥 Team</button>
@@ -849,6 +914,23 @@
     </div>
     <div class="actions" style="margin-top:18px;">
       <button class="btn btn-secondary" id="teamClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============== TICKETS (CENTRAL) MODAL ============== -->
+<div class="modal-back" id="ticketsModal">
+  <div class="modal" style="width:920px; max-width:96vw; height:680px; max-height:88vh; display:flex; flex-direction:column;">
+    <h3 style="margin-bottom:6px;">All tickets</h3>
+    <div id="ttStats" style="font-size:12px; color:var(--muted); margin-bottom:10px;"></div>
+    <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px;">
+      <div style="display:flex; gap:4px;" id="ttStatusFilters"></div>
+      <div style="flex:1;"></div>
+      <div style="display:flex; gap:4px;" id="ttAssigneeFilters"></div>
+    </div>
+    <div id="ttTable" class="tt-table" style="flex:1; overflow-y:auto;"></div>
+    <div class="actions" style="margin-top:12px;">
+      <button class="btn btn-secondary" id="ttClose">Close</button>
     </div>
   </div>
 </div>
@@ -981,7 +1063,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.059";
+const APP_VERSION = "v1.060";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -1028,6 +1110,13 @@ const threadEmpty = $("threadEmpty");
 const threadActive = $("threadActive");
 const threadContent = $("threadContent");
 const densityBtn = $("densityBtn");
+const ticketsBtn = $("ticketsBtn");
+const ticketsModal = $("ticketsModal");
+const ttStats = $("ttStats");
+const ttTable = $("ttTable");
+const ttStatusFilters = $("ttStatusFilters");
+const ttAssigneeFilters = $("ttAssigneeFilters");
+const ttClose = $("ttClose");
 const threadName = $("threadName");
 const threadSub = $("threadSub");
 const threadAvatar = $("threadAvatar");
@@ -2117,6 +2206,9 @@ function listenTickets() {
     rebuildChatOpenTicketsIdx();
     renderChatList(lastChatRows); // re-render sidebar with ticket-aware avatars
     if (currentChatId) renderTicketsBanner();
+    // Refresh open modal/drawer ticket sections in case a teammate just updated something
+    if (ticketsModal.classList.contains("visible")) renderTicketsModal();
+    if (infoDrawer.classList.contains("open")) renderInfoDrawer();
   });
 }
 
@@ -2555,6 +2647,128 @@ function renderTicketsBanner() {
 // Minimal CSS attribute selector escape for keys that may contain unusual chars
 function cssEscape(s) { return String(s).replace(/(["\\])/g, "\\$1"); }
 
+// ====== CENTRALIZED TICKETS VIEW ======
+let ttStatusFilter = "open";   // "all" | "open" | "resolved"
+let ttAssigneeFilter = "all";  // "all" | "mine"
+
+ticketsBtn.onclick = openTicketsModal;
+ttClose.onclick = () => ticketsModal.classList.remove("visible");
+
+function openTicketsModal() {
+  renderTicketsModal();
+  ticketsModal.classList.add("visible");
+}
+
+function renderTicketsModal() {
+  // Filter pills
+  const statusPills = ["all", "open", "resolved"].map(s => `
+    <button class="filter-pill ${s === ttStatusFilter ? "active" : ""}" data-status="${s}" type="button">${s[0].toUpperCase()+s.slice(1)}</button>
+  `).join("");
+  ttStatusFilters.innerHTML = statusPills;
+  ttStatusFilters.querySelectorAll("button").forEach(b => {
+    b.onclick = () => { ttStatusFilter = b.dataset.status; renderTicketsModal(); };
+  });
+  const assigneePills = [["all","All"],["mine","Mine"]].map(([v,l]) => `
+    <button class="filter-pill ${v === ttAssigneeFilter ? "active" : ""}" data-assignee="${v}" type="button">${l}</button>
+  `).join("");
+  ttAssigneeFilters.innerHTML = assigneePills;
+  ttAssigneeFilters.querySelectorAll("button").forEach(b => {
+    b.onclick = () => { ttAssigneeFilter = b.dataset.assignee; renderTicketsModal(); };
+  });
+
+  // Build ticket list (newest first)
+  const myUid = currentUser?.uid;
+  const all = Object.entries(ticketsCache)
+    .map(([id, t]) => ({ id, ...t }))
+    .filter(t => {
+      if (ttStatusFilter !== "all" && t.status !== ttStatusFilter) return false;
+      if (ttAssigneeFilter === "mine" && t.assignee !== myUid) return false;
+      return true;
+    })
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+  ttStats.textContent = `${all.length} ticket${all.length === 1 ? "" : "s"} matching filters`;
+
+  if (!all.length) {
+    ttTable.innerHTML = `<div style="padding:40px; text-align:center; color:var(--muted); font-size:13px;">No tickets match the current filters.</div>`;
+    return;
+  }
+
+  let html = `
+    <div class="tt-row head">
+      <span>Customer</span>
+      <span>Title</span>
+      <span>Assignee</span>
+      <span>Status</span>
+      <span>Created</span>
+      <span></span>
+    </div>`;
+  for (const t of all) {
+    const chatKey = encodeKey(t.anchorChatId);
+    const meta = chatsCache[chatKey] || {};
+    const customerName = resolveDisplayName(
+      meta.phone || (t.anchorChatId ? t.anchorChatId.split("@")[0] : ""),
+      meta.contactName || meta.displayName,
+      { chatType: meta.chatType, groupName: meta.groupName }
+    );
+    html += `
+      <div class="tt-row body" data-id="${escapeHtml(t.id)}" data-chat-key="${escapeHtml(chatKey)}" data-anchor="${escapeHtml(t.anchorMsgKey || "")}">
+        <span class="customer">${escapeHtml(customerName)}</span>
+        <span class="title-cell" title="${escapeHtml(t.title || "")}">${escapeHtml(t.title || "(no title)")}</span>
+        <span>${escapeHtml(t.assigneeName || "—")}</span>
+        <span><span class="tt-status ${t.status}">${escapeHtml(t.status)}</span></span>
+        <span style="color:var(--muted); font-size:11px;">${escapeHtml(formatNoteTime(t.createdAt))}</span>
+        <span class="tt-actions">
+          ${t.status === "open" ? `<button data-act="resolve" data-id="${escapeHtml(t.id)}">Resolve</button>` : ""}
+          ${t.status === "open" ? `<button data-act="reassign" data-id="${escapeHtml(t.id)}">Reassign</button>` : ""}
+        </span>
+      </div>`;
+  }
+  ttTable.innerHTML = html;
+
+  // Row click → open chat at anchor message
+  ttTable.querySelectorAll(".tt-row.body").forEach(row => {
+    row.addEventListener("click", (e) => {
+      if (e.target.closest(".tt-actions")) return; // let action buttons handle their own clicks
+      const chatKey = row.dataset.chatKey;
+      const anchor = row.dataset.anchor;
+      if (!chatKey) return;
+      ticketsModal.classList.remove("visible");
+      openChat(chatKey);
+      if (anchor) scheduleScrollToAnchor(anchor);
+    });
+  });
+  ttTable.querySelectorAll(".tt-actions button").forEach(b => {
+    b.onclick = (ev) => {
+      ev.stopPropagation();
+      const id = b.dataset.id;
+      const t = ticketsCache[id];
+      if (!t) return;
+      const ticketWithId = { id, ...t };
+      if (b.dataset.act === "resolve") { resolveTicket(ticketWithId); }
+      else if (b.dataset.act === "reassign") { openTicketPicker(b, ticketWithId, "reassign"); }
+    };
+  });
+}
+
+// Scroll-to-anchor after switching chats — the messages need a moment to render
+// after openChat fires the Firebase listener, so we poll briefly.
+function scheduleScrollToAnchor(msgKey) {
+  let tries = 0;
+  const tryScroll = () => {
+    const node = messagesEl.querySelector(`.msg-row[data-msg-key="${cssEscape(msgKey)}"]`);
+    if (node) {
+      node.scrollIntoView({ behavior: "smooth", block: "center" });
+      node.style.transition = "background .3s";
+      node.style.background = "rgba(239,68,68,.15)";
+      setTimeout(() => { node.style.background = ""; }, 1400);
+      return;
+    }
+    if (++tries < 15) setTimeout(tryScroll, 200);
+  };
+  setTimeout(tryScroll, 200);
+}
+
 // ====== CUSTOMER INFO DRAWER ======
 // Drawer is always visible as a 40px rail with a centered toggle button.
 // Click the toggle → drawer expands to 380px, content renders. Click again → collapses.
@@ -2699,7 +2913,60 @@ function renderInfoDrawer() {
       <h4>Acquisition</h4>
       <div class="info-grid">${adKv.map(([k,v]) => `<div class="k">${escapeHtml(k)}</div><div class="v">${escapeHtml(String(v))}</div>`).join("")}</div>
     </div>` : ""}
+
+    ${renderInfoTicketsSection()}
   `;
+  wireInfoTicketsActions();
+}
+
+function renderInfoTicketsSection() {
+  const all = getAllTicketsForChat(currentChatId).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  if (!all.length) return "";
+  const cardsHtml = all.map(t => {
+    const isOpen = t.status === "open";
+    const pill = `<span class="tt-status ${t.status}">${escapeHtml(t.status)}</span>`;
+    const noteHtml = t.resolutionNote ? `<div class="note">${escapeHtml(t.resolutionNote)}</div>` : "";
+    const metaParts = [
+      t.assigneeName ? `🎫 ${t.assigneeName}` : null,
+      `created ${formatNoteTime(t.createdAt)} by ${t.createdByName || "?"}`,
+      isOpen ? null : `resolved ${formatNoteTime(t.resolvedAt)} by ${t.resolvedByName || "?"}`,
+    ].filter(Boolean).join(" · ");
+    return `
+      <div class="ticket-card">
+        <div class="top">
+          <span class="ttl" data-anchor="${escapeHtml(t.anchorMsgKey || "")}" title="${escapeHtml(t.title || "")}">${escapeHtml(t.title || "(no title)")}</span>
+          ${pill}
+        </div>
+        <div class="meta">${escapeHtml(metaParts)}</div>
+        ${noteHtml}
+        ${isOpen ? `
+          <div style="margin-top:6px; display:flex; gap:6px;">
+            <button data-tact="resolve" data-id="${escapeHtml(t.id)}" style="font-size:11px; padding:3px 8px; border:1px solid var(--border); border-radius:4px; background:none; cursor:pointer; font-family:inherit;">Resolve</button>
+            <button data-tact="reassign" data-id="${escapeHtml(t.id)}" style="font-size:11px; padding:3px 8px; border:1px solid var(--border); border-radius:4px; background:none; cursor:pointer; font-family:inherit;">Reassign</button>
+          </div>` : ""}
+      </div>`;
+  }).join("");
+  return `<div class="info-section"><h4>Tickets (${all.length})</h4>${cardsHtml}</div>`;
+}
+
+function wireInfoTicketsActions() {
+  if (!infoBody) return;
+  infoBody.querySelectorAll(".ticket-card .ttl[data-anchor]").forEach(el => {
+    el.onclick = () => {
+      const a = el.dataset.anchor;
+      if (a) scheduleScrollToAnchor(a);
+    };
+  });
+  infoBody.querySelectorAll(".ticket-card button[data-tact]").forEach(b => {
+    b.onclick = () => {
+      const id = b.dataset.id;
+      const t = ticketsCache[id];
+      if (!t) return;
+      const ticketWithId = { id, ...t };
+      if (b.dataset.tact === "resolve") resolveTicket(ticketWithId);
+      else if (b.dataset.tact === "reassign") openTicketPicker(b, ticketWithId, "reassign");
+    };
+  });
 }
 
 function formatDateOnly(d) {
@@ -2746,7 +3013,7 @@ function formatNoteTime(ts) {
 //   3. phone digits                                             → "919..."
 // Brackets on the manual case signal "this is our internal label, not an authoritative
 // name from Ferra." Edge case: if the manual name exactly equals the Ferra name (e.g.
-// legacy rows from the Ferra browser before v1.059 used to write contactName), treat
+// legacy rows from the Ferra browser before v1.060 used to write contactName), treat
 // it as Ferra-sourced and skip the brackets.
 function resolveDisplayName(phone, explicitName, opts) {
   // Groups get their stored groupName (no brackets, no Ferra lookup)
