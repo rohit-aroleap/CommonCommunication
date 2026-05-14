@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.061</title>
+<title>CommonCommunication v1.062</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -476,13 +476,14 @@
   }
   .tt-row {
     display: grid;
-    grid-template-columns: 1.4fr 2fr 1fr 0.8fr 0.9fr auto;
+    grid-template-columns: 1.3fr 2fr 1fr 80px 80px 150px;
     align-items: center;
     gap: 12px;
     padding: 8px 12px;
     border-bottom: 1px solid var(--border);
     font-size: 13px;
   }
+  .tt-row > * { text-align: left; }
   .tt-row:last-child { border-bottom: none; }
   .tt-row.head {
     background: var(--header); font-weight: 600; font-size: 11px;
@@ -491,8 +492,11 @@
   }
   .tt-row.body { cursor: pointer; }
   .tt-row.body:hover { background: var(--hover); }
-  .tt-row .customer { font-weight: 500; }
+  .tt-row .customer { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tt-row .title-cell {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .tt-row .assignee-cell {
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .tt-status {
@@ -502,11 +506,16 @@
   }
   .tt-status.open { background: #fee2e2; color: #991b1b; }
   .tt-status.resolved { background: #d1fae5; color: #065f46; }
-  .tt-actions { display: flex; gap: 4px; }
+  .tt-actions {
+    display: flex; gap: 4px;
+    min-width: 0;
+    justify-content: flex-end;
+  }
   .tt-actions button {
     background: none; border: 1px solid var(--border);
     border-radius: 4px; padding: 3px 8px;
     font-size: 11px; cursor: pointer; font-family: inherit;
+    white-space: nowrap;
   }
   .tt-actions button:hover { background: var(--header); }
 
@@ -794,7 +803,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.061</div>
+    <div class="login-version">v1.062</div>
   </div>
 </div>
 
@@ -802,7 +811,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.061</span>
+    <span class="ver">v1.062</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -1063,7 +1072,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.061";
+const APP_VERSION = "v1.062";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -2715,12 +2724,11 @@ function renderTicketsModal() {
       <div class="tt-row body" data-id="${escapeHtml(t.id)}" data-chat-key="${escapeHtml(chatKey)}" data-anchor="${escapeHtml(t.anchorMsgKey || "")}">
         <span class="customer">${escapeHtml(customerName)}</span>
         <span class="title-cell" title="${escapeHtml(t.title || "")}">${escapeHtml(t.title || "(no title)")}</span>
-        <span>${escapeHtml(t.assigneeName || "—")}</span>
+        <span class="assignee-cell">${escapeHtml(t.assigneeName || "—")}</span>
         <span><span class="tt-status ${t.status}">${escapeHtml(t.status)}</span></span>
         <span style="color:var(--muted); font-size:11px;">${escapeHtml(formatNoteTime(t.createdAt))}</span>
         <span class="tt-actions">
-          ${t.status === "open" ? `<button data-act="resolve" data-id="${escapeHtml(t.id)}">Resolve</button>` : ""}
-          ${t.status === "open" ? `<button data-act="reassign" data-id="${escapeHtml(t.id)}">Reassign</button>` : ""}
+          ${t.status === "open" ? `<button data-act="resolve" data-id="${escapeHtml(t.id)}">Resolve</button><button data-act="reassign" data-id="${escapeHtml(t.id)}">Reassign</button>` : ""}
         </span>
       </div>`;
   }
@@ -3013,7 +3021,7 @@ function formatNoteTime(ts) {
 //   3. phone digits                                             → "919..."
 // Brackets on the manual case signal "this is our internal label, not an authoritative
 // name from Ferra." Edge case: if the manual name exactly equals the Ferra name (e.g.
-// legacy rows from the Ferra browser before v1.061 used to write contactName), treat
+// legacy rows from the Ferra browser before v1.062 used to write contactName), treat
 // it as Ferra-sourced and skip the brackets.
 function resolveDisplayName(phone, explicitName, opts) {
   // Groups get their stored groupName (no brackets, no Ferra lookup)
@@ -3064,7 +3072,7 @@ function renderChatList(rows) {
   if (currentStatusFilter === "My tickets" && myChatKeys.size > 0) {
     const sample = enriched.slice(0, 3).map(r => r.chatKey);
     if (!enriched.some(r => myChatKeys.has(r.chatKey))) {
-      console.warn("[v1.061] My-tickets has keys but no chat-rows match. myChatKeys:", Array.from(myChatKeys), "sample r.chatKey:", sample);
+      console.warn("[v1.062] My-tickets has keys but no chat-rows match. myChatKeys:", Array.from(myChatKeys), "sample r.chatKey:", sample);
     }
   }
   const isCurrentUserAdmin = isAdmin(currentUser?.email);
