@@ -3,6 +3,7 @@
 //   PERISKOPE_API_KEY   - Bearer JWT from Periskope console
 //   PERISKOPE_PHONE     - org WhatsApp phone, digits only, e.g. 919187651332
 //   FIREBASE_DB_SECRET  - Firebase RTDB legacy database secret
+//   CLAUDE_API_KEY      - Anthropic API key (for /summarize)
 //
 // Vars (wrangler.toml):
 //   FIREBASE_DB_URL     - https://motherofdashboard-default-rtdb.asia-southeast1.firebasedatabase.app
@@ -42,6 +43,9 @@ export default {
       }
       if (url.pathname === "/fetch-chat-info" && request.method === "POST") {
         return cors(env, await handleFetchChatInfo(request, env));
+      }
+      if (url.pathname === "/summarize" && request.method === "POST") {
+        return cors(env, await handleSummarize(request, env));
       }
       return cors(env, json({ error: "not_found" }, 404));
     } catch (err) {
@@ -434,6 +438,108 @@ async function handleFetchChatInfo(request, env) {
   }
   await fbPatchRoot(env, updates);
   return json({ ok: true, chatId, chatName, isGroup, membersWritten });
+}
+
+// ---------- /summarize (Claude-powered chat summary) ----------
+// Reads the last N messages of a chat from Firebase, sends to Claude for a
+// concise summary, returns it. Caller passes { chatId, maxMessages? }.
+async function handleSummarize(request, env) {
+  if (!env.CLAUDE_API_KEY) {
+    return json({ error: "CLAUDE_API_KEY not configured on worker" }, 500);
+  }
+  const body = await request.json().catch(() => ({}));
+  const chatId = body?.chatId;
+  const maxMessages = Math.min(300, Math.max(10, Number(body?.maxMessages) || 150));
+  if (!chatId) return json({ error: "missing chatId" }, 400);
+
+  const chatKey = encodeKey(chatId);
+  const [rawMessages, meta] = await Promise.all([
+    fbGet(env, `${ROOT}/chats/${chatKey}/messages`),
+    fbGet(env, `${ROOT}/chats/${chatKey}/meta`),
+  ]);
+  if (!rawMessages || typeof rawMessages !== "object") {
+    return json({ summary: "No messages in this chat yet.", count: 0, total: 0 });
+  }
+
+  // Dedup by inner unique id (same logic as dashboard's render dedup) so the
+  // LLM doesn't see duplicate outbound messages from the legacy /send+webhook race.
+  const extractInnerId = (m) => {
+    if (m.periskopeUniqueId) return m.periskopeUniqueId;
+    if (m.periskopeMsgId) {
+      const parts = String(m.periskopeMsgId).split("_");
+      return parts[parts.length - 1] || null;
+    }
+    return null;
+  };
+  const byId = new Map();
+  const noId = [];
+  for (const m of Object.values(rawMessages)) {
+    if (!m || !m.text) continue;
+    const id = extractInnerId(m);
+    if (!id) { noId.push(m); continue; }
+    const existing = byId.get(id);
+    if (!existing || (m.sentByName && !existing.sentByName)) byId.set(id, m);
+  }
+  const all = [...byId.values(), ...noId].sort((a, b) => (a.ts || 0) - (b.ts || 0));
+  const recent = all.slice(-maxMessages);
+  if (!recent.length) {
+    return json({ summary: "No text messages to summarize.", count: 0, total: all.length });
+  }
+
+  const isGroup = String(chatId).endsWith("@g.us");
+  const customerName = meta?.contactName || meta?.displayName || meta?.groupName || null;
+  const customerLabel = customerName
+    ? `${customerName}${meta?.phone ? ` (${meta.phone})` : ""}`
+    : meta?.phone || "unknown";
+
+  const lines = recent.map(m => {
+    const ts = m.ts ? new Date(m.ts).toISOString().slice(0, 16).replace("T", " ") : "";
+    const speaker = m.direction === "out"
+      ? `Agent${m.sentByName ? ` (${m.sentByName})` : ""}`
+      : (isGroup
+          ? `Member${m.senderPhone ? ` ${m.senderPhone}` : ""}`
+          : `Customer`);
+    return `[${ts}] ${speaker}: ${m.text}`;
+  });
+
+  const systemPrompt = `You are summarizing a WhatsApp conversation for an Aroleap fitness team member who needs to pick up the chat with quick context. Be concise and structured.
+
+Output 3-5 bullets covering:
+- Who the customer is (any context you can infer)
+- Key requests, complaints, or topics discussed
+- Current state of the conversation (waiting on whom, last action)
+- Suggested next step for the agent
+
+Use simple markdown bullets. Stay under 180 words. Never invent facts not present in the messages.`;
+
+  const userPrompt = `${isGroup ? "Group chat" : "Customer"}: ${customerLabel}\nMessages shown: last ${recent.length} of ${all.length}\n\nConversation (oldest first):\n\n${lines.join("\n")}`;
+
+  const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": env.CLAUDE_API_KEY,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 1024,
+      system: systemPrompt,
+      messages: [{ role: "user", content: userPrompt }],
+    }),
+  });
+  const claudeJson = await safeJson(claudeRes);
+  if (!claudeRes.ok) {
+    return json({ error: "claude_api_failed", details: claudeJson, status: claudeRes.status }, 502);
+  }
+  const summary = claudeJson?.content?.[0]?.text || "(empty response)";
+  return json({
+    summary,
+    count: recent.length,
+    total: all.length,
+    model: claudeJson?.model || null,
+    usage: claudeJson?.usage || null,
+  });
 }
 
 async function handleFetchMessages(request, env) {
