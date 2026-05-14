@@ -1154,18 +1154,12 @@ const addAllowBtn = $("addAllowBtn");
 const backfillBtn = $("backfillBtn");
 const ferraSyncStatus = $("ferraSyncStatus");
 const ferraRefreshBtn = $("ferraRefreshBtn");
-const browseCustomersBtn = $("browseCustomersBtn");
 const namesBtn = $("namesBtn");
 const namesModal = $("namesModal");
 const namesSearch = $("namesSearch");
 const namesList = $("namesList");
 const namesStats = $("namesStats");
 const namesClose = $("namesClose");
-const customerBrowserModal = $("customerBrowserModal");
-const cbSearch = $("cbSearch");
-const cbList = $("cbList");
-const cbStats = $("cbStats");
-const cbClose = $("cbClose");
 const backfillModal = $("backfillModal");
 const bfClose = $("bfClose");
 const bfStart = $("bfStart");
@@ -2012,24 +2006,6 @@ async function syncAllFerraCustomersToChats() {
       console.warn("[CommonComm] sync failed:", e);
     }
   }
-}
-
-async function addCustomerToChats(phone /* unused name kept for back-compat */) {
-  if (!phone) return;
-  const digits = String(phone).replace(/\D/g, "");
-  if (digits.length < 8) return;
-  const chatId = `${digits}@c.us`;
-  const chatKey = chatId.replace(/[.#$\[\]\/]/g, "_");
-  const existing = chatsCache[chatKey] || {};
-  const updates = { chatId, phone: digits };
-  // Deliberately NOT writing contactName. The Ferra name is looked up at render
-  // time, so the chat row shows the real name with no brackets. contactName is
-  // reserved for explicit manual entries (via "+" or the ✏️ edit button),
-  // which render in (parens) to signal team-provided labels.
-  if (!existing.lastMsgAt) {
-    updates.lastMsgAt = Date.now();
-  }
-  await update(ref(db, `${ROOT}/chats/${chatKey}/meta`), updates);
 }
 
 // Expose to window for DevTools inspection. When you build chat-context UI
