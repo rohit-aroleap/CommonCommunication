@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.023</title>
+<title>CommonCommunication v1.024</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -355,7 +355,7 @@
       <svg viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3c-1.6 4.7-6.1 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 8 3.1l5.7-5.7C34.5 6.5 29.6 4.5 24 4.5 13.2 4.5 4.5 13.2 4.5 24S13.2 43.5 24 43.5 43.5 34.8 43.5 24c0-1.2-.1-2.4-.3-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 16 19 12.5 24 12.5c3.1 0 5.8 1.2 8 3.1l5.7-5.7C34.5 6.5 29.6 4.5 24 4.5 16.3 4.5 9.7 9 6.3 14.7z"/><path fill="#4CAF50" d="M24 43.5c5.4 0 10.3-2 14-5.3l-6.5-5.3c-2 1.4-4.6 2.3-7.5 2.3-5.2 0-9.6-3.3-11.2-8L6.2 32C9.6 38 16.3 43.5 24 43.5z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.3 4.3-4.3 5.8l6.5 5.3c4.4-4 7-9.9 7-15.6 0-1.2-.1-2.4-.4-3.5z"/></svg>
       Sign in with Google
     </button>
-    <div class="login-version">v1.023</div>
+    <div class="login-version">v1.024</div>
   </div>
 </div>
 
@@ -363,7 +363,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.023</span>
+    <span class="ver">v1.024</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -414,6 +414,7 @@
             <div style="display:flex; align-items:center; gap:6px;">
               <span class="name" id="threadName">—</span>
               <button id="editNameBtn" class="icon-btn" style="width:24px; height:24px; font-size:13px;" title="Edit / add manual name">✏️</button>
+              <button id="privateToggleBtn" class="icon-btn" style="width:24px; height:24px; font-size:13px; display:none;" title="Mark as private (admins only)">🔒</button>
             </div>
             <div class="sub" id="threadSub">—</div>
           </div>
@@ -563,7 +564,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.023";
+const APP_VERSION = "v1.024";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -613,6 +614,7 @@ const workerStatus = $("workerStatus");
 const mainGrid = $("mainGrid");
 const backBtn = $("backBtn");
 const editNameBtn = $("editNameBtn");
+const privateToggleBtn = $("privateToggleBtn");
 const teamBtn = $("teamBtn");
 const teamModal = $("teamModal");
 const teamClose = $("teamClose");
@@ -1469,6 +1471,7 @@ function listenChats() {
         phone: meta.phone || chatKey,
         explicitName: meta.contactName || meta.displayName || null,
         groupName: meta.groupName || null,
+        private: meta.private === true,
         lastMsgAt: meta.lastMsgAt || 0,
         preview,
         direction: meta.lastMsgDirection || "in",
@@ -1478,7 +1481,21 @@ function listenChats() {
     rows.sort((a,b) => (b.lastMsgAt || 0) - (a.lastMsgAt || 0));
     lastChatRows = rows;
     renderChatList(rows);
+    // If a non-admin currently has a private chat open (admin just flagged it
+    // while their thread was already up), force-close the thread for them.
+    if (currentChatId && !isAdmin(currentUser?.email)) {
+      const meta = chatsCache[currentChatId];
+      if (meta?.private) closeThreadForPrivacy();
+    }
   });
+}
+
+function closeThreadForPrivacy() {
+  currentChatId = null;
+  if (messagesUnsub) { messagesUnsub(); messagesUnsub = null; }
+  threadEmpty.style.display = "flex";
+  threadActive.style.display = "none";
+  mainGrid.classList.remove("thread-open");
 }
 
 // Resolve display name with this priority:
@@ -1487,7 +1504,7 @@ function listenChats() {
 //   3. phone digits                                             → "919..."
 // Brackets on the manual case signal "this is our internal label, not an authoritative
 // name from Ferra." Edge case: if the manual name exactly equals the Ferra name (e.g.
-// legacy rows from the Ferra browser before v1.023 used to write contactName), treat
+// legacy rows from the Ferra browser before v1.024 used to write contactName), treat
 // it as Ferra-sourced and skip the brackets.
 function resolveDisplayName(phone, explicitName, opts) {
   // Groups get their stored groupName (no brackets, no Ferra lookup)
@@ -1517,8 +1534,11 @@ function renderChatList(rows) {
     ...r,
     name: resolveDisplayName(r.phone, r.explicitName, { chatType: r.chatType, groupName: r.groupName }),
   }));
+  const isCurrentUserAdmin = isAdmin(currentUser?.email);
+  // Non-admins never see private chats. Admins see them with a 🔒 indicator.
+  const visible = isCurrentUserAdmin ? enriched : enriched.filter(r => !r.private);
   const q = searchInput.value.trim().toLowerCase();
-  const filtered = !q ? enriched : enriched.filter(r =>
+  const filtered = !q ? visible : visible.filter(r =>
     (r.name && r.name.toLowerCase().includes(q)) ||
     (r.phone && r.phone.toLowerCase().includes(q))
   );
@@ -1537,12 +1557,13 @@ function renderChatList(rows) {
       : "";
     // Pills (Active/Cancelled, subscription stage) only apply to individual chats.
     const pillsHtml = isGroup ? "" : renderFerraPills(r.phone);
+    const lockPrefix = r.private ? `<span title="Private chat — admins only" style="margin-right:4px;">🔒</span>` : "";
     return `
     <div class="chat-row ${r.chatKey === currentChatId ? "active" : ""}" data-key="${escapeHtml(r.chatKey)}">
       <div class="avatar" style="${avatarStyle}">${escapeHtml(initial)}</div>
       <div class="meta">
         <div class="top">
-          <span class="name">${escapeHtml(r.name)}</span>
+          <span class="name">${lockPrefix}${escapeHtml(r.name)}</span>
           <span class="time">${formatTime(r.lastMsgAt)}</span>
         </div>
         <div class="bottom">
@@ -1615,12 +1636,41 @@ function updateThreadHeader() {
   const isGroup = meta.chatType === "group" || String(meta.chatId || "").endsWith("@g.us");
   const explicit = meta.contactName || meta.displayName;
   const name = resolveDisplayName(meta.phone, explicit, { chatType: isGroup ? "group" : "user", groupName: meta.groupName });
-  threadName.textContent = name;
+  const lockPrefix = meta.private ? "🔒 " : "";
+  threadName.textContent = lockPrefix + name;
   // For groups, no single phone to show — leave subtitle blank.
   threadSub.textContent = isGroup ? "Group" : (meta.phone || "");
   threadAvatar.textContent = isGroup ? "👥" : avatarInitial(name);
   threadAvatar.style.background = isGroup ? "#6b7280" : "";
+
+  // Admin-only: show toggle button. Reflect current state in icon + tooltip.
+  if (isAdmin(currentUser?.email)) {
+    privateToggleBtn.style.display = "";
+    if (meta.private) {
+      privateToggleBtn.textContent = "🔓";
+      privateToggleBtn.title = "Currently private (admins only). Click to make visible to everyone.";
+    } else {
+      privateToggleBtn.textContent = "🔒";
+      privateToggleBtn.title = "Currently visible to everyone. Click to mark private (admins only).";
+    }
+  } else {
+    privateToggleBtn.style.display = "none";
+  }
 }
+
+privateToggleBtn.onclick = async () => {
+  if (!currentChatId) return;
+  if (!isAdmin(currentUser?.email)) return;
+  const meta = chatsCache[currentChatId] || {};
+  const isPrivate = meta.private === true;
+  const action = isPrivate
+    ? "Make this chat visible to all team members?"
+    : "Mark this chat as private (only admins will see it)?";
+  if (!confirm(action)) return;
+  await update(ref(db, `${ROOT}/chats/${currentChatId}/meta`), {
+    private: isPrivate ? null : true,
+  });
+};
 
 // Pencil button in thread header — set/edit a manual customer name.
 // Manual names appear in (parens) to differentiate from Ferra-sourced names.
