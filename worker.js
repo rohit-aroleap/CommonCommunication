@@ -75,10 +75,17 @@ async function handleSend(request, env) {
   const resolvedChatId = chatId || phoneToChatId(phone);
   const resolvedPhone = phone || chatIdToPhone(resolvedChatId);
 
+  // Media support: dashboard passes media as { type, filename, mimetype, filedata }
+  // (Periskope's exact shape). Pass through verbatim if present.
+  const periskopeBody = { chat_id: resolvedChatId };
+  if (message) periskopeBody.message = message;
+  if (body.media && (body.media.filedata || body.media.url)) {
+    periskopeBody.media = body.media;
+  }
   const periskopeRes = await fetch(`${PERISKOPE_BASE}/message/send`, {
     method: "POST",
     headers: periskopeHeaders(env),
-    body: JSON.stringify({ chat_id: resolvedChatId, message }),
+    body: JSON.stringify(periskopeBody),
   });
 
   const periskopeJson = await safeJson(periskopeRes);
@@ -104,6 +111,16 @@ async function handleSend(request, env) {
     periskopeTrackBy: periskopeJson?.track_by || null,
     periskopeResp: periskopeJson || null,
   };
+  // Optimistic media metadata: filename/mime is known immediately even though
+  // the Periskope-hosted URL only arrives via the from_me=true webhook echo.
+  // The webhook will fill in media.url via the dedup-update path.
+  if (body.media && (body.media.filename || body.media.mimetype)) {
+    msgRecord.media = {
+      fileName: body.media.filename || null,
+      mimeType: body.media.mimetype || null,
+    };
+    msgRecord.messageType = body.media.type || "media";
+  }
 
   let msgKey = localMsgId;
   if (localMsgId) {
@@ -161,7 +178,15 @@ async function handleWebhook(request, env) {
   // Dedup: if we already stored this periskopeMsgId, skip.
   if (periskopeMsgId) {
     const existing = await fbGet(env, `${ROOT}/byPeriskopeId/${encodeKey(periskopeMsgId)}`);
-    if (existing) return json({ ok: true, dedup: true });
+    if (existing) {
+      // If this echo carries media (Periskope-hosted URL we couldn't have at
+      // /send time), patch the existing message so receivers see the image.
+      const echoMedia = extractMedia(msg);
+      if (echoMedia && existing.chatId && existing.msgKey) {
+        await fbPatch(env, `${ROOT}/chats/${encodeKey(existing.chatId)}/messages/${existing.msgKey}`, { media: echoMedia });
+      }
+      return json({ ok: true, dedup: true });
+    }
   }
 
   const media = extractMedia(msg);
