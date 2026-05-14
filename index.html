@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.022</title>
+<title>CommonCommunication v1.023</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -355,7 +355,7 @@
       <svg viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3c-1.6 4.7-6.1 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 8 3.1l5.7-5.7C34.5 6.5 29.6 4.5 24 4.5 13.2 4.5 4.5 13.2 4.5 24S13.2 43.5 24 43.5 43.5 34.8 43.5 24c0-1.2-.1-2.4-.3-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 16 19 12.5 24 12.5c3.1 0 5.8 1.2 8 3.1l5.7-5.7C34.5 6.5 29.6 4.5 24 4.5 16.3 4.5 9.7 9 6.3 14.7z"/><path fill="#4CAF50" d="M24 43.5c5.4 0 10.3-2 14-5.3l-6.5-5.3c-2 1.4-4.6 2.3-7.5 2.3-5.2 0-9.6-3.3-11.2-8L6.2 32C9.6 38 16.3 43.5 24 43.5z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.3 4.3-4.3 5.8l6.5 5.3c4.4-4 7-9.9 7-15.6 0-1.2-.1-2.4-.4-3.5z"/></svg>
       Sign in with Google
     </button>
-    <div class="login-version">v1.022</div>
+    <div class="login-version">v1.023</div>
   </div>
 </div>
 
@@ -363,12 +363,13 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.022</span>
+    <span class="ver">v1.023</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
     <span id="workerStatus" style="font-size:11px; opacity:.85;"></span>
     <span class="user">
+      <button class="logout" id="namesBtn" style="display:none; margin-right:6px;" title="Name unknown contacts">📝 Names</button>
       <button class="logout" id="backfillBtn" style="display:none; margin-right:6px;" title="Import chat history from Periskope">📥 Backfill</button>
       <button class="logout" id="teamBtn" style="display:none; margin-right:6px;" title="Manage team">👥 Team</button>
       <img id="userPhoto" alt="" />
@@ -445,6 +446,22 @@
     </div>
     <div class="actions" style="margin-top:18px;">
       <button class="btn btn-secondary" id="teamClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============== NAMES MODAL ============== -->
+<div class="modal-back" id="namesModal">
+  <div class="modal" style="width:600px; max-width:94vw; height:640px; max-height:88vh; display:flex; flex-direction:column;">
+    <h3>Name unknown contacts</h3>
+    <div style="font-size:12px; color:var(--muted); margin-bottom:10px;">
+      Phones we've seen but don't yet have a name for. Type a name and press <b>Enter</b> (or click ✓) to save. Names show up everywhere — chat list, group sender labels.
+    </div>
+    <input id="namesSearch" placeholder="Search by phone…" style="border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-size:14px; margin-bottom:8px; font-family:inherit;" />
+    <div style="font-size:11px; color:var(--muted); margin-bottom:6px;" id="namesStats">Loading…</div>
+    <div id="namesList" style="flex:1; overflow-y:auto; border:1px solid var(--border); border-radius:6px; padding:4px;"></div>
+    <div class="actions" style="margin-top:14px;">
+      <button class="btn btn-secondary" id="namesClose">Close</button>
     </div>
   </div>
 </div>
@@ -546,7 +563,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.022";
+const APP_VERSION = "v1.023";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -607,6 +624,12 @@ const backfillBtn = $("backfillBtn");
 const ferraSyncStatus = $("ferraSyncStatus");
 const ferraRefreshBtn = $("ferraRefreshBtn");
 const browseCustomersBtn = $("browseCustomersBtn");
+const namesBtn = $("namesBtn");
+const namesModal = $("namesModal");
+const namesSearch = $("namesSearch");
+const namesList = $("namesList");
+const namesStats = $("namesStats");
+const namesClose = $("namesClose");
 const customerBrowserModal = $("customerBrowserModal");
 const cbSearch = $("cbSearch");
 const cbList = $("cbList");
@@ -646,6 +669,7 @@ onAuthStateChanged(auth, async (user) => {
     userName.textContent = user.displayName || user.email;
     teamBtn.style.display = isAdmin(user.email) ? "" : "none";
     backfillBtn.style.display = isAdmin(user.email) ? "" : "none";
+    namesBtn.style.display = isAdmin(user.email) ? "" : "none";
     ferraRefreshBtn.style.display = isAdmin(user.email) ? "" : "none";
     listenFerraData();
     await update(ref(db, `${ROOT}/users/${user.uid}`), {
@@ -1241,6 +1265,121 @@ function renderCustomerBrowser() {
   });
 }
 
+// ====== NAMES MODAL ======
+namesBtn.onclick = openNamesModal;
+namesClose.onclick = () => namesModal.classList.remove("visible");
+namesSearch.addEventListener("input", () => renderNamesList());
+
+function openNamesModal() {
+  namesSearch.value = "";
+  namesModal.classList.add("visible");
+  renderNamesList();
+  setTimeout(() => namesSearch.focus(), 50);
+}
+
+// Collect every phone we know about that doesn't have a resolved name yet.
+// Sources:
+//   - 1-on-1 chats in chatsCache whose phone resolves to bare digits
+//   - contactsCache entries without a name field set
+function collectUnnamedPhones() {
+  const out = new Map(); // digits → { phone, contexts: Set<string> }
+  const add = (digits, context) => {
+    if (!digits) return;
+    if (!out.has(digits)) out.set(digits, { phone: digits, contexts: new Set() });
+    out.get(digits).contexts.add(context);
+  };
+
+  // 1-on-1 chats without resolved names
+  for (const meta of Object.values(chatsCache)) {
+    if (!meta) continue;
+    const isGroup = meta.chatType === "group" || String(meta.chatId || "").endsWith("@g.us");
+    if (isGroup) continue;
+    const digits = String(meta.phone || "").replace(/\D/g, "");
+    if (!digits) continue;
+    // Skip Ferra/manual/contacts hits — resolveDisplayName returns the bare phone
+    // only when nothing matched.
+    const resolved = resolveDisplayName(digits, meta.contactName || meta.displayName);
+    if (resolved === digits) add(digits, "1-on-1 chat");
+  }
+
+  // Contacts without a name — most of these are group senders the worker has
+  // logged but never received a sender_name for.
+  for (const [digits, c] of Object.entries(contactsCache)) {
+    if (!c || c.name) continue;
+    add(digits, "Group sender");
+  }
+
+  return Array.from(out.values())
+    .map(o => ({ phone: o.phone, contexts: Array.from(o.contexts) }))
+    .sort((a, b) => a.phone.localeCompare(b.phone));
+}
+
+function renderNamesList() {
+  const q = namesSearch.value.trim().replace(/\D/g, "");
+  const all = collectUnnamedPhones();
+  const filtered = !q ? all : all.filter(r => r.phone.includes(q));
+
+  namesStats.textContent = q
+    ? `${filtered.length} of ${all.length} match "${q}"`
+    : `${all.length} unnamed phones`;
+
+  if (!filtered.length) {
+    namesList.innerHTML = `<div style="padding:30px; text-align:center; color:var(--muted); font-size:13px;">${all.length === 0 ? "Nothing to name — everyone you've seen has a resolved name." : "No phones match."}</div>`;
+    return;
+  }
+
+  const CAP = 250;
+  const slice = filtered.slice(0, CAP);
+  namesList.innerHTML = slice.map(r => {
+    const ctxBadge = r.contexts.map(c => `<span style="font-size:10px; background:var(--header); color:var(--muted); padding:1px 6px; border-radius:8px; margin-right:3px;">${escapeHtml(c)}</span>`).join("");
+    return `
+    <div class="cb-row" data-phone="${escapeHtml(r.phone)}">
+      <div class="avatar" style="background:#9ca3af;">${escapeHtml(r.phone.charAt(0) || "?")}</div>
+      <div class="info">
+        <div class="nm">${escapeHtml(r.phone)}</div>
+        <div style="margin-top:3px;">${ctxBadge}</div>
+      </div>
+      <input type="text" placeholder="Type a name…" class="name-input" style="border:1px solid var(--border); border-radius:6px; padding:6px 10px; font-size:13px; font-family:inherit; width:160px; flex-shrink:0;" />
+      <button class="add-btn save-name" data-phone="${escapeHtml(r.phone)}">Save</button>
+    </div>`;
+  }).join("");
+
+  if (filtered.length > CAP) {
+    const more = document.createElement("div");
+    more.style.cssText = "padding:10px; text-align:center; color:var(--muted); font-size:12px;";
+    more.textContent = `and ${filtered.length - CAP} more — refine your search`;
+    namesList.appendChild(more);
+  }
+
+  namesList.querySelectorAll(".cb-row").forEach(row => {
+    const input = row.querySelector(".name-input");
+    const btn = row.querySelector(".save-name");
+    const save = async () => {
+      const name = input.value.trim();
+      if (!name) return;
+      btn.disabled = true; btn.textContent = "…";
+      try {
+        await update(ref(db, `${ROOT}/contacts/${btn.dataset.phone}`), {
+          name,
+          source: "manual",
+          namedAt: Date.now(),
+        });
+        // Flip row to a saved-state, but keep it visible so the user knows it worked
+        row.style.opacity = "0.5";
+        btn.textContent = "✓ Saved";
+        input.disabled = true;
+      } catch (e) {
+        btn.disabled = false; btn.textContent = "Save";
+        alert("Save failed: " + (e?.message || e));
+      }
+    };
+    btn.onclick = save;
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); save(); }
+    });
+  });
+}
+
 async function addCustomerToChats(phone /* unused name kept for back-compat */) {
   if (!phone) return;
   const digits = String(phone).replace(/\D/g, "");
@@ -1348,7 +1487,7 @@ function listenChats() {
 //   3. phone digits                                             → "919..."
 // Brackets on the manual case signal "this is our internal label, not an authoritative
 // name from Ferra." Edge case: if the manual name exactly equals the Ferra name (e.g.
-// legacy rows from the Ferra browser before v1.022 used to write contactName), treat
+// legacy rows from the Ferra browser before v1.023 used to write contactName), treat
 // it as Ferra-sourced and skip the brackets.
 function resolveDisplayName(phone, explicitName, opts) {
   // Groups get their stored groupName (no brackets, no Ferra lookup)
@@ -1362,6 +1501,10 @@ function resolveDisplayName(phone, explicitName, opts) {
     return `(${manual})`;
   }
   if (ferra) return ferra;
+  // Fallback to commonComm/contacts/{phone}/name (populated by worker from group
+  // members and webhook senders, and by the Names modal for manual entries)
+  const digits = String(phone || "").replace(/\D/g, "");
+  if (digits && contactsCache[digits]?.name) return contactsCache[digits].name;
   return phone || "?";
 }
 function avatarInitial(name) {

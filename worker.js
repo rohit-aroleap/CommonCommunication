@@ -176,16 +176,16 @@ async function handleWebhook(request, env) {
   }
   await fbPatch(env, `${ROOT}/chats/${encodeKey(chatId)}/meta`, metaUpdate);
 
-  // If this group message has the sender's display name, cache it globally
-  // (group members aren't always in Ferra). Keyed by phone digits only.
-  if (isGroup && senderName && senderPhone) {
+  // Record every group sender's phone in contacts/, even when sender_name is
+  // missing (Periskope only knows the name if the org's WhatsApp has the
+  // contact saved). The empty entry lets the dashboard's name-manager modal
+  // surface this phone for manual labelling. Don't clobber an existing name.
+  if (isGroup && senderPhone) {
     const phoneDigits = String(senderPhone).replace(/\D/g, "");
     if (phoneDigits) {
-      await fbPatch(env, `${ROOT}/contacts/${phoneDigits}`, {
-        name: senderName,
-        source: "webhook_sender",
-        seenAt: Date.now(),
-      });
+      const upd = { seenAt: Date.now() };
+      if (senderName) { upd.name = senderName; upd.source = "webhook_sender"; }
+      await fbPatch(env, `${ROOT}/contacts/${phoneDigits}`, upd);
     }
   }
 
@@ -329,6 +329,21 @@ async function backfillOneChat(env, chat, msgsPerChat) {
   updates[`${ROOT}/chats/${chatKey}/meta/chatId`] = chatId;
   updates[`${ROOT}/chats/${chatKey}/meta/phone`] = chatIdToPhone(chatId);
   updates[`${ROOT}/chats/${chatKey}/meta/chatType`] = isGroup ? "group" : "user";
+
+  // For group chats: record every sender's phone in contacts/ so the dashboard
+  // can list them for manual naming. Dedup within this batch with a Set.
+  if (isGroup) {
+    const seenSenders = new Set();
+    for (const m of messages) {
+      const sp = m.sender_phone ? String(m.sender_phone).split("@")[0].replace(/\D/g, "") : null;
+      if (sp && !seenSenders.has(sp)) {
+        seenSenders.add(sp);
+        // Only set seenAt (not name) here — we may not have it from message data.
+        // /fetch-chat-info populates names from the chat's members map.
+        updates[`${ROOT}/contacts/${sp}/seenAt`] = Date.now();
+      }
+    }
+  }
   if (chat.chat_name) {
     if (isGroup) {
       if (!existingMeta?.groupName) {
