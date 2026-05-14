@@ -53,6 +53,9 @@ export default {
       if (url.pathname === "/media" && request.method === "GET") {
         return cors(env, await handleMediaProxy(request, env));
       }
+      if (url.pathname === "/register-push-token" && request.method === "POST") {
+        return cors(env, await handleRegisterPushToken(request, env));
+      }
       return cors(env, json({ error: "not_found" }, 404));
     } catch (err) {
       return cors(env, json({ error: String(err && err.message || err) }, 500));
@@ -260,7 +263,88 @@ async function handleWebhook(request, env) {
     } catch { /* swallow — webhook should still succeed even if name lookup fails */ }
   }
 
+  // Push notification fan-out. Only ping mobile devices for INBOUND messages
+  // (not for our own outbound echoes) and only on 1-on-1 chats or groups —
+  // skip if Periskope sent us a state event we don't model. Fire-and-forget
+  // via ctx.waitUntil so we don't slow the webhook ACK.
+  if (!isFromMe) {
+    const senderLabel = (!isGroup && senderName) ? senderName :
+                        (isGroup ? `Group ${chatIdToPhone(chatId)}` : chatIdToPhone(chatId));
+    const bodyText = mediaPreview(media, messageType, text);
+    // Best-effort. Don't block on this — the webhook response is what
+    // Periskope is waiting for.
+    if (typeof globalThis.queueMicrotask === "function") {
+      globalThis.queueMicrotask(() => {
+        fanoutPush(env, {
+          title: senderLabel,
+          body: bodyText.slice(0, 200),
+          data: { chatKey: encodeKey(chatId), chatId },
+        }).catch(e => console.warn("[push] fanout failed:", e));
+      });
+    }
+  }
+
   return json({ ok: true, event: evtType });
+}
+
+// ---------- /register-push-token (mobile clients) ----------
+// Mobile clients call this once per sign-in. We stamp the token under
+// commonComm/pushTokens/{uid}/{tokenKey} so handleWebhook can broadcast.
+async function handleRegisterPushToken(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const { uid, token, platform } = body || {};
+  if (!uid || !token) return json({ error: "missing uid/token" }, 400);
+  const tokenKey = encodeKey(token);
+  await fbPatch(env, `${ROOT}/pushTokens/${uid}/${tokenKey}`, {
+    token,
+    platform: platform || "unknown",
+    lastSeen: Date.now(),
+  });
+  return json({ ok: true });
+}
+
+// ---------- Push fan-out (Expo Push Service) ----------
+// Reads every registered token across the org and POSTs to Expo's push API.
+// Expo accepts up to 100 notifications per request; we batch accordingly.
+// For v1 we notify ALL signed-in agents on every inbound message — same model
+// as "everyone in the group gets pinged". Refine to "only ticket owners +
+// recent senders" once the user base grows enough that broad pings annoy.
+async function fanoutPush(env, { title, body, data }) {
+  const all = await fbGet(env, `${ROOT}/pushTokens`);
+  if (!all || typeof all !== "object") return;
+  const messages = [];
+  for (const userMap of Object.values(all)) {
+    if (!userMap || typeof userMap !== "object") continue;
+    for (const entry of Object.values(userMap)) {
+      if (!entry || !entry.token) continue;
+      // Expo tokens look like "ExponentPushToken[...]" — skip anything that
+      // doesn't match so we never POST garbage upstream.
+      if (!/^ExponentPushToken\[.+\]$/.test(entry.token)) continue;
+      messages.push({
+        to: entry.token,
+        title,
+        body,
+        data,
+        sound: "default",
+        priority: "high",
+        channelId: "default",
+      });
+    }
+  }
+  if (!messages.length) return;
+  for (let i = 0; i < messages.length; i += 100) {
+    const batch = messages.slice(i, i + 100);
+    const headers = { "Content-Type": "application/json", "Accept": "application/json" };
+    // EXPO_ACCESS_TOKEN is optional but recommended for higher rate limits.
+    if (env.EXPO_ACCESS_TOKEN) headers["Authorization"] = `Bearer ${env.EXPO_ACCESS_TOKEN}`;
+    try {
+      await fetch("https://exp.host/--/api/v2/push/send", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(batch),
+      });
+    } catch (e) { /* swallow — push is best-effort */ }
+  }
 }
 
 // ---------- /messages?chatId=...  (reconciliation poller fallback) ----------
