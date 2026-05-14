@@ -104,22 +104,28 @@ async function handleSend(request, env) {
 // ---------- /webhook (inbound from Periskope) ----------
 async function handleWebhook(request, env) {
   const payload = await request.json();
+
+  // Always log raw payloads so we can debug shape mismatches later.
+  const debugKey = Date.now() + "_" + Math.random().toString(36).slice(2, 8);
+  await fbPut(env, `${ROOT}/_debug/webhook/${debugKey}`, { payload, receivedAt: Date.now() });
+
   // Periskope event shape: { event: "message.created", data: { ...message } }
-  // Be defensive — pull from common locations.
   const evtType = payload?.event || payload?.type || "unknown";
   const msg = payload?.data || payload?.message || payload;
 
   if (!msg) return json({ ok: true, skipped: "no message" });
 
-  const chatId = msg.chat_id || msg.chatId;
-  if (!chatId) return json({ ok: true, skipped: "no chat_id" });
+  const rawChatId = msg.chat_id || msg.chatId;
+  if (!rawChatId) return json({ ok: true, skipped: "no chat_id" });
+  const chatId = String(rawChatId);
 
   const isFromMe = msg.from_me === true || msg.fromMe === true;
   const text = msg.body || msg.message || msg.text || "";
-  const ts = (msg.timestamp ? Number(msg.timestamp) * (String(msg.timestamp).length <= 10 ? 1000 : 1) : Date.now());
-  const periskopeMsgId = msg.message_id || msg.id || null;
+  const ts = parseTs(msg.timestamp);
+  const periskopeMsgId = msg.message_id || msg.unique_id || msg.id?.serialized || msg.id || null;
   const senderName = msg.sender_name || msg.contact_name || null;
-  const senderPhone = msg.sender_phone || chatIdToPhone(chatId);
+  // Periskope's sender_phone often comes as "919876543210@c.us" - strip the suffix
+  const senderPhone = (msg.sender_phone ? String(msg.sender_phone).split("@")[0] : chatIdToPhone(chatId));
   const messageType = msg.message_type || "text";
 
   // Dedup: if we already stored this periskopeMsgId, skip.
@@ -185,6 +191,16 @@ function phoneToChatId(phone) {
 }
 function chatIdToPhone(chatId) {
   return String(chatId || "").split("@")[0];
+}
+// Periskope sends timestamps as ISO strings ("2026-05-14T08:17:49+00:00").
+// Older code paths might send unix seconds or millis. Handle all three.
+function parseTs(v) {
+  if (!v) return Date.now();
+  if (typeof v === "number") return v < 1e12 ? v * 1000 : v;
+  const s = String(v);
+  if (/^\d+$/.test(s)) return s.length <= 10 ? Number(s) * 1000 : Number(s);
+  const n = Date.parse(s);
+  return isNaN(n) ? Date.now() : n;
 }
 
 // ---------- Firebase RTDB REST helpers ----------
