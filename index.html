@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.068</title>
+<title>CommonCommunication v1.069</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -297,6 +297,16 @@
   }
   .composer .send-btn:disabled { opacity: .5; cursor: not-allowed; }
   .composer .send-btn:hover:not(:disabled) { background: var(--green-dark); }
+  .composer .ai-btn {
+    background: linear-gradient(135deg, #a78bfa, #8b5cf6);
+    color: white; border: none;
+    width: 42px; height: 42px; border-radius: 50%;
+    cursor: pointer; font-size: 18px;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 1px 3px rgba(139,92,246,.3);
+  }
+  .composer .ai-btn:disabled { opacity: .5; cursor: wait; }
+  .composer .ai-btn:hover:not(:disabled) { filter: brightness(1.1); }
 
   /* ---------- Modal (new chat) ---------- */
   .modal-back {
@@ -862,7 +872,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.068</div>
+    <div class="login-version">v1.069</div>
   </div>
 </div>
 
@@ -870,7 +880,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.068</span>
+    <span class="ver">v1.069</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -944,6 +954,7 @@
         <div class="messages" id="messages"></div>
         <div class="composer">
           <textarea id="composerInput" placeholder="Type a message" rows="1"></textarea>
+          <button class="ai-btn" id="suggestReplyBtn" title="AI suggested reply (Claude)">✨</button>
           <button class="send-btn" id="sendBtn" title="Send">➤</button>
         </div>
       </div>
@@ -1115,7 +1126,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.068";
+const APP_VERSION = "v1.069";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -1179,6 +1190,7 @@ const threadAvatar = $("threadAvatar");
 const messagesEl = $("messages");
 const composerInput = $("composerInput");
 const sendBtn = $("sendBtn");
+const suggestReplyBtn = $("suggestReplyBtn");
 const newChatBtn = $("newChatBtn");
 const newChatModal = $("newChatModal");
 const newChatCancel = $("newChatCancel");
@@ -2992,7 +3004,7 @@ function formatNoteTime(ts) {
 //   3. phone digits                                             → "919..."
 // Brackets on the manual case signal "this is our internal label, not an authoritative
 // name from Ferra." Edge case: if the manual name exactly equals the Ferra name (e.g.
-// legacy rows from the Ferra browser before v1.068 used to write contactName), treat
+// legacy rows from the Ferra browser before v1.069 used to write contactName), treat
 // it as Ferra-sourced and skip the brackets.
 function resolveDisplayName(phone, explicitName, opts) {
   // Groups get their stored groupName (no brackets, no Ferra lookup)
@@ -3043,7 +3055,7 @@ function renderChatList(rows) {
   if (currentStatusFilter === "My tickets" && myChatKeys.size > 0) {
     const sample = enriched.slice(0, 3).map(r => r.chatKey);
     if (!enriched.some(r => myChatKeys.has(r.chatKey))) {
-      console.warn("[v1.068] My-tickets has keys but no chat-rows match. myChatKeys:", Array.from(myChatKeys), "sample r.chatKey:", sample);
+      console.warn("[v1.069] My-tickets has keys but no chat-rows match. myChatKeys:", Array.from(myChatKeys), "sample r.chatKey:", sample);
     }
   }
   const isCurrentUserAdmin = isAdmin(currentUser?.email);
@@ -3693,6 +3705,45 @@ composerInput.addEventListener("input", () => {
   composerInput.style.height = Math.min(composerInput.scrollHeight, 160) + "px";
 });
 sendBtn.onclick = doSend;
+
+// AI suggested reply — Claude drafts a short response based on the recent thread
+suggestReplyBtn.onclick = async () => {
+  if (!currentChatId || !WORKER_URL) return;
+  const meta = chatsCache[currentChatId] || {};
+  const chatId = meta.chatId || currentChatId;
+  const orig = suggestReplyBtn.textContent;
+  suggestReplyBtn.disabled = true;
+  suggestReplyBtn.textContent = "…";
+  try {
+    const res = await fetch(`${WORKER_URL}/suggest-reply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId }),
+    });
+    const j = await res.json();
+    if (!res.ok) {
+      alert("AI suggest failed: " + (j.error || ("HTTP " + res.status)));
+      return;
+    }
+    const reply = j.reply || "";
+    // If composer already has text, append below. Otherwise replace.
+    if (composerInput.value.trim()) {
+      composerInput.value = composerInput.value.trim() + "\n\n" + reply;
+    } else {
+      composerInput.value = reply;
+    }
+    // Resize the textarea to fit, then focus + select for easy edit
+    composerInput.style.height = "auto";
+    composerInput.style.height = Math.min(composerInput.scrollHeight, 160) + "px";
+    composerInput.focus();
+    composerInput.setSelectionRange(composerInput.value.length, composerInput.value.length);
+  } catch (e) {
+    alert("Network error: " + (e?.message || e));
+  } finally {
+    suggestReplyBtn.disabled = false;
+    suggestReplyBtn.textContent = orig;
+  }
+};
 
 async function doSend() {
   const text = composerInput.value.trim();

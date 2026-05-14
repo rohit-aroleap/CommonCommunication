@@ -47,6 +47,9 @@ export default {
       if (url.pathname === "/summarize" && request.method === "POST") {
         return cors(env, await handleSummarize(request, env));
       }
+      if (url.pathname === "/suggest-reply" && request.method === "POST") {
+        return cors(env, await handleSuggestReply(request, env));
+      }
       if (url.pathname === "/media" && request.method === "GET") {
         return cors(env, await handleMediaProxy(request, env));
       }
@@ -617,6 +620,95 @@ Use simple markdown bullets. Stay under 180 words. Never invent facts not presen
     model: claudeJson?.model || null,
     usage: claudeJson?.usage || null,
   });
+}
+
+// ---------- /suggest-reply (Claude drafts a short reply for the trainer) ----------
+async function handleSuggestReply(request, env) {
+  if (!env.CLAUDE_API_KEY) return json({ error: "CLAUDE_API_KEY not configured on worker" }, 500);
+  const body = await request.json().catch(() => ({}));
+  const chatId = body?.chatId;
+  if (!chatId) return json({ error: "missing chatId" }, 400);
+
+  const chatKey = encodeKey(chatId);
+  const [rawMessages, meta] = await Promise.all([
+    fbGet(env, `${ROOT}/chats/${chatKey}/messages`),
+    fbGet(env, `${ROOT}/chats/${chatKey}/meta`),
+  ]);
+  if (!rawMessages || typeof rawMessages !== "object") {
+    return json({ error: "no_messages" }, 400);
+  }
+
+  // Same render-time dedup as /summarize
+  const extractInnerId = (m) => {
+    if (m.periskopeUniqueId) return m.periskopeUniqueId;
+    if (m.periskopeMsgId) {
+      const parts = String(m.periskopeMsgId).split("_");
+      return parts[parts.length - 1] || null;
+    }
+    return null;
+  };
+  const byId = new Map();
+  const noId = [];
+  for (const m of Object.values(rawMessages)) {
+    if (!m) continue;
+    const id = extractInnerId(m);
+    if (!id) { noId.push(m); continue; }
+    const existing = byId.get(id);
+    if (!existing || (m.sentByName && !existing.sentByName)) byId.set(id, m);
+  }
+  const all = [...byId.values(), ...noId]
+    .filter(m => m.text || m.media)
+    .sort((a, b) => (a.ts || 0) - (b.ts || 0));
+  const recent = all.slice(-30);
+  if (!recent.length) return json({ error: "no_recent" }, 400);
+
+  const isGroup = String(chatId).endsWith("@g.us");
+  const customerName = meta?.contactName || meta?.groupName || meta?.phone || "Customer";
+
+  const lines = recent.map(m => {
+    const text = m.text || (m.media ? `[${m.media.mimeType || "media"}]` : "");
+    const speaker = m.direction === "out"
+      ? `Agent${m.sentByName ? ` (${m.sentByName})` : ""}`
+      : (isGroup ? `Member${m.senderPhone ? ` ${m.senderPhone}` : ""}` : "Customer");
+    return `${speaker}: ${text}`;
+  });
+
+  const systemPrompt = `You are an Aroleap fitness team member drafting a WhatsApp reply for a customer. The trainer will edit and send your draft.
+
+Style:
+- Warm, professional, conversational — not stiff or overly formal.
+- 1-3 sentences max. Short = better.
+- Match the tone of recent exchanges (formal if customer is formal, casual if casual).
+- Use the customer's name if it's known and the context warrants it.
+
+Rules:
+- Never invent facts (appointments, prices, names of trainers, etc.) not present in the conversation.
+- If the customer just asked a question you can't answer from context, suggest a brief clarifying question or a "let me check and get back to you".
+- Don't use emojis unless the conversation already has them.
+- Output ONLY the reply text. No explanation, no quotes, no preamble like "Here's a draft:".`;
+
+  const userPrompt = `Customer: ${customerName}\nChat type: ${isGroup ? "group" : "1-on-1"}\n\nRecent conversation (oldest first):\n\n${lines.join("\n")}\n\nDraft the next reply the agent should send.`;
+
+  const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": env.CLAUDE_API_KEY,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 400,
+      system: systemPrompt,
+      messages: [{ role: "user", content: userPrompt }],
+    }),
+  });
+  const claudeJson = await safeJson(claudeRes);
+  if (!claudeRes.ok) {
+    return json({ error: "claude_api_failed", details: claudeJson, status: claudeRes.status }, 502);
+  }
+  const reply = (claudeJson?.content?.[0]?.text || "").trim();
+  return json({ reply, count: recent.length, usage: claudeJson?.usage || null });
 }
 
 async function handleFetchMessages(request, env) {
