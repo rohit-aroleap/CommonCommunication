@@ -10,3 +10,5 @@ ALLOWED_ORIGIN = "*"
 #   wrangler secret put PERISKOPE_API_KEY
 #   wrangler secret put PERISKOPE_PHONE
 #   wrangler secret put FIREBASE_DB_SECRET
+#   wrangler secret put CLAUDE_API_KEY      (for /summarize, /suggest-reply)
+#   wrangler secret put EXPO_ACCESS_TOKEN   (optional, raises push rate limits)
