@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.013</title>
+<title>CommonCommunication v1.014</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -315,6 +315,25 @@
   .pill-sm.stage-active      { background: #d1fae5; color: #065f46; }
   .pill-sm.stage-offboarding { background: #fee2e2; color: #991b1b; }
 
+  /* Customer browser modal rows */
+  .cb-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 10px; border-radius: 6px;
+  }
+  .cb-row:hover { background: var(--hover); }
+  .cb-row .avatar { width: 38px; height: 38px; font-size: 15px; flex-shrink: 0; }
+  .cb-row .info { flex: 1; min-width: 0; }
+  .cb-row .info .nm { font-weight: 500; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cb-row .info .ph { color: var(--muted); font-size: 12px; }
+  .cb-row .info .pills { display: flex; gap: 4px; margin-top: 3px; }
+  .cb-row .add-btn {
+    background: var(--green); color: white; border: none; border-radius: 6px;
+    padding: 5px 14px; font-size: 12px; font-weight: 500; cursor: pointer;
+    flex-shrink: 0;
+  }
+  .cb-row .add-btn:hover { background: var(--green-dark); }
+  .cb-row .added { font-size: 12px; color: var(--green-dark); padding: 5px 12px; flex-shrink: 0; }
+
   @media (max-width: 720px) {
     .main { grid-template-columns: 1fr; }
     .thread { display: none; }
@@ -336,7 +355,7 @@
       <svg viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3c-1.6 4.7-6.1 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 8 3.1l5.7-5.7C34.5 6.5 29.6 4.5 24 4.5 13.2 4.5 4.5 13.2 4.5 24S13.2 43.5 24 43.5 43.5 34.8 43.5 24c0-1.2-.1-2.4-.3-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 16 19 12.5 24 12.5c3.1 0 5.8 1.2 8 3.1l5.7-5.7C34.5 6.5 29.6 4.5 24 4.5 16.3 4.5 9.7 9 6.3 14.7z"/><path fill="#4CAF50" d="M24 43.5c5.4 0 10.3-2 14-5.3l-6.5-5.3c-2 1.4-4.6 2.3-7.5 2.3-5.2 0-9.6-3.3-11.2-8L6.2 32C9.6 38 16.3 43.5 24 43.5z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.3 4.3-4.3 5.8l6.5 5.3c4.4-4 7-9.9 7-15.6 0-1.2-.1-2.4-.4-3.5z"/></svg>
       Sign in with Google
     </button>
-    <div class="login-version">v1.013</div>
+    <div class="login-version">v1.014</div>
   </div>
 </div>
 
@@ -344,7 +363,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.013</span>
+    <span class="ver">v1.014</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -368,7 +387,8 @@
       <div class="side-header">
         <h2>Chats</h2>
         <div class="actions">
-          <button class="icon-btn" id="newChatBtn" title="New chat">+</button>
+          <button class="icon-btn" id="browseCustomersBtn" title="Browse Ferra customers" style="font-size:16px;">👤</button>
+          <button class="icon-btn" id="newChatBtn" title="New chat by phone">+</button>
         </div>
       </div>
       <div class="search-row">
@@ -466,6 +486,22 @@
   </div>
 </div>
 
+<!-- ============== CUSTOMER BROWSER MODAL ============== -->
+<div class="modal-back" id="customerBrowserModal">
+  <div class="modal" style="width:560px; max-width:94vw; height:640px; max-height:88vh; display:flex; flex-direction:column;">
+    <h3>Add customers to dashboard</h3>
+    <div style="font-size:12px; color:var(--muted); margin-bottom:10px;">
+      All Ferra customers (active + cancelled). Click <b>Add</b> to bring a chat into the sidebar; it doesn't message anyone.
+    </div>
+    <input id="cbSearch" placeholder="Search by name or phone…" style="border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-size:14px; margin-bottom:8px; font-family:inherit;" />
+    <div style="font-size:11px; color:var(--muted); margin-bottom:6px;" id="cbStats">Loading…</div>
+    <div id="cbList" style="flex:1; overflow-y:auto; border:1px solid var(--border); border-radius:6px; padding:4px;"></div>
+    <div class="actions" style="margin-top:14px;">
+      <button class="btn btn-secondary" id="cbClose">Close</button>
+    </div>
+  </div>
+</div>
+
 <!-- ============== NEW CHAT MODAL ============== -->
 <div class="modal-back" id="newChatModal">
   <div class="modal">
@@ -504,7 +540,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.013";
+const APP_VERSION = "v1.014";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -562,6 +598,12 @@ const addAllowBtn = $("addAllowBtn");
 const backfillBtn = $("backfillBtn");
 const ferraSyncStatus = $("ferraSyncStatus");
 const ferraRefreshBtn = $("ferraRefreshBtn");
+const browseCustomersBtn = $("browseCustomersBtn");
+const customerBrowserModal = $("customerBrowserModal");
+const cbSearch = $("cbSearch");
+const cbList = $("cbList");
+const cbStats = $("cbStats");
+const cbClose = $("cbClose");
 const backfillModal = $("backfillModal");
 const bfClose = $("bfClose");
 const bfStart = $("bfStart");
@@ -1076,6 +1118,132 @@ async function refreshFerraNow() {
   }
 }
 ferraRefreshBtn.onclick = refreshFerraNow;
+
+// ====== CUSTOMER BROWSER ======
+browseCustomersBtn.onclick = openCustomerBrowser;
+cbClose.onclick = () => customerBrowserModal.classList.remove("visible");
+cbSearch.addEventListener("input", () => renderCustomerBrowser());
+
+function openCustomerBrowser() {
+  cbSearch.value = "";
+  customerBrowserModal.classList.add("visible");
+  renderCustomerBrowser();
+  setTimeout(() => cbSearch.focus(), 50);
+}
+
+function collectAllFerraCustomers() {
+  const result = [];
+  const seen = new Set();
+  const pushFromList = (rawList, status) => {
+    if (!rawList) return;
+    const list = Array.isArray(rawList) ? rawList : Object.values(rawList);
+    for (const u of list) {
+      if (!u) continue;
+      const phone = normalizeFerraPhone(u.phone || u.phoneNumber || "");
+      if (!phone || seen.has(phone)) continue;
+      seen.add(phone);
+      const tag = getSubscriptionTag(phone);
+      result.push({
+        phone,
+        name: u.name || null,
+        status,
+        tag,
+        stage: tag ? (FERRA_TAG_STAGE[tag] || "setup") : null,
+      });
+    }
+  };
+  pushFromList(habitUsers, "active");
+  pushFromList(habitCancelledUsers, "cancelled");
+  // Sort: active first, then by name (case-insensitive)
+  result.sort((a, b) => {
+    if (a.status !== b.status) return a.status === "active" ? -1 : 1;
+    const an = (a.name || a.phone).toLowerCase();
+    const bn = (b.name || b.phone).toLowerCase();
+    return an.localeCompare(bn);
+  });
+  return result;
+}
+
+function renderCustomerBrowser() {
+  const q = cbSearch.value.trim().toLowerCase();
+  const all = collectAllFerraCustomers();
+  const filtered = !q ? all : all.filter(c =>
+    (c.name && c.name.toLowerCase().includes(q)) ||
+    (c.phone && c.phone.toLowerCase().includes(q))
+  );
+
+  cbStats.textContent = q
+    ? `${filtered.length} of ${all.length} match "${q}"`
+    : `${all.length} customers in Ferra`;
+
+  if (!filtered.length) {
+    cbList.innerHTML = `<div style="padding:30px; text-align:center; color:var(--muted); font-size:13px;">${all.length === 0 ? "Ferra data not loaded yet — hit ↻ in the topbar." : "No customers match."}</div>`;
+    return;
+  }
+
+  // Set of phones already in dashboard (normalized for comparison)
+  const existingPhones = new Set(
+    Object.values(chatsCache).map(m => normalizeFerraPhone(m?.phone || "")).filter(Boolean)
+  );
+
+  // Cap rendered rows to keep DOM light
+  const CAP = 250;
+  const slice = filtered.slice(0, CAP);
+
+  cbList.innerHTML = slice.map(c => {
+    const exists = existingPhones.has(c.phone);
+    const initial = (c.name || c.phone || "?").trim().charAt(0).toUpperCase();
+    const statusPill = c.status ? `<span class="pill-sm status-${c.status}">${c.status === "active" ? "Active" : "Cancelled"}</span>` : "";
+    const stagePill = c.tag ? `<span class="pill-sm stage-${c.stage || "setup"}" title="${escapeHtml(c.tag)}">${escapeHtml(FERRA_TAG_SHORT[c.tag] || c.tag)}</span>` : "";
+    const actionHtml = exists
+      ? `<span class="added">✓ In dashboard</span>`
+      : `<button class="add-btn" data-phone="${escapeHtml(c.phone)}" data-name="${escapeHtml(c.name || "")}">Add</button>`;
+    return `
+    <div class="cb-row">
+      <div class="avatar">${escapeHtml(initial)}</div>
+      <div class="info">
+        <div class="nm">${escapeHtml(c.name || c.phone)}</div>
+        <div class="ph">${escapeHtml(c.phone)}</div>
+        <div class="pills">${statusPill}${stagePill}</div>
+      </div>
+      ${actionHtml}
+    </div>`;
+  }).join("");
+
+  if (filtered.length > CAP) {
+    const more = document.createElement("div");
+    more.style.cssText = "padding:10px; text-align:center; color:var(--muted); font-size:12px;";
+    more.textContent = `and ${filtered.length - CAP} more — refine your search`;
+    cbList.appendChild(more);
+  }
+
+  cbList.querySelectorAll(".add-btn").forEach(btn => {
+    btn.onclick = async () => {
+      btn.disabled = true;
+      btn.textContent = "Adding…";
+      await addCustomerToChats(btn.dataset.phone, btn.dataset.name);
+      // Re-render to flip the row to ✓
+      renderCustomerBrowser();
+    };
+  });
+}
+
+async function addCustomerToChats(phone, name) {
+  if (!phone) return;
+  const digits = String(phone).replace(/\D/g, "");
+  if (digits.length < 8) return;
+  const chatId = `${digits}@c.us`;
+  const chatKey = chatId.replace(/[.#$\[\]\/]/g, "_");
+  const existing = chatsCache[chatKey] || {};
+  await update(ref(db, `${ROOT}/chats/${chatKey}/meta`), {
+    chatId,
+    phone: digits,
+    contactName: existing.contactName || name || null,
+    lastMsgAt: existing.lastMsgAt || Date.now(),
+    lastMsgPreview: existing.lastMsgPreview || "(added from Ferra)",
+    lastMsgDirection: existing.lastMsgDirection || "out",
+  });
+}
 
 // Expose to window for DevTools inspection. When you build chat-context UI
 // later, call these helpers from your render functions.
