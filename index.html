@@ -3,6 +3,22 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<script>
+  // Redirect mobile browsers to the mobile-tailored view. Bypass with ?desktop=1
+  // (also remembered in sessionStorage so the override survives in-app links).
+  (function () {
+    try {
+      var params = new URLSearchParams(location.search);
+      if (params.get("desktop") === "1") { sessionStorage.setItem("cc-desktop", "1"); }
+      if (sessionStorage.getItem("cc-desktop") === "1") return;
+      var narrow = window.innerWidth < 720;
+      var mobileUa = /Android|webOS|iPhone|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+      if (narrow || mobileUa) {
+        location.replace("mobile.html" + location.search + location.hash);
+      }
+    } catch (e) { /* if anything goes wrong, fall through to desktop UI */ }
+  })();
+</script>
 <title>CommonCommunication v1.072</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
