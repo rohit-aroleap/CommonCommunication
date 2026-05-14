@@ -73,10 +73,14 @@ async function handleSend(request, env) {
 
   const periskopeJson = await safeJson(periskopeRes);
   const ok = periskopeRes.ok;
+  const uniqueId = periskopeJson?.unique_id || null;
 
-  // Mirror the send into Firebase so all dashboards see it.
-  // If we already have a localMsgId from the dashboard, update that record;
-  // otherwise push a new one.
+  // Predict the message_id format that Periskope's webhook will use for
+  // the from_me=true echo of this send: "true_{chat_id}_{unique_id}". By
+  // pre-writing the byPeriskopeId dedup entry, we prevent the webhook from
+  // duplicating the message when it arrives a moment later.
+  const expectedWebhookMsgId = (ok && uniqueId) ? `true_${resolvedChatId}_${uniqueId}` : null;
+
   const ts = Date.now();
   const msgRecord = {
     direction: "out",
@@ -85,15 +89,18 @@ async function handleSend(request, env) {
     sentByUid,
     sentByName,
     status: ok ? "sent" : "failed",
-    periskopeUniqueId: periskopeJson?.unique_id || null,
+    periskopeUniqueId: uniqueId,
+    periskopeMsgId: expectedWebhookMsgId, // matches the field the webhook will use
     periskopeTrackBy: periskopeJson?.track_by || null,
     periskopeResp: periskopeJson || null,
   };
 
+  let msgKey = localMsgId;
   if (localMsgId) {
     await fbPatch(env, `${ROOT}/chats/${encodeKey(resolvedChatId)}/messages/${localMsgId}`, msgRecord);
   } else {
-    await fbPush(env, `${ROOT}/chats/${encodeKey(resolvedChatId)}/messages`, msgRecord);
+    const pushed = await fbPush(env, `${ROOT}/chats/${encodeKey(resolvedChatId)}/messages`, msgRecord);
+    msgKey = pushed?.name || null;
   }
   await fbPatch(env, `${ROOT}/chats/${encodeKey(resolvedChatId)}/meta`, {
     phone: resolvedPhone,
@@ -103,6 +110,12 @@ async function handleSend(request, env) {
     lastMsgDirection: "out",
     lastMsgSentByName: sentByName,
   });
+  if (expectedWebhookMsgId && msgKey) {
+    await fbPut(env, `${ROOT}/byPeriskopeId/${encodeKey(expectedWebhookMsgId)}`, {
+      chatId: resolvedChatId,
+      msgKey,
+    });
+  }
 
   return json({ ok, periskope: periskopeJson }, ok ? 200 : 502);
 }
