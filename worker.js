@@ -27,6 +27,13 @@ export default {
       if (url.pathname === "/health") {
         return cors(env, json({ ok: true, ts: Date.now() }));
       }
+      if (url.pathname === "/" || url.pathname === "") {
+        return cors(env, json({
+          service: "CommonCommunication Worker",
+          status: "ok",
+          endpoints: ["/health", "/send (POST)", "/webhook (POST)", "/messages?chatId=... (GET)"],
+        }));
+      }
       if (url.pathname === "/messages" && request.method === "GET") {
         return cors(env, await handleFetchMessages(request, env));
       }
