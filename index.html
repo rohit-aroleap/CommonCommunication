@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.027</title>
+<title>CommonCommunication v1.028</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -373,7 +373,7 @@
       <svg viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3c-1.6 4.7-6.1 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 8 3.1l5.7-5.7C34.5 6.5 29.6 4.5 24 4.5 13.2 4.5 4.5 13.2 4.5 24S13.2 43.5 24 43.5 43.5 34.8 43.5 24c0-1.2-.1-2.4-.3-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 16 19 12.5 24 12.5c3.1 0 5.8 1.2 8 3.1l5.7-5.7C34.5 6.5 29.6 4.5 24 4.5 16.3 4.5 9.7 9 6.3 14.7z"/><path fill="#4CAF50" d="M24 43.5c5.4 0 10.3-2 14-5.3l-6.5-5.3c-2 1.4-4.6 2.3-7.5 2.3-5.2 0-9.6-3.3-11.2-8L6.2 32C9.6 38 16.3 43.5 24 43.5z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.3 4.3-4.3 5.8l6.5 5.3c4.4-4 7-9.9 7-15.6 0-1.2-.1-2.4-.4-3.5z"/></svg>
       Sign in with Google
     </button>
-    <div class="login-version">v1.027</div>
+    <div class="login-version">v1.028</div>
   </div>
 </div>
 
@@ -381,7 +381,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.027</span>
+    <span class="ver">v1.028</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -583,7 +583,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.027";
+const APP_VERSION = "v1.028";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -1590,7 +1590,7 @@ function closeThreadForPrivacy() {
 //   3. phone digits                                             → "919..."
 // Brackets on the manual case signal "this is our internal label, not an authoritative
 // name from Ferra." Edge case: if the manual name exactly equals the Ferra name (e.g.
-// legacy rows from the Ferra browser before v1.027 used to write contactName), treat
+// legacy rows from the Ferra browser before v1.028 used to write contactName), treat
 // it as Ferra-sourced and skip the brackets.
 function resolveDisplayName(phone, explicitName, opts) {
   // Groups get their stored groupName (no brackets, no Ferra lookup)
@@ -1622,9 +1622,14 @@ function renderChatList(rows) {
   }));
   const isCurrentUserAdmin = isAdmin(currentUser?.email);
   // Non-admins never see private chats. Admins see them with a 🔒 indicator.
-  let visible = isCurrentUserAdmin ? enriched : enriched.filter(r => !r.private);
+  const afterPrivacy = isCurrentUserAdmin ? enriched : enriched.filter(r => !r.private);
+  // Refresh the filter-pill counts BEFORE applying the status filter — counts
+  // should reflect "how many would be in each bucket", not "how many are visible
+  // right now after filtering".
+  renderFilterPills(computeStatusCounts(afterPrivacy));
   // Subscription-status filter — specific statuses hide groups and non-Ferra chats
   // (they have no subscriptionStatus to match).
+  let visible = afterPrivacy;
   if (currentStatusFilter !== "All") {
     visible = visible.filter(r => getSubscriptionStatusFor(r.phone) === currentStatusFilter);
   }
@@ -1678,20 +1683,34 @@ const STATUS_FILTERS = [
 ];
 let currentStatusFilter = "All";
 
-function renderFilterPills() {
+function renderFilterPills(counts) {
   filterRow.innerHTML = STATUS_FILTERS.map(s => {
-    const label = s === "All" ? "All" : s.replace(/_/g, " ");
-    return `<button class="filter-pill ${s === currentStatusFilter ? "active" : ""}" data-filter="${escapeHtml(s)}">${escapeHtml(label)}</button>`;
+    const baseLabel = s === "All" ? "All" : s.replace(/_/g, " ");
+    const n = counts ? (counts[s] || 0) : null;
+    const suffix = n !== null ? ` (${n})` : "";
+    return `<button class="filter-pill ${s === currentStatusFilter ? "active" : ""}" data-filter="${escapeHtml(s)}">${escapeHtml(baseLabel)}${suffix}</button>`;
   }).join("");
   filterRow.querySelectorAll(".filter-pill").forEach(b => {
     b.onclick = () => {
       currentStatusFilter = b.dataset.filter;
-      renderFilterPills();
-      renderChatList(lastChatRows);
+      renderChatList(lastChatRows); // re-renders pills with new active state too
     };
   });
 }
 renderFilterPills();
+
+// Compute how many chats fall into each status bucket. Used for the count
+// suffix on each filter pill. "All" = total visible; specific statuses only
+// count rows whose phone has that subscriptionStatus in Ferra.
+function computeStatusCounts(visibleRows) {
+  const counts = { All: visibleRows.length };
+  for (const s of STATUS_FILTERS) if (s !== "All") counts[s] = 0;
+  for (const r of visibleRows) {
+    const st = getSubscriptionStatusFor(r.phone);
+    if (st && counts[st] !== undefined) counts[st]++;
+  }
+  return counts;
+}
 
 function renderFerraPills(phone) {
   const status = getCustomerStatus(phone);   // "active" | "cancelled" | null
