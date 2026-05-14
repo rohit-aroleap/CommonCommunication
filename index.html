@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>CommonCommunication v1.001</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
+<style>
+  :root {
+    --green: #00a884;
+    --green-dark: #008069;
+    --bg: #efeae2;
+    --panel: #ffffff;
+    --side: #ffffff;
+    --header: #f0f2f5;
+    --bubble-out: #d9fdd3;
+    --bubble-in: #ffffff;
+    --text: #111b21;
+    --muted: #667781;
+    --border: #e9edef;
+    --hover: #f5f6f6;
+    --active: #f0f2f5;
+    --shadow: 0 1px 1px rgba(11,20,26,.08);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: #d1d7db;
+    color: var(--text);
+    overflow: hidden;
+  }
+  /* ---------- Login screen ---------- */
+  #loginScreen {
+    position: fixed; inset: 0;
+    background: linear-gradient(180deg, #00a884 0%, #008069 100%);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 100;
+  }
+  #loginScreen.hidden { display: none; }
+  .login-card {
+    background: white; border-radius: 16px; padding: 40px 36px;
+    width: 380px; max-width: 92vw; text-align: center;
+    box-shadow: 0 20px 60px rgba(0,0,0,.2);
+  }
+  .login-card h1 { margin: 0 0 6px; font-size: 22px; color: #111b21; }
+  .login-card .sub { color: #667781; font-size: 14px; margin-bottom: 28px; }
+  .login-btn {
+    background: white; border: 1px solid #dadce0; border-radius: 8px;
+    padding: 10px 22px; font-size: 14px; font-weight: 500;
+    cursor: pointer; display: inline-flex; align-items: center; gap: 10px;
+    transition: background .15s, box-shadow .15s;
+  }
+  .login-btn:hover { background: #f8f9fa; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+  .login-btn svg { width: 18px; height: 18px; }
+  .login-version { margin-top: 24px; color: #99a5ad; font-size: 12px; }
+
+  /* ---------- App layout ---------- */
+  #app { display: none; height: 100vh; }
+  #app.visible { display: flex; flex-direction: column; }
+  .topbar {
+    height: 36px; background: var(--green-dark); color: white;
+    display: flex; align-items: center; padding: 0 16px;
+    font-size: 13px; gap: 14px;
+    flex-shrink: 0;
+  }
+  .topbar .brand { font-weight: 600; letter-spacing: .3px; }
+  .topbar .ver { opacity: .7; font-size: 11px; }
+  .topbar .spacer { flex: 1; }
+  .topbar .user { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+  .topbar .user img { width: 22px; height: 22px; border-radius: 50%; }
+  .topbar .logout {
+    background: rgba(255,255,255,.12); border: none; color: white;
+    padding: 4px 10px; border-radius: 4px; font-size: 11px; cursor: pointer;
+  }
+  .topbar .logout:hover { background: rgba(255,255,255,.2); }
+
+  .main {
+    flex: 1; display: grid;
+    grid-template-columns: 380px 1fr;
+    min-height: 0;
+  }
+
+  /* ---------- Sidebar (chat list) ---------- */
+  .sidebar {
+    background: var(--side);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    min-height: 0;
+  }
+  .side-header {
+    height: 60px; background: var(--header);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 16px;
+    flex-shrink: 0;
+  }
+  .side-header h2 { margin: 0; font-size: 16px; font-weight: 500; }
+  .side-header .actions { display: flex; gap: 8px; }
+  .icon-btn {
+    background: none; border: none; cursor: pointer;
+    width: 36px; height: 36px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    color: #54656f; font-size: 18px;
+  }
+  .icon-btn:hover { background: rgba(0,0,0,.05); }
+
+  .search-row {
+    padding: 8px 12px; background: var(--side);
+    border-bottom: 1px solid var(--border);
+  }
+  .search-row input {
+    width: 100%; height: 36px; border: none; outline: none;
+    background: var(--header); border-radius: 8px;
+    padding: 0 14px 0 40px; font-size: 14px;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%2354656f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='8'/><line x1='21' y1='21' x2='16.65' y2='16.65'/></svg>");
+    background-repeat: no-repeat; background-position: 12px center;
+  }
+
+  .chat-list { flex: 1; overflow-y: auto; }
+  .chat-row {
+    display: flex; align-items: center; padding: 10px 16px;
+    cursor: pointer; gap: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .chat-row:hover { background: var(--hover); }
+  .chat-row.active { background: var(--active); }
+  .avatar {
+    width: 49px; height: 49px; border-radius: 50%;
+    background: var(--green);
+    display: flex; align-items: center; justify-content: center;
+    color: white; font-weight: 600; font-size: 18px;
+    flex-shrink: 0;
+  }
+  .chat-row .meta { flex: 1; min-width: 0; }
+  .chat-row .top {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+  }
+  .chat-row .name { font-weight: 500; font-size: 15px; color: var(--text); }
+  .chat-row .time { font-size: 12px; color: var(--muted); flex-shrink: 0; }
+  .chat-row .bottom {
+    display: flex; justify-content: space-between; align-items: center; gap: 8px;
+    margin-top: 4px;
+  }
+  .chat-row .preview {
+    color: var(--muted); font-size: 14px; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+  }
+  .chat-row .preview .who {
+    color: var(--green-dark); font-weight: 500;
+  }
+  .chat-list .empty {
+    padding: 30px 20px; text-align: center; color: var(--muted); font-size: 13px;
+  }
+
+  /* ---------- Thread (right) ---------- */
+  .thread {
+    display: flex; flex-direction: column;
+    background:
+      url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23efeae2'/><circle cx='50' cy='50' r='1' fill='%23dcd6c8'/></svg>"),
+      var(--bg);
+    background-size: 200px;
+    min-height: 0;
+  }
+  .thread-header {
+    height: 60px; background: var(--header);
+    display: flex; align-items: center; padding: 0 16px;
+    gap: 12px;
+    flex-shrink: 0; border-left: 1px solid var(--border);
+  }
+  .thread-header .name { font-weight: 500; font-size: 16px; }
+  .thread-header .sub { font-size: 13px; color: var(--muted); }
+  .thread-header .info { flex: 1; min-width: 0; }
+  .thread-header .info .name,
+  .thread-header .info .sub {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .thread-empty {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    flex-direction: column; color: var(--muted);
+    background: #f0f2f5;
+  }
+  .thread-empty .big { font-size: 32px; margin-bottom: 12px; }
+
+  .messages {
+    flex: 1; overflow-y: auto; padding: 20px 8%;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .msg-row { display: flex; }
+  .msg-row.out { justify-content: flex-end; }
+  .msg-row.in  { justify-content: flex-start; }
+  .bubble {
+    max-width: 70%; padding: 6px 9px 8px; border-radius: 8px;
+    box-shadow: var(--shadow);
+    font-size: 14px; line-height: 1.4;
+    position: relative;
+    word-wrap: break-word; overflow-wrap: break-word;
+  }
+  .bubble.out { background: var(--bubble-out); }
+  .bubble.in  { background: var(--bubble-in); }
+  .bubble .text { white-space: pre-wrap; }
+  .bubble .footer {
+    display: flex; justify-content: flex-end; align-items: center;
+    gap: 6px; margin-top: 2px;
+    font-size: 11px; color: var(--muted);
+  }
+  .bubble .sender-tag {
+    display: inline-block;
+    font-size: 11px; font-weight: 600;
+    color: var(--green-dark);
+    margin-bottom: 2px;
+  }
+  .bubble .status {
+    font-size: 11px;
+  }
+  .bubble .status.sending { color: #99a5ad; }
+  .bubble .status.failed  { color: #d9534f; }
+
+  .day-divider {
+    align-self: center;
+    background: rgba(255,255,255,.95);
+    border-radius: 8px;
+    padding: 4px 10px;
+    font-size: 12px;
+    color: var(--muted);
+    margin: 10px 0;
+    box-shadow: var(--shadow);
+  }
+
+  .composer {
+    background: var(--header);
+    padding: 8px 16px;
+    display: flex; gap: 10px; align-items: flex-end;
+    flex-shrink: 0;
+  }
+  .composer textarea {
+    flex: 1; resize: none; border: none; outline: none;
+    background: white; border-radius: 8px;
+    padding: 10px 14px; font-size: 14px; min-height: 42px; max-height: 160px;
+    font-family: inherit;
+    line-height: 1.4;
+  }
+  .composer .send-btn {
+    background: var(--green); border: none; color: white;
+    width: 42px; height: 42px; border-radius: 50%;
+    cursor: pointer; font-size: 18px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .composer .send-btn:disabled { opacity: .5; cursor: not-allowed; }
+  .composer .send-btn:hover:not(:disabled) { background: var(--green-dark); }
+
+  /* ---------- Modal (new chat) ---------- */
+  .modal-back {
+    position: fixed; inset: 0; background: rgba(0,0,0,.4);
+    display: none; align-items: center; justify-content: center;
+    z-index: 50;
+  }
+  .modal-back.visible { display: flex; }
+  .modal {
+    background: white; border-radius: 12px; padding: 24px;
+    width: 360px; max-width: 92vw;
+  }
+  .modal h3 { margin: 0 0 14px; font-size: 18px; }
+  .modal label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .modal input {
+    width: 100%; border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 10px; font-size: 14px; margin-bottom: 12px;
+    font-family: inherit;
+  }
+  .modal .actions { display: flex; gap: 8px; justify-content: flex-end; }
+  .modal .btn {
+    border: none; border-radius: 6px; padding: 8px 14px; font-size: 14px;
+    cursor: pointer;
+  }
+  .modal .btn-primary { background: var(--green); color: white; }
+  .modal .btn-secondary { background: var(--header); color: var(--text); }
+
+  /* ---------- Misc ---------- */
+  .config-warn {
+    background: #fff7d6; border-bottom: 1px solid #f0e3a0;
+    color: #6b5d10; padding: 8px 14px; font-size: 12px;
+    text-align: center;
+  }
+  .config-warn code { background: rgba(0,0,0,.06); padding: 1px 5px; border-radius: 3px; }
+
+  @media (max-width: 720px) {
+    .main { grid-template-columns: 1fr; }
+    .thread { display: none; }
+    .main.thread-open .sidebar { display: none; }
+    .main.thread-open .thread { display: flex; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ============== LOGIN ============== -->
+<div id="loginScreen">
+  <div class="login-card">
+    <h1>CommonCommunication</h1>
+    <div class="sub">Aroleap shared customer inbox</div>
+    <button id="loginBtn" class="login-btn">
+      <svg viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3c-1.6 4.7-6.1 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 8 3.1l5.7-5.7C34.5 6.5 29.6 4.5 24 4.5 13.2 4.5 4.5 13.2 4.5 24S13.2 43.5 24 43.5 43.5 34.8 43.5 24c0-1.2-.1-2.4-.3-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 16 19 12.5 24 12.5c3.1 0 5.8 1.2 8 3.1l5.7-5.7C34.5 6.5 29.6 4.5 24 4.5 16.3 4.5 9.7 9 6.3 14.7z"/><path fill="#4CAF50" d="M24 43.5c5.4 0 10.3-2 14-5.3l-6.5-5.3c-2 1.4-4.6 2.3-7.5 2.3-5.2 0-9.6-3.3-11.2-8L6.2 32C9.6 38 16.3 43.5 24 43.5z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.3 4.3-4.3 5.8l6.5 5.3c4.4-4 7-9.9 7-15.6 0-1.2-.1-2.4-.4-3.5z"/></svg>
+      Sign in with Google
+    </button>
+    <div class="login-version">v1.001</div>
+  </div>
+</div>
+
+<!-- ============== APP ============== -->
+<div id="app">
+  <div class="topbar">
+    <span class="brand">CommonCommunication</span>
+    <span class="ver">v1.001</span>
+    <span class="spacer"></span>
+    <span id="workerStatus" style="font-size:11px; opacity:.85;"></span>
+    <span class="user">
+      <img id="userPhoto" alt="" />
+      <span id="userName"></span>
+      <button class="logout" id="logoutBtn">Logout</button>
+    </span>
+  </div>
+
+  <div id="configWarn" class="config-warn" style="display:none;">
+    <b>Worker URL not configured.</b> Set <code>WORKER_URL</code> at top of <code>index.html</code> after deploying the Cloudflare Worker. Sending is disabled until then.
+  </div>
+
+  <div class="main" id="mainGrid">
+    <!-- Sidebar -->
+    <div class="sidebar">
+      <div class="side-header">
+        <h2>Chats</h2>
+        <div class="actions">
+          <button class="icon-btn" id="newChatBtn" title="New chat">+</button>
+        </div>
+      </div>
+      <div class="search-row">
+        <input id="searchInput" placeholder="Search chats..." />
+      </div>
+      <div class="chat-list" id="chatList">
+        <div class="empty">No chats yet. Click + to start one.</div>
+      </div>
+    </div>
+
+    <!-- Thread -->
+    <div class="thread" id="threadPane">
+      <div class="thread-empty" id="threadEmpty">
+        <div class="big">💬</div>
+        <div>Select a chat to start messaging</div>
+      </div>
+      <div id="threadActive" style="display:none; flex-direction:column; flex:1; min-height:0;">
+        <div class="thread-header">
+          <button class="icon-btn" id="backBtn" style="display:none;">←</button>
+          <div class="avatar" id="threadAvatar">?</div>
+          <div class="info">
+            <div class="name" id="threadName">—</div>
+            <div class="sub" id="threadSub">—</div>
+          </div>
+        </div>
+        <div class="messages" id="messages"></div>
+        <div class="composer">
+          <textarea id="composerInput" placeholder="Type a message" rows="1"></textarea>
+          <button class="send-btn" id="sendBtn" title="Send">➤</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============== NEW CHAT MODAL ============== -->
+<div class="modal-back" id="newChatModal">
+  <div class="modal">
+    <h3>Start new chat</h3>
+    <label>Phone (with country code, no +)</label>
+    <input id="newChatPhone" placeholder="e.g. 919876543210" />
+    <label>Display name (optional)</label>
+    <input id="newChatName" placeholder="Customer name" />
+    <div class="actions">
+      <button class="btn btn-secondary" id="newChatCancel">Cancel</button>
+      <button class="btn btn-primary" id="newChatGo">Start</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============== Firebase + App ============== -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import {
+  getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut,
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import {
+  getDatabase, ref, onValue, push, set, update, get, child, query, orderByChild, limitToLast,
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+
+// ====== CONFIG ======
+const firebaseConfig = {
+  apiKey: "AIzaSyC5mZAG98VAeDpp1IssYYQ2kcKeClyqIGc",
+  authDomain: "motherofdashboard.firebaseapp.com",
+  databaseURL: "https://motherofdashboard-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "motherofdashboard",
+  storageBucket: "motherofdashboard.firebasestorage.app",
+  messagingSenderId: "1014194001329",
+  appId: "1:1014194001329:web:ca49a6a081d42575d2d990",
+};
+// IMPORTANT: set this after deploying the Cloudflare Worker.
+// e.g. "https://common-communication.<account>.workers.dev"
+const WORKER_URL = "";
+
+const ROOT = "commonComm";
+const VERSION = "v1.001";
+
+// ====== INIT ======
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getDatabase(app);
+const provider = new GoogleAuthProvider();
+
+// ====== STATE ======
+let currentUser = null;
+let currentChatId = null;
+let chatsCache = {};      // chatId -> meta
+let lastChatRows = [];    // last computed row list for re-render on search
+let messagesUnsub = null; // detach for current thread listener
+
+// ====== ELEMENTS ======
+const $ = (id) => document.getElementById(id);
+const loginScreen = $("loginScreen");
+const appEl = $("app");
+const loginBtn = $("loginBtn");
+const logoutBtn = $("logoutBtn");
+const userPhoto = $("userPhoto");
+const userName = $("userName");
+const chatList = $("chatList");
+const searchInput = $("searchInput");
+const threadEmpty = $("threadEmpty");
+const threadActive = $("threadActive");
+const threadName = $("threadName");
+const threadSub = $("threadSub");
+const threadAvatar = $("threadAvatar");
+const messagesEl = $("messages");
+const composerInput = $("composerInput");
+const sendBtn = $("sendBtn");
+const newChatBtn = $("newChatBtn");
+const newChatModal = $("newChatModal");
+const newChatCancel = $("newChatCancel");
+const newChatGo = $("newChatGo");
+const newChatPhone = $("newChatPhone");
+const newChatNameEl = $("newChatName");
+const configWarn = $("configWarn");
+const workerStatus = $("workerStatus");
+const mainGrid = $("mainGrid");
+const backBtn = $("backBtn");
+
+if (!WORKER_URL) configWarn.style.display = "block";
+
+// ====== AUTH ======
+loginBtn.onclick = async () => {
+  try { await signInWithPopup(auth, provider); }
+  catch (e) { alert("Sign-in failed: " + e.message); }
+};
+logoutBtn.onclick = () => signOut(auth);
+
+onAuthStateChanged(auth, async (user) => {
+  if (user) {
+    currentUser = user;
+    loginScreen.classList.add("hidden");
+    appEl.classList.add("visible");
+    userPhoto.src = user.photoURL || "";
+    userName.textContent = user.displayName || user.email;
+    // Register user record (for future role lookups)
+    await update(ref(db, `${ROOT}/users/${user.uid}`), {
+      name: user.displayName || user.email,
+      email: user.email,
+      photoURL: user.photoURL || null,
+      lastSeen: Date.now(),
+    });
+    listenChats();
+    pingWorker();
+  } else {
+    currentUser = null;
+    loginScreen.classList.remove("hidden");
+    appEl.classList.remove("visible");
+  }
+});
+
+// ====== WORKER HEALTH ======
+async function pingWorker() {
+  if (!WORKER_URL) { workerStatus.textContent = "● worker not set"; return; }
+  try {
+    const r = await fetch(`${WORKER_URL}/health`);
+    if (r.ok) workerStatus.textContent = "● worker online";
+    else workerStatus.textContent = "● worker err " + r.status;
+  } catch (e) { workerStatus.textContent = "● worker offline"; }
+}
+
+// ====== CHAT LIST ======
+function listenChats() {
+  const chatsRef = ref(db, `${ROOT}/chats`);
+  onValue(chatsRef, (snap) => {
+    const all = snap.val() || {};
+    chatsCache = {};
+    const rows = [];
+    for (const [chatKey, val] of Object.entries(all)) {
+      const meta = val.meta || {};
+      chatsCache[chatKey] = meta;
+      rows.push({
+        chatKey,
+        chatId: meta.chatId || chatKey,
+        phone: meta.phone || chatKey,
+        name: meta.contactName || meta.displayName || meta.phone || chatKey,
+        lastMsgAt: meta.lastMsgAt || 0,
+        preview: meta.lastMsgPreview || "",
+        direction: meta.lastMsgDirection || "in",
+        sentByName: meta.lastMsgSentByName || null,
+      });
+    }
+    rows.sort((a,b) => (b.lastMsgAt || 0) - (a.lastMsgAt || 0));
+    lastChatRows = rows;
+    renderChatList(rows);
+  });
+}
+
+function renderChatList(rows) {
+  const q = searchInput.value.trim().toLowerCase();
+  const filtered = !q ? rows : rows.filter(r =>
+    (r.name && r.name.toLowerCase().includes(q)) ||
+    (r.phone && r.phone.toLowerCase().includes(q))
+  );
+
+  if (!filtered.length) {
+    chatList.innerHTML = `<div class="empty">No chats${q ? " match your search" : " yet. Click + to start one."}.</div>`;
+    return;
+  }
+
+  chatList.innerHTML = filtered.map(r => {
+    const initial = (r.name || "?").trim().charAt(0).toUpperCase();
+    const previewWho = r.direction === "out" && r.sentByName
+      ? `<span class="who">${escapeHtml(r.sentByName)}:</span> `
+      : "";
+    return `
+    <div class="chat-row ${r.chatKey === currentChatId ? "active" : ""}" data-key="${escapeHtml(r.chatKey)}">
+      <div class="avatar">${escapeHtml(initial)}</div>
+      <div class="meta">
+        <div class="top">
+          <span class="name">${escapeHtml(r.name)}</span>
+          <span class="time">${formatTime(r.lastMsgAt)}</span>
+        </div>
+        <div class="bottom">
+          <span class="preview">${previewWho}${escapeHtml(r.preview)}</span>
+        </div>
+      </div>
+    </div>`;
+  }).join("");
+
+  chatList.querySelectorAll(".chat-row").forEach(el => {
+    el.onclick = () => openChat(el.dataset.key);
+  });
+}
+
+searchInput.oninput = () => renderChatList(lastChatRows);
+
+// ====== THREAD ======
+function openChat(chatKey) {
+  currentChatId = chatKey;
+  const meta = chatsCache[chatKey] || {};
+  const name = meta.contactName || meta.displayName || meta.phone || chatKey;
+  threadName.textContent = name;
+  threadSub.textContent = meta.phone || "";
+  threadAvatar.textContent = (name || "?").trim().charAt(0).toUpperCase();
+  threadEmpty.style.display = "none";
+  threadActive.style.display = "flex";
+  mainGrid.classList.add("thread-open");
+  document.querySelectorAll(".chat-row").forEach(r => {
+    r.classList.toggle("active", r.dataset.key === chatKey);
+  });
+  listenMessages(chatKey);
+}
+
+backBtn.onclick = () => {
+  mainGrid.classList.remove("thread-open");
+};
+
+function listenMessages(chatKey) {
+  if (messagesUnsub) { messagesUnsub(); messagesUnsub = null; }
+  const msgsRef = query(ref(db, `${ROOT}/chats/${chatKey}/messages`), orderByChild("ts"), limitToLast(500));
+  const unsub = onValue(msgsRef, (snap) => {
+    const v = snap.val() || {};
+    const list = Object.entries(v).map(([k, m]) => ({ id: k, ...m })).sort((a,b) => (a.ts||0) - (b.ts||0));
+    renderMessages(list);
+  });
+  messagesUnsub = unsub;
+}
+
+function renderMessages(list) {
+  if (!list.length) {
+    messagesEl.innerHTML = `<div class="thread-empty" style="background:transparent;"><div>No messages yet — say hi.</div></div>`;
+    return;
+  }
+  let html = "";
+  let lastDay = "";
+  for (const m of list) {
+    const day = dayLabel(m.ts);
+    if (day !== lastDay) {
+      html += `<div class="day-divider">${escapeHtml(day)}</div>`;
+      lastDay = day;
+    }
+    const out = m.direction === "out";
+    const senderTag = out && m.sentByName
+      ? `<div class="sender-tag">— ${escapeHtml(m.sentByName)}</div>` : "";
+    const status = out
+      ? `<span class="status ${m.status || "sent"}">${statusLabel(m.status)}</span>`
+      : "";
+    html += `
+    <div class="msg-row ${out ? "out" : "in"}">
+      <div class="bubble ${out ? "out" : "in"}">
+        ${senderTag}
+        <div class="text">${linkify(escapeHtml(m.text || ""))}</div>
+        <div class="footer">
+          <span>${formatClock(m.ts)}</span>
+          ${status}
+        </div>
+      </div>
+    </div>`;
+  }
+  messagesEl.innerHTML = html;
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function statusLabel(s) {
+  if (s === "sending") return "…";
+  if (s === "failed") return "✕ failed";
+  return "✓";
+}
+
+// ====== SEND ======
+composerInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    doSend();
+  }
+});
+composerInput.addEventListener("input", () => {
+  composerInput.style.height = "auto";
+  composerInput.style.height = Math.min(composerInput.scrollHeight, 160) + "px";
+});
+sendBtn.onclick = doSend;
+
+async function doSend() {
+  const text = composerInput.value.trim();
+  if (!text || !currentChatId || !currentUser) return;
+  if (!WORKER_URL) { alert("Worker URL not configured — set WORKER_URL at top of index.html."); return; }
+
+  const meta = chatsCache[currentChatId] || {};
+  const chatId = meta.chatId || currentChatId;
+  const phone = meta.phone || currentChatId.split("_")[0];
+
+  // Optimistic write
+  const msgRef = push(ref(db, `${ROOT}/chats/${currentChatId}/messages`));
+  const localMsgId = msgRef.key;
+  const ts = Date.now();
+  await set(msgRef, {
+    direction: "out",
+    text,
+    ts,
+    sentByUid: currentUser.uid,
+    sentByName: currentUser.displayName || currentUser.email,
+    status: "sending",
+  });
+  await update(ref(db, `${ROOT}/chats/${currentChatId}/meta`), {
+    chatId, phone,
+    lastMsgAt: ts, lastMsgPreview: text.slice(0,120),
+    lastMsgDirection: "out", lastMsgSentByName: currentUser.displayName || currentUser.email,
+  });
+
+  composerInput.value = "";
+  composerInput.style.height = "auto";
+
+  try {
+    const res = await fetch(`${WORKER_URL}/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chatId, phone, message: text,
+        sentByUid: currentUser.uid,
+        sentByName: currentUser.displayName || currentUser.email,
+        localMsgId,
+      }),
+    });
+    if (!res.ok) {
+      const t = await res.text();
+      await update(msgRef, { status: "failed", error: t.slice(0,300) });
+    }
+    // worker patches status->sent itself; nothing else needed on success
+  } catch (e) {
+    await update(msgRef, { status: "failed", error: String(e) });
+  }
+}
+
+// ====== NEW CHAT ======
+newChatBtn.onclick = () => {
+  newChatPhone.value = ""; newChatNameEl.value = "";
+  newChatModal.classList.add("visible");
+  setTimeout(() => newChatPhone.focus(), 50);
+};
+newChatCancel.onclick = () => newChatModal.classList.remove("visible");
+newChatGo.onclick = async () => {
+  const digits = newChatPhone.value.replace(/\D/g, "");
+  if (digits.length < 8) { alert("Enter a valid phone number with country code (digits only)."); return; }
+  const chatId = `${digits}@c.us`;
+  const chatKey = chatId.replace(/[.#$\[\]\/]/g, "_");
+  const name = newChatNameEl.value.trim() || null;
+  await update(ref(db, `${ROOT}/chats/${chatKey}/meta`), {
+    chatId, phone: digits,
+    displayName: name,
+    contactName: name,
+    lastMsgAt: chatsCache[chatKey]?.lastMsgAt || Date.now(),
+    lastMsgPreview: chatsCache[chatKey]?.lastMsgPreview || "(new chat)",
+    lastMsgDirection: chatsCache[chatKey]?.lastMsgDirection || "out",
+  });
+  newChatModal.classList.remove("visible");
+  setTimeout(() => openChat(chatKey), 200);
+};
+
+// ====== UTIL ======
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c]));
+}
+function linkify(s) {
+  return s.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+}
+function formatTime(ts) {
+  if (!ts) return "";
+  const d = new Date(ts), now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  if (sameDay) return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+  const diffDays = Math.floor((now - d) / 86400000);
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays < 7) return d.toLocaleDateString([], { weekday: "short" });
+  return d.toLocaleDateString([], { day: "2-digit", month: "2-digit", year: "2-digit" });
+}
+function formatClock(ts) {
+  if (!ts) return "";
+  return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+function dayLabel(ts) {
+  if (!ts) return "";
+  const d = new Date(ts), now = new Date();
+  if (d.toDateString() === now.toDateString()) return "Today";
+  const y = new Date(now); y.setDate(y.getDate() - 1);
+  if (d.toDateString() === y.toDateString()) return "Yesterday";
+  return d.toLocaleDateString([], { day: "2-digit", month: "short", year: "numeric" });
+}
+</script>
+</body>
+</html>

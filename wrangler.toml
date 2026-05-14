@@ -1,0 +1,12 @@
+name = "common-communication"
+main = "worker.js"
+compatibility_date = "2025-05-01"
+
+[vars]
+FIREBASE_DB_URL = "https://motherofdashboard-default-rtdb.asia-southeast1.firebasedatabase.app"
+ALLOWED_ORIGIN = "*"
+
+# Secrets to set via:
+#   wrangler secret put PERISKOPE_API_KEY
+#   wrangler secret put PERISKOPE_PHONE
+#   wrangler secret put FIREBASE_DB_SECRET
