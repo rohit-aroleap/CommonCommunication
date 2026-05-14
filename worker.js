@@ -309,27 +309,28 @@ async function backfillOneChat(env, chat, msgsPerChat) {
     }
   }
 
-  if (written > 0) {
-    updates[`${ROOT}/chats/${chatKey}/meta/chatId`] = chatId;
-    updates[`${ROOT}/chats/${chatKey}/meta/phone`] = chatIdToPhone(chatId);
-    updates[`${ROOT}/chats/${chatKey}/meta/chatType`] = isGroup ? "group" : "user";
-    if (chat.chat_name) {
-      // For groups we store as groupName (separate from contactName to avoid the
-      // (parens) "manual override" rendering). For 1-on-1 chats, populate
-      // contactName only if it's not set yet.
-      if (isGroup) {
-        if (!existingMeta?.groupName) {
-          updates[`${ROOT}/chats/${chatKey}/meta/groupName`] = chat.chat_name;
-        }
-      } else if (!existingMeta?.contactName) {
-        updates[`${ROOT}/chats/${chatKey}/meta/contactName`] = chat.chat_name;
+  // Identity meta (chatId/phone/chatType/groupName/contactName) is written every
+  // time we successfully hit Periskope for this chat — even if no new messages
+  // were imported. This is what fixes "Unnamed group" rows that exist in Firebase
+  // (from old webhook events) but never get new messages.
+  updates[`${ROOT}/chats/${chatKey}/meta/chatId`] = chatId;
+  updates[`${ROOT}/chats/${chatKey}/meta/phone`] = chatIdToPhone(chatId);
+  updates[`${ROOT}/chats/${chatKey}/meta/chatType`] = isGroup ? "group" : "user";
+  if (chat.chat_name) {
+    if (isGroup) {
+      if (!existingMeta?.groupName) {
+        updates[`${ROOT}/chats/${chatKey}/meta/groupName`] = chat.chat_name;
       }
+    } else if (!existingMeta?.contactName) {
+      updates[`${ROOT}/chats/${chatKey}/meta/contactName`] = chat.chat_name;
     }
-    if (latestTs > 0 && (!existingMeta?.lastMsgAt || latestTs > existingMeta.lastMsgAt)) {
-      updates[`${ROOT}/chats/${chatKey}/meta/lastMsgAt`] = latestTs;
-      updates[`${ROOT}/chats/${chatKey}/meta/lastMsgPreview`] = latestPreview;
-      updates[`${ROOT}/chats/${chatKey}/meta/lastMsgDirection`] = latestDir;
-    }
+  }
+  // lastMsg* only updates when we actually have a newer message — never clobber
+  // real activity with stale data.
+  if (written > 0 && latestTs > 0 && (!existingMeta?.lastMsgAt || latestTs > existingMeta.lastMsgAt)) {
+    updates[`${ROOT}/chats/${chatKey}/meta/lastMsgAt`] = latestTs;
+    updates[`${ROOT}/chats/${chatKey}/meta/lastMsgPreview`] = latestPreview;
+    updates[`${ROOT}/chats/${chatKey}/meta/lastMsgDirection`] = latestDir;
   }
 
   // (4) Atomic multi-path PATCH at root - one subrequest for all writes
