@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.011</title>
+<title>CommonCommunication v1.012</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -297,6 +297,24 @@
     margin-bottom: 4px;
   }
 
+  /* Ferra pills on each chat row */
+  .chat-row .pills {
+    display: flex; gap: 4px; margin-top: 5px;
+    flex-wrap: wrap;
+  }
+  .pill-sm {
+    font-size: 10px; padding: 1px 7px; border-radius: 10px;
+    font-weight: 600; line-height: 1.5; white-space: nowrap;
+    letter-spacing: .2px;
+  }
+  .pill-sm.status-active     { background: #d1fae5; color: #065f46; }
+  .pill-sm.status-cancelled  { background: #fee2e2; color: #991b1b; }
+  .pill-sm.stage-setup       { background: #fef3c7; color: #92400e; }
+  .pill-sm.stage-onboarding  { background: #ffedd5; color: #9a3412; }
+  .pill-sm.stage-sa          { background: #dbeafe; color: #1e40af; }
+  .pill-sm.stage-active      { background: #d1fae5; color: #065f46; }
+  .pill-sm.stage-offboarding { background: #fee2e2; color: #991b1b; }
+
   @media (max-width: 720px) {
     .main { grid-template-columns: 1fr; }
     .thread { display: none; }
@@ -318,7 +336,7 @@
       <svg viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3c-1.6 4.7-6.1 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 8 3.1l5.7-5.7C34.5 6.5 29.6 4.5 24 4.5 13.2 4.5 4.5 13.2 4.5 24S13.2 43.5 24 43.5 43.5 34.8 43.5 24c0-1.2-.1-2.4-.3-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 16 19 12.5 24 12.5c3.1 0 5.8 1.2 8 3.1l5.7-5.7C34.5 6.5 29.6 4.5 24 4.5 16.3 4.5 9.7 9 6.3 14.7z"/><path fill="#4CAF50" d="M24 43.5c5.4 0 10.3-2 14-5.3l-6.5-5.3c-2 1.4-4.6 2.3-7.5 2.3-5.2 0-9.6-3.3-11.2-8L6.2 32C9.6 38 16.3 43.5 24 43.5z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.3 4.3-4.3 5.8l6.5 5.3c4.4-4 7-9.9 7-15.6 0-1.2-.1-2.4-.4-3.5z"/></svg>
       Sign in with Google
     </button>
-    <div class="login-version">v1.011</div>
+    <div class="login-version">v1.012</div>
   </div>
 </div>
 
@@ -326,7 +344,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.011</span>
+    <span class="ver">v1.012</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -486,7 +504,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.011";
+const APP_VERSION = "v1.012";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -842,10 +860,49 @@ const FERRA_SYNC_WORKER = "https://ferra-sync.rohitpatel-mailid297.workers.dev/"
 let sharedSubs = null;            // ferraSubscriptions/v1 — small (~50 KB)
 let habitMeta = null;             // ferraHabitData/v1/_meta
 let habitUsers = null;            // ferraHabitData/v1/users
+let habitCancelledUsers = null;   // ferraHabitData/v1/cancelledUsers
 let habitMonthlySummaries = null; // ferraHabitData/v1/userMonthlySummaries
 let habitHistory = null;          // ferraHabitData/v1/userHabitHistory
-let phoneToUidIdx = {};           // built from habitUsers for O(1) phone lookup
+let phoneToUidIdx = {};           // active users phone → uid (O(1) lookup)
+let cancelledPhones = new Set();  // cancelled users' normalized phones
 let ferraListenersAttached = false;
+
+// Subscription tag → coarse stage bucket (for pill color coding)
+const FERRA_TAG_STAGE = {
+  "Order Pending": "setup",
+  "Auto Pay Pending": "setup",
+  "Approval Pending": "setup",
+  "Machine Assign Pending": "setup",
+  "Installation Pending": "setup",
+  "Persona Call Pending": "onboarding",
+  "Exercises Call Pending": "onboarding",
+  "Hand Off Pending": "onboarding",
+  "SA Reach Out Pending": "sa",
+  "SA Follow Up": "sa",
+  "All Steps Complete": "active",
+  "All Done": "active",
+  "Uninstallation Pending": "offboarding",
+  "Pickup Pending": "offboarding",
+  "Received in Warehouse": "offboarding",
+};
+// Optional short label for pill (full tag stays in title= tooltip)
+const FERRA_TAG_SHORT = {
+  "Order Pending": "Order",
+  "Auto Pay Pending": "Auto Pay",
+  "Approval Pending": "Approval",
+  "Machine Assign Pending": "Assign",
+  "Installation Pending": "Install",
+  "Persona Call Pending": "Persona Call",
+  "Exercises Call Pending": "Exercises",
+  "Hand Off Pending": "Hand Off",
+  "SA Reach Out Pending": "SA Pending",
+  "SA Follow Up": "SA Follow Up",
+  "All Steps Complete": "Active",
+  "All Done": "All Done",
+  "Uninstallation Pending": "Uninstall",
+  "Pickup Pending": "Pickup",
+  "Received in Warehouse": "In Warehouse",
+};
 
 function normalizeFerraPhone(p) {
   let n = String(p || "").replace(/\D/g, "");
@@ -861,6 +918,7 @@ function listenFerraData() {
   onValue(ref(db, "ferraSubscriptions/v1"), (snap) => {
     sharedSubs = snap.val();
     updateFerraSyncIndicator();
+    renderChatList(lastChatRows);
   });
   onValue(ref(db, "ferraHabitData/v1/_meta"), (snap) => {
     habitMeta = snap.val();
@@ -869,6 +927,12 @@ function listenFerraData() {
   onValue(ref(db, "ferraHabitData/v1/users"), (snap) => {
     habitUsers = snap.val();
     rebuildPhoneToUidIdx();
+    renderChatList(lastChatRows);
+  });
+  onValue(ref(db, "ferraHabitData/v1/cancelledUsers"), (snap) => {
+    habitCancelledUsers = snap.val();
+    rebuildCancelledIdx();
+    renderChatList(lastChatRows);
   });
   onValue(ref(db, "ferraHabitData/v1/userMonthlySummaries"), (snap) => {
     habitMonthlySummaries = snap.val();
@@ -876,6 +940,25 @@ function listenFerraData() {
   onValue(ref(db, "ferraHabitData/v1/userHabitHistory"), (snap) => {
     habitHistory = snap.val();
   });
+}
+
+function rebuildCancelledIdx() {
+  cancelledPhones = new Set();
+  if (!habitCancelledUsers) return;
+  const list = Array.isArray(habitCancelledUsers) ? habitCancelledUsers : Object.values(habitCancelledUsers);
+  for (const u of list) {
+    if (!u) continue;
+    const norm = normalizeFerraPhone(u.phone || u.phoneNumber || "");
+    if (norm) cancelledPhones.add(norm);
+  }
+}
+
+function getCustomerStatus(phone) {
+  const norm = normalizeFerraPhone(phone);
+  if (!norm) return null;
+  if (cancelledPhones.has(norm)) return "cancelled";
+  if (phoneToUidIdx[norm]) return "active";
+  return null;
 }
 
 function rebuildPhoneToUidIdx() {
@@ -973,14 +1056,17 @@ ferraRefreshBtn.onclick = refreshFerraNow;
 // Expose to window for DevTools inspection. When you build chat-context UI
 // later, call these helpers from your render functions.
 window._ferra = {
-  get subs()    { return sharedSubs; },
-  get meta()    { return habitMeta; },
-  get users()   { return habitUsers; },
-  get monthly() { return habitMonthlySummaries; },
-  get history() { return habitHistory; },
-  get phoneIdx(){ return phoneToUidIdx; },
+  get subs()         { return sharedSubs; },
+  get meta()         { return habitMeta; },
+  get users()        { return habitUsers; },
+  get cancelled()    { return habitCancelledUsers; },
+  get monthly()      { return habitMonthlySummaries; },
+  get history()      { return habitHistory; },
+  get phoneIdx()     { return phoneToUidIdx; },
+  get cancelledSet() { return cancelledPhones; },
   normalizePhone: normalizeFerraPhone,
   getSubscriptionTag,
+  getCustomerStatus,
   findUserByPhone: findFerraUserByPhone,
   getDailyActivity,
   getDailyScore,
@@ -1041,6 +1127,7 @@ function renderChatList(rows) {
     const previewWho = r.direction === "out" && r.sentByName
       ? `<span class="who">${escapeHtml(r.sentByName)}:</span> `
       : "";
+    const pillsHtml = renderFerraPills(r.phone);
     return `
     <div class="chat-row ${r.chatKey === currentChatId ? "active" : ""}" data-key="${escapeHtml(r.chatKey)}">
       <div class="avatar">${escapeHtml(initial)}</div>
@@ -1052,6 +1139,7 @@ function renderChatList(rows) {
         <div class="bottom">
           <span class="preview">${previewWho}${escapeHtml(r.preview)}</span>
         </div>
+        ${pillsHtml}
       </div>
     </div>`;
   }).join("");
@@ -1062,6 +1150,22 @@ function renderChatList(rows) {
 }
 
 searchInput.oninput = () => renderChatList(lastChatRows);
+
+function renderFerraPills(phone) {
+  const status = getCustomerStatus(phone);   // "active" | "cancelled" | null
+  const tag = getSubscriptionTag(phone);     // full tag string or null
+  if (!status && !tag) return "";
+  const pills = [];
+  if (status) {
+    pills.push(`<span class="pill-sm status-${status}">${status === "active" ? "Active" : "Cancelled"}</span>`);
+  }
+  if (tag) {
+    const stage = FERRA_TAG_STAGE[tag] || "setup";
+    const short = FERRA_TAG_SHORT[tag] || tag;
+    pills.push(`<span class="pill-sm stage-${stage}" title="${escapeHtml(tag)}">${escapeHtml(short)}</span>`);
+  }
+  return `<div class="pills">${pills.join("")}</div>`;
+}
 
 // ====== THREAD ======
 function openChat(chatKey) {
