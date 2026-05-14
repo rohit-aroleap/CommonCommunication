@@ -161,15 +161,17 @@ async function handleWebhook(request, env) {
     if (existing) return json({ ok: true, dedup: true });
   }
 
+  const media = extractMedia(msg);
   const record = {
     direction: isFromMe ? "out" : "in",
-    text,
+    text: media?.caption || text,
     ts,
     periskopeMsgId,
     messageType,
     senderPhone,
     raw: msg,
   };
+  if (media) record.media = media;
 
   const pushed = await fbPush(env, `${ROOT}/chats/${encodeKey(chatId)}/messages`, record);
   if (periskopeMsgId && pushed?.name) {
