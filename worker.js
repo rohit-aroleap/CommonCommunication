@@ -176,6 +176,19 @@ async function handleWebhook(request, env) {
   }
   await fbPatch(env, `${ROOT}/chats/${encodeKey(chatId)}/meta`, metaUpdate);
 
+  // If this group message has the sender's display name, cache it globally
+  // (group members aren't always in Ferra). Keyed by phone digits only.
+  if (isGroup && senderName && senderPhone) {
+    const phoneDigits = String(senderPhone).replace(/\D/g, "");
+    if (phoneDigits) {
+      await fbPatch(env, `${ROOT}/contacts/${phoneDigits}`, {
+        name: senderName,
+        source: "webhook_sender",
+        seenAt: Date.now(),
+      });
+    }
+  }
+
   // Best-effort: if this is a group we haven't named yet, fetch the group name
   // from Periskope and write it. Webhook payloads don't include chat_name.
   if (isGroup) {
@@ -368,17 +381,30 @@ async function handleFetchChatInfo(request, env) {
   const chatName = chat?.chat_name || null;
   const isGroup = String(chatId).endsWith("@g.us");
 
-  const updates = {
-    chatId,
-    chatType: isGroup ? "group" : "user",
-    phone: chatIdToPhone(chatId),
-  };
+  // Multi-path update so it's a single Firebase request.
+  const updates = {};
+  updates[`${ROOT}/chats/${encodeKey(chatId)}/meta/chatId`] = chatId;
+  updates[`${ROOT}/chats/${encodeKey(chatId)}/meta/chatType`] = isGroup ? "group" : "user";
+  updates[`${ROOT}/chats/${encodeKey(chatId)}/meta/phone`] = chatIdToPhone(chatId);
   if (chatName) {
-    if (isGroup) updates.groupName = chatName;
-    else updates.contactName = chatName;
+    if (isGroup) updates[`${ROOT}/chats/${encodeKey(chatId)}/meta/groupName`] = chatName;
+    else        updates[`${ROOT}/chats/${encodeKey(chatId)}/meta/contactName`] = chatName;
   }
-  await fbPatch(env, `${ROOT}/chats/${encodeKey(chatId)}/meta`, updates);
-  return json({ ok: true, chatId, chatName, isGroup });
+  let membersWritten = 0;
+  if (chat?.members && typeof chat.members === "object") {
+    for (const m of Object.values(chat.members)) {
+      if (!m) continue;
+      const phone = String(m.contact_id || "").split("@")[0].replace(/\D/g, "");
+      const name = m.contact_name;
+      if (!phone || !name) continue;
+      updates[`${ROOT}/contacts/${phone}/name`] = name;
+      updates[`${ROOT}/contacts/${phone}/source`] = "group_members";
+      updates[`${ROOT}/contacts/${phone}/seenAt`] = Date.now();
+      membersWritten++;
+    }
+  }
+  await fbPatchRoot(env, updates);
+  return json({ ok: true, chatId, chatName, isGroup, membersWritten });
 }
 
 async function handleFetchMessages(request, env) {
