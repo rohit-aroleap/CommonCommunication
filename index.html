@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.058</title>
+<title>CommonCommunication v1.059</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -730,7 +730,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.058</div>
+    <div class="login-version">v1.059</div>
   </div>
 </div>
 
@@ -738,7 +738,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.058</span>
+    <span class="ver">v1.059</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -981,7 +981,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.058";
+const APP_VERSION = "v1.059";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -2746,7 +2746,7 @@ function formatNoteTime(ts) {
 //   3. phone digits                                             → "919..."
 // Brackets on the manual case signal "this is our internal label, not an authoritative
 // name from Ferra." Edge case: if the manual name exactly equals the Ferra name (e.g.
-// legacy rows from the Ferra browser before v1.058 used to write contactName), treat
+// legacy rows from the Ferra browser before v1.059 used to write contactName), treat
 // it as Ferra-sourced and skip the brackets.
 function resolveDisplayName(phone, explicitName, opts) {
   // Groups get their stored groupName (no brackets, no Ferra lookup)
@@ -2867,7 +2867,7 @@ searchInput.oninput = () => renderChatList(lastChatRows);
 
 // ====== STATUS FILTER PILLS ======
 const STATUS_FILTERS = [
-  "All", "Live", "ACTIVE", "CANCELLED", "INITIALIZED", "PAUSED", "CUSTOMER_PAUSED", "CUSTOMER_CANCELLED", "Daily Groups"
+  "All", "Live", "My tickets", "ACTIVE", "CANCELLED", "INITIALIZED", "PAUSED", "CUSTOMER_PAUSED", "CUSTOMER_CANCELLED", "Daily Groups"
 ];
 const LIVE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const DAILY_GROUP_PREFIX = "Daily Workout Ferra C";
@@ -2937,16 +2937,24 @@ function computeStatusCounts(visibleRows) {
   const counts = { All: 0 };
   for (const s of STATUS_FILTERS) if (s !== "All") counts[s] = 0;
   const liveCutoff = Date.now() - LIVE_WINDOW_MS;
+  const myUid = currentUser?.uid;
   for (const r of visibleRows) {
     // Daily Groups are their own bucket — kept out of All / Live / status counts
     // so the everyday inbox view isn't cluttered by workout cohort chatter.
     if (isDailyGroup(r)) { counts["Daily Groups"]++; continue; }
     counts.All++;
     if ((r.lastMsgAt || 0) >= liveCutoff) counts.Live++;
+    if (myUid && hasMyOpenTicket(r.chatKey, myUid)) counts["My tickets"]++;
     const st = getSubscriptionStatusFor(r.phone);
     if (st && counts[st] !== undefined) counts[st]++;
   }
   return counts;
+}
+
+function hasMyOpenTicket(chatKey, uid) {
+  const open = chatOpenTickets[chatKey] || [];
+  for (const t of open) if (t.assignee === uid) return true;
+  return false;
 }
 
 function renderFerraPills(phone) {
