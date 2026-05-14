@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.062</title>
+<title>CommonCommunication v1.063</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -803,7 +803,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.062</div>
+    <div class="login-version">v1.063</div>
   </div>
 </div>
 
@@ -811,7 +811,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.062</span>
+    <span class="ver">v1.063</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -838,7 +838,6 @@
       <div class="side-header">
         <h2>Chats</h2>
         <div class="actions">
-          <button class="icon-btn" id="browseCustomersBtn" title="Browse Ferra customers" style="font-size:16px;">👤</button>
           <button class="icon-btn" id="newChatBtn" title="New chat by phone">+</button>
         </div>
       </div>
@@ -1017,22 +1016,6 @@
   </div>
 </div>
 
-<!-- ============== CUSTOMER BROWSER MODAL ============== -->
-<div class="modal-back" id="customerBrowserModal">
-  <div class="modal" style="width:560px; max-width:94vw; height:640px; max-height:88vh; display:flex; flex-direction:column;">
-    <h3>Add customers to dashboard</h3>
-    <div style="font-size:12px; color:var(--muted); margin-bottom:10px;">
-      All Ferra customers (active + cancelled). Click <b>Add</b> to bring a chat into the sidebar; it doesn't message anyone.
-    </div>
-    <input id="cbSearch" placeholder="Search by name or phone…" style="border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-size:14px; margin-bottom:8px; font-family:inherit;" />
-    <div style="font-size:11px; color:var(--muted); margin-bottom:6px;" id="cbStats">Loading…</div>
-    <div id="cbList" style="flex:1; overflow-y:auto; border:1px solid var(--border); border-radius:6px; padding:4px;"></div>
-    <div class="actions" style="margin-top:14px;">
-      <button class="btn btn-secondary" id="cbClose">Close</button>
-    </div>
-  </div>
-</div>
-
 <!-- ============== NEW CHAT MODAL ============== -->
 <div class="modal-back" id="newChatModal">
   <div class="modal">
@@ -1072,7 +1055,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.062";
+const APP_VERSION = "v1.063";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -1833,115 +1816,6 @@ async function refreshFerraNow() {
   }
 }
 ferraRefreshBtn.onclick = refreshFerraNow;
-
-// ====== CUSTOMER BROWSER ======
-browseCustomersBtn.onclick = openCustomerBrowser;
-cbClose.onclick = () => customerBrowserModal.classList.remove("visible");
-cbSearch.addEventListener("input", () => renderCustomerBrowser());
-
-function openCustomerBrowser() {
-  cbSearch.value = "";
-  customerBrowserModal.classList.add("visible");
-  renderCustomerBrowser();
-  setTimeout(() => cbSearch.focus(), 50);
-}
-
-function collectAllFerraCustomers() {
-  const result = [];
-  const seen = new Set();
-  const pushFromList = (rawList, status) => {
-    if (!rawList) return;
-    const list = Array.isArray(rawList) ? rawList : Object.values(rawList);
-    for (const u of list) {
-      if (!u) continue;
-      const phone = normalizeFerraPhone(u.phone || u.phoneNumber || "");
-      if (!phone || seen.has(phone)) continue;
-      seen.add(phone);
-      const tag = getSubscriptionTag(phone);
-      result.push({
-        phone,
-        name: u.name || null,
-        status,
-        tag,
-        stage: tag ? (FERRA_TAG_STAGE[tag] || "setup") : null,
-      });
-    }
-  };
-  pushFromList(habitUsers, "active");
-  pushFromList(habitCancelledUsers, "cancelled");
-  // Sort: active first, then by name (case-insensitive)
-  result.sort((a, b) => {
-    if (a.status !== b.status) return a.status === "active" ? -1 : 1;
-    const an = (a.name || a.phone).toLowerCase();
-    const bn = (b.name || b.phone).toLowerCase();
-    return an.localeCompare(bn);
-  });
-  return result;
-}
-
-function renderCustomerBrowser() {
-  const q = cbSearch.value.trim().toLowerCase();
-  const all = collectAllFerraCustomers();
-  const filtered = !q ? all : all.filter(c =>
-    (c.name && c.name.toLowerCase().includes(q)) ||
-    (c.phone && c.phone.toLowerCase().includes(q))
-  );
-
-  cbStats.textContent = q
-    ? `${filtered.length} of ${all.length} match "${q}"`
-    : `${all.length} customers in Ferra`;
-
-  if (!filtered.length) {
-    cbList.innerHTML = `<div style="padding:30px; text-align:center; color:var(--muted); font-size:13px;">${all.length === 0 ? "Ferra data not loaded yet — hit ↻ in the topbar." : "No customers match."}</div>`;
-    return;
-  }
-
-  // Set of phones already in dashboard (normalized for comparison)
-  const existingPhones = new Set(
-    Object.values(chatsCache).map(m => normalizeFerraPhone(m?.phone || "")).filter(Boolean)
-  );
-
-  // Cap rendered rows to keep DOM light
-  const CAP = 250;
-  const slice = filtered.slice(0, CAP);
-
-  cbList.innerHTML = slice.map(c => {
-    const exists = existingPhones.has(c.phone);
-    const initial = (c.name || c.phone || "?").trim().charAt(0).toUpperCase();
-    const statusPill = c.status ? `<span class="pill-sm status-${c.status}">${c.status === "active" ? "Active" : "Cancelled"}</span>` : "";
-    const stagePill = c.tag ? `<span class="pill-sm stage-${c.stage || "setup"}" title="${escapeHtml(c.tag)}">${escapeHtml(FERRA_TAG_SHORT[c.tag] || c.tag)}</span>` : "";
-    const actionHtml = exists
-      ? `<span class="added">✓ In dashboard</span>`
-      : `<button class="add-btn" data-phone="${escapeHtml(c.phone)}" data-name="${escapeHtml(c.name || "")}">Add</button>`;
-    return `
-    <div class="cb-row">
-      <div class="avatar">${escapeHtml(initial)}</div>
-      <div class="info">
-        <div class="nm">${escapeHtml(c.name || c.phone)}</div>
-        <div class="ph">${escapeHtml(c.phone)}</div>
-        <div class="pills">${statusPill}${stagePill}</div>
-      </div>
-      ${actionHtml}
-    </div>`;
-  }).join("");
-
-  if (filtered.length > CAP) {
-    const more = document.createElement("div");
-    more.style.cssText = "padding:10px; text-align:center; color:var(--muted); font-size:12px;";
-    more.textContent = `and ${filtered.length - CAP} more — refine your search`;
-    cbList.appendChild(more);
-  }
-
-  cbList.querySelectorAll(".add-btn").forEach(btn => {
-    btn.onclick = async () => {
-      btn.disabled = true;
-      btn.textContent = "Adding…";
-      await addCustomerToChats(btn.dataset.phone, btn.dataset.name);
-      // Re-render to flip the row to ✓
-      renderCustomerBrowser();
-    };
-  });
-}
 
 // ====== NAMES MODAL ======
 namesBtn.onclick = openNamesModal;
@@ -3021,7 +2895,7 @@ function formatNoteTime(ts) {
 //   3. phone digits                                             → "919..."
 // Brackets on the manual case signal "this is our internal label, not an authoritative
 // name from Ferra." Edge case: if the manual name exactly equals the Ferra name (e.g.
-// legacy rows from the Ferra browser before v1.062 used to write contactName), treat
+// legacy rows from the Ferra browser before v1.063 used to write contactName), treat
 // it as Ferra-sourced and skip the brackets.
 function resolveDisplayName(phone, explicitName, opts) {
   // Groups get their stored groupName (no brackets, no Ferra lookup)
@@ -3072,7 +2946,7 @@ function renderChatList(rows) {
   if (currentStatusFilter === "My tickets" && myChatKeys.size > 0) {
     const sample = enriched.slice(0, 3).map(r => r.chatKey);
     if (!enriched.some(r => myChatKeys.has(r.chatKey))) {
-      console.warn("[v1.062] My-tickets has keys but no chat-rows match. myChatKeys:", Array.from(myChatKeys), "sample r.chatKey:", sample);
+      console.warn("[v1.063] My-tickets has keys but no chat-rows match. myChatKeys:", Array.from(myChatKeys), "sample r.chatKey:", sample);
     }
   }
   const isCurrentUserAdmin = isAdmin(currentUser?.email);
