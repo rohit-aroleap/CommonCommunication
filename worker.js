@@ -37,6 +37,9 @@ export default {
       if (url.pathname === "/messages" && request.method === "GET") {
         return cors(env, await handleFetchMessages(request, env));
       }
+      if (url.pathname === "/backfill-batch" && request.method === "POST") {
+        return cors(env, await handleBackfillBatch(request, env));
+      }
       return cors(env, json({ error: "not_found" }, 404));
     } catch (err) {
       return cors(env, json({ error: String(err && err.message || err) }, 500));
@@ -164,6 +167,113 @@ async function handleWebhook(request, env) {
 }
 
 // ---------- /messages?chatId=...  (reconciliation poller fallback) ----------
+// ---------- /backfill-batch (admin-triggered import from Periskope) ----------
+async function handleBackfillBatch(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const chatOffset = Math.max(0, Number(body.chatOffset) || 0);
+  const chatLimit = Math.min(10, Math.max(1, Number(body.chatLimit) || 3));
+  const msgsPerChat = Math.min(500, Math.max(1, Number(body.msgsPerChat) || 100));
+
+  const chatsRes = await fetch(
+    `${PERISKOPE_BASE}/chats?offset=${chatOffset}&limit=${chatLimit}&chat_type=user`,
+    { headers: periskopeHeaders(env) }
+  );
+  const chatsJson = await safeJson(chatsRes);
+  if (!chatsRes.ok) return json({ error: "list_chats_failed", details: chatsJson }, 502);
+
+  const chats = chatsJson?.chats || [];
+  const total = chatsJson?.count || 0;
+  const processed = [];
+
+  for (const c of chats) {
+    try {
+      processed.push(await backfillOneChat(env, c, msgsPerChat));
+    } catch (e) {
+      processed.push({ chatId: c.chat_id, error: String(e && e.message || e) });
+    }
+  }
+
+  const nextOffset = chatOffset + chats.length;
+  const done = chats.length === 0 || nextOffset >= total;
+  return json({ processed, total, nextOffset, done });
+}
+
+async function backfillOneChat(env, chat, msgsPerChat) {
+  const chatId = chat.chat_id;
+  if (!chatId) return { error: "no chatId" };
+
+  const msgsRes = await fetch(
+    `${PERISKOPE_BASE}/chats/${encodeURIComponent(chatId)}/messages?offset=0&limit=${msgsPerChat}`,
+    { headers: periskopeHeaders(env) }
+  );
+  const msgsJson = await safeJson(msgsRes);
+  if (!msgsRes.ok) return { chatId, error: "msgs_fetch_failed" };
+
+  const messages = msgsJson?.messages || [];
+
+  // Parallel dedup check
+  const checks = await Promise.all(messages.map(async (m) => {
+    const id = m.message_id || m.unique_id || m.id?.serialized || null;
+    if (!id) return null;
+    const existing = await fbGet(env, `${ROOT}/byPeriskopeId/${encodeKey(id)}`);
+    return existing ? null : { m, id };
+  }));
+  const toWrite = checks.filter(Boolean);
+
+  // Compute latest message for meta (do this before parallel writes to avoid races)
+  let latestTs = 0, latestPreview = "", latestDir = "in";
+  for (const { m } of toWrite) {
+    const ts = parseTs(m.timestamp);
+    if (ts > latestTs) {
+      latestTs = ts;
+      latestPreview = (m.body || `[${m.message_type || "media"}]`).slice(0, 120);
+      latestDir = m.from_me ? "out" : "in";
+    }
+  }
+
+  // Parallel writes
+  await Promise.all(toWrite.map(async ({ m, id }) => {
+    const isFromMe = m.from_me === true;
+    const record = {
+      direction: isFromMe ? "out" : "in",
+      text: m.body || "",
+      ts: parseTs(m.timestamp),
+      periskopeMsgId: id,
+      messageType: m.message_type || "text",
+      senderPhone: m.sender_phone ? String(m.sender_phone).split("@")[0] : chatIdToPhone(chatId),
+      backfilled: true,
+    };
+    const pushed = await fbPush(env, `${ROOT}/chats/${encodeKey(chatId)}/messages`, record);
+    if (pushed?.name) {
+      await fbPut(env, `${ROOT}/byPeriskopeId/${encodeKey(id)}`, { chatId, msgKey: pushed.name });
+    }
+  }));
+
+  // Update chat meta only if we have something new and it's actually newer than what's there
+  if (toWrite.length > 0) {
+    const existingMeta = await fbGet(env, `${ROOT}/chats/${encodeKey(chatId)}/meta`);
+    const meta = {
+      chatId,
+      phone: chatIdToPhone(chatId),
+      contactName: chat.chat_name || existingMeta?.contactName || null,
+    };
+    if (latestTs > 0 && (!existingMeta?.lastMsgAt || latestTs > existingMeta.lastMsgAt)) {
+      meta.lastMsgAt = latestTs;
+      meta.lastMsgPreview = latestPreview;
+      meta.lastMsgDirection = latestDir;
+    }
+    await fbPatch(env, `${ROOT}/chats/${encodeKey(chatId)}/meta`, meta);
+  }
+
+  return {
+    chatId,
+    name: chat.chat_name || chatIdToPhone(chatId),
+    written: toWrite.length,
+    skipped: messages.length - toWrite.length,
+    fetched: messages.length,
+  };
+}
+
 async function handleFetchMessages(request, env) {
   const url = new URL(request.url);
   const chatId = url.searchParams.get("chatId");

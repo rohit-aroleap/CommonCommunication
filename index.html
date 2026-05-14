@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.006</title>
+<title>CommonCommunication v1.007</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -318,7 +318,7 @@
       <svg viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3c-1.6 4.7-6.1 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 8 3.1l5.7-5.7C34.5 6.5 29.6 4.5 24 4.5 13.2 4.5 4.5 13.2 4.5 24S13.2 43.5 24 43.5 43.5 34.8 43.5 24c0-1.2-.1-2.4-.3-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 16 19 12.5 24 12.5c3.1 0 5.8 1.2 8 3.1l5.7-5.7C34.5 6.5 29.6 4.5 24 4.5 16.3 4.5 9.7 9 6.3 14.7z"/><path fill="#4CAF50" d="M24 43.5c5.4 0 10.3-2 14-5.3l-6.5-5.3c-2 1.4-4.6 2.3-7.5 2.3-5.2 0-9.6-3.3-11.2-8L6.2 32C9.6 38 16.3 43.5 24 43.5z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.3 4.3-4.3 5.8l6.5 5.3c4.4-4 7-9.9 7-15.6 0-1.2-.1-2.4-.4-3.5z"/></svg>
       Sign in with Google
     </button>
-    <div class="login-version">v1.006</div>
+    <div class="login-version">v1.007</div>
   </div>
 </div>
 
@@ -326,10 +326,11 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.006</span>
+    <span class="ver">v1.007</span>
     <span class="spacer"></span>
     <span id="workerStatus" style="font-size:11px; opacity:.85;"></span>
     <span class="user">
+      <button class="logout" id="backfillBtn" style="display:none; margin-right:6px;" title="Import chat history from Periskope">📥 Backfill</button>
       <button class="logout" id="teamBtn" style="display:none; margin-right:6px;" title="Manage team">👥 Team</button>
       <img id="userPhoto" alt="" />
       <span id="userName"></span>
@@ -405,6 +406,37 @@
   </div>
 </div>
 
+<!-- ============== BACKFILL MODAL ============== -->
+<div class="modal-back" id="backfillModal">
+  <div class="modal" style="width:500px;">
+    <h3>Backfill chat history from Periskope</h3>
+    <div style="font-size:12px; color:var(--muted); margin-bottom:14px;">
+      Imports historical messages from your Periskope account into Firebase. Idempotent — running it again skips already-imported messages.
+    </div>
+    <div style="display:flex; gap:12px; margin-bottom:14px;">
+      <div style="flex:1;">
+        <label>Messages per chat</label>
+        <input id="bfMsgsPerChat" type="number" value="100" min="1" max="500" />
+      </div>
+      <div style="flex:1;">
+        <label>Chats per batch</label>
+        <input id="bfChatsPerBatch" type="number" value="3" min="1" max="10" />
+      </div>
+    </div>
+    <div id="bfProgress" style="display:none; margin-bottom:12px;">
+      <div style="background:var(--header); border-radius:6px; height:8px; overflow:hidden; margin-bottom:6px;">
+        <div id="bfProgressBar" style="background:var(--green); height:100%; width:0%; transition:width .3s;"></div>
+      </div>
+      <div id="bfProgressText" style="font-size:12px; color:var(--muted);">Starting...</div>
+    </div>
+    <div id="bfLog" style="display:none; max-height:200px; overflow-y:auto; background:var(--header); border-radius:6px; padding:8px 12px; font-size:12px; font-family:monospace; margin-bottom:12px;"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="bfClose">Close</button>
+      <button class="btn btn-primary" id="bfStart">Start Backfill</button>
+    </div>
+  </div>
+</div>
+
 <!-- ============== NEW CHAT MODAL ============== -->
 <div class="modal-back" id="newChatModal">
   <div class="modal">
@@ -443,7 +475,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.006";
+const APP_VERSION = "v1.007";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -498,6 +530,16 @@ const bootstrapList = $("bootstrapList");
 const allowedListEl = $("allowedList");
 const newAllowEmail = $("newAllowEmail");
 const addAllowBtn = $("addAllowBtn");
+const backfillBtn = $("backfillBtn");
+const backfillModal = $("backfillModal");
+const bfClose = $("bfClose");
+const bfStart = $("bfStart");
+const bfMsgsPerChat = $("bfMsgsPerChat");
+const bfChatsPerBatch = $("bfChatsPerBatch");
+const bfProgress = $("bfProgress");
+const bfProgressBar = $("bfProgressBar");
+const bfProgressText = $("bfProgressText");
+const bfLog = $("bfLog");
 
 if (!WORKER_URL) configWarn.style.display = "block";
 
@@ -522,6 +564,7 @@ onAuthStateChanged(auth, async (user) => {
     userPhoto.src = user.photoURL || "";
     userName.textContent = user.displayName || user.email;
     teamBtn.style.display = isAdmin(user.email) ? "" : "none";
+    backfillBtn.style.display = isAdmin(user.email) ? "" : "none";
     await update(ref(db, `${ROOT}/users/${user.uid}`), {
       name: user.displayName || user.email,
       email: user.email,
@@ -638,6 +681,98 @@ async function addAllowedEmail() {
   // Store the original email AS the value — both serves as gate (truthy) and display
   await set(ref(db, `${ROOT}/config/allowedEmails/${k}`), raw);
   newAllowEmail.value = "";
+}
+
+// ====== BACKFILL ======
+let bfRunning = false;
+let bfStopRequested = false;
+backfillBtn.onclick = () => {
+  bfProgress.style.display = "none";
+  bfLog.style.display = "none";
+  bfLog.innerHTML = "";
+  bfStart.textContent = "Start Backfill";
+  bfStart.disabled = false;
+  backfillModal.classList.add("visible");
+};
+bfClose.onclick = () => {
+  if (bfRunning) bfStopRequested = true;
+  backfillModal.classList.remove("visible");
+};
+bfStart.onclick = async () => {
+  if (bfRunning) {
+    bfStopRequested = true;
+    bfStart.textContent = "Stopping...";
+    return;
+  }
+  bfRunning = true;
+  bfStopRequested = false;
+  bfStart.textContent = "Stop";
+  bfProgress.style.display = "block";
+  bfLog.style.display = "block";
+  bfLog.innerHTML = "";
+
+  const msgsPerChat = Math.max(1, Math.min(500, parseInt(bfMsgsPerChat.value) || 100));
+  const chatsPerBatch = Math.max(1, Math.min(10, parseInt(bfChatsPerBatch.value) || 3));
+
+  let offset = 0;
+  let totalChats = 0;
+  let chatsProcessed = 0;
+  let totalWritten = 0;
+  let totalSkipped = 0;
+
+  bfProgressText.textContent = "Fetching first batch...";
+
+  while (!bfStopRequested) {
+    try {
+      const res = await fetch(`${WORKER_URL}/backfill-batch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chatOffset: offset, chatLimit: chatsPerBatch, msgsPerChat }),
+      });
+      const j = await res.json();
+      if (!res.ok) { logLine(`<span style="color:#d9534f;">Error: ${escapeHtml(JSON.stringify(j))}</span>`); break; }
+
+      totalChats = j.total || totalChats;
+      for (const p of (j.processed || [])) {
+        chatsProcessed++;
+        if (p.error) {
+          logLine(`<span style="color:#d9534f;">✗ ${escapeHtml(p.chatId || "?")}: ${escapeHtml(p.error)}</span>`);
+        } else {
+          totalWritten += p.written || 0;
+          totalSkipped += p.skipped || 0;
+          logLine(`✓ ${escapeHtml(p.name || p.chatId)} — wrote ${p.written}, skipped ${p.skipped}`);
+        }
+      }
+
+      const pct = totalChats ? Math.round(chatsProcessed / totalChats * 100) : 0;
+      bfProgressBar.style.width = pct + "%";
+      bfProgressText.textContent = `${chatsProcessed} / ${totalChats} chats — ${totalWritten} new, ${totalSkipped} already had`;
+
+      if (j.done) {
+        logLine(`<b>Done. ${totalWritten} messages imported across ${chatsProcessed} chats.</b>`);
+        break;
+      }
+      offset = j.nextOffset || (offset + chatsPerBatch);
+
+      // Gentle pacing
+      await new Promise(r => setTimeout(r, 200));
+    } catch (e) {
+      logLine(`<span style="color:#d9534f;">Network error: ${escapeHtml(String(e))}</span>`);
+      break;
+    }
+  }
+
+  if (bfStopRequested) logLine(`<i>Stopped by user.</i>`);
+  bfRunning = false;
+  bfStopRequested = false;
+  bfStart.textContent = "Done — close to dismiss";
+  bfStart.disabled = true;
+};
+function logLine(html) {
+  const div = document.createElement("div");
+  div.innerHTML = html;
+  bfLog.appendChild(div);
+  bfLog.scrollTop = bfLog.scrollHeight;
 }
 
 // ====== WORKER HEALTH ======
