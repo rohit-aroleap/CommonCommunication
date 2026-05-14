@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.064</title>
+<title>CommonCommunication v1.065</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -95,7 +95,23 @@
     flex-shrink: 0;
   }
   .side-header h2 { margin: 0; font-size: 16px; font-weight: 500; }
-  .side-header .actions { display: flex; gap: 8px; }
+  .side-header .actions { display: flex; gap: 6px; align-items: center; }
+  .my-tickets-btn {
+    background: var(--header); color: var(--text);
+    border: 1px solid var(--border); border-radius: 14px;
+    padding: 4px 10px; font-size: 12px;
+    cursor: pointer; font-family: inherit;
+    display: inline-flex; align-items: center; gap: 4px;
+    white-space: nowrap; font-weight: 500;
+  }
+  .my-tickets-btn:hover { background: var(--hover); }
+  .my-tickets-btn.active {
+    background: #fee2e2; color: #991b1b; border-color: #fca5a5;
+  }
+  .my-tickets-btn.has-tickets:not(.active) {
+    background: #fee2e2; color: #991b1b; border-color: #fecaca;
+  }
+  .my-tickets-btn .ct { font-weight: 700; }
   .icon-btn {
     background: none; border: none; cursor: pointer;
     width: 36px; height: 36px; border-radius: 50%;
@@ -809,7 +825,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.064</div>
+    <div class="login-version">v1.065</div>
   </div>
 </div>
 
@@ -817,7 +833,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.064</span>
+    <span class="ver">v1.065</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -844,6 +860,7 @@
       <div class="side-header">
         <h2>Chats</h2>
         <div class="actions">
+          <button class="my-tickets-btn" id="myTicketsBtn" title="My open tickets — click to filter">🎫 My tickets <span class="ct" id="myTicketsCount">0</span></button>
           <button class="icon-btn" id="newChatBtn" title="New chat by phone">+</button>
         </div>
       </div>
@@ -1061,7 +1078,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.064";
+const APP_VERSION = "v1.065";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -1103,6 +1120,8 @@ const userName = $("userName");
 const chatList = $("chatList");
 const searchInput = $("searchInput");
 const filterRow = $("filterRow");
+const myTicketsBtn = $("myTicketsBtn");
+const myTicketsCount = $("myTicketsCount");
 const tagFilterRow = $("tagFilterRow");
 const threadEmpty = $("threadEmpty");
 const threadActive = $("threadActive");
@@ -2877,7 +2896,7 @@ function formatNoteTime(ts) {
 //   3. phone digits                                             → "919..."
 // Brackets on the manual case signal "this is our internal label, not an authoritative
 // name from Ferra." Edge case: if the manual name exactly equals the Ferra name (e.g.
-// legacy rows from the Ferra browser before v1.064 used to write contactName), treat
+// legacy rows from the Ferra browser before v1.065 used to write contactName), treat
 // it as Ferra-sourced and skip the brackets.
 function resolveDisplayName(phone, explicitName, opts) {
   // Groups get their stored groupName (no brackets, no Ferra lookup)
@@ -2928,7 +2947,7 @@ function renderChatList(rows) {
   if (currentStatusFilter === "My tickets" && myChatKeys.size > 0) {
     const sample = enriched.slice(0, 3).map(r => r.chatKey);
     if (!enriched.some(r => myChatKeys.has(r.chatKey))) {
-      console.warn("[v1.064] My-tickets has keys but no chat-rows match. myChatKeys:", Array.from(myChatKeys), "sample r.chatKey:", sample);
+      console.warn("[v1.065] My-tickets has keys but no chat-rows match. myChatKeys:", Array.from(myChatKeys), "sample r.chatKey:", sample);
     }
   }
   const isCurrentUserAdmin = isAdmin(currentUser?.email);
@@ -3040,7 +3059,11 @@ const PILL_HINTS = {
 };
 
 function renderFilterPills(counts) {
-  filterRow.innerHTML = STATUS_FILTERS.map(s => {
+  // "My tickets" is rendered as a dedicated button in the side header, not as
+  // a pill in this row — it's high-importance enough to deserve permanent
+  // visibility. We still keep it in STATUS_FILTERS so the filter state
+  // machine and counts.My tickets stay valid.
+  filterRow.innerHTML = STATUS_FILTERS.filter(s => s !== "My tickets").map(s => {
     const baseLabel = s === "All" ? "All" : s.replace(/_/g, " ");
     const n = counts ? (counts[s] || 0) : null;
     const suffix = n !== null ? ` (${n})` : "";
@@ -3053,7 +3076,18 @@ function renderFilterPills(counts) {
       renderChatList(lastChatRows); // re-renders pills with new active state too
     };
   });
+  // Update the side-header My tickets button — count + active state
+  if (counts) {
+    const n = counts["My tickets"] || 0;
+    myTicketsCount.textContent = n;
+    myTicketsBtn.classList.toggle("has-tickets", n > 0);
+    myTicketsBtn.classList.toggle("active", currentStatusFilter === "My tickets");
+  }
 }
+myTicketsBtn.onclick = () => {
+  currentStatusFilter = currentStatusFilter === "My tickets" ? "All" : "My tickets";
+  renderChatList(lastChatRows);
+};
 renderFilterPills();
 
 // ====== TAG FILTER PILLS (row 2) ======
