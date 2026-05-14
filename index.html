@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.069</title>
+<title>CommonCommunication v1.070</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -307,6 +307,34 @@
   }
   .composer .ai-btn:disabled { opacity: .5; cursor: wait; }
   .composer .ai-btn:hover:not(:disabled) { filter: brightness(1.1); }
+  .composer .emoji-btn {
+    background: var(--header); border: 1px solid var(--border);
+    width: 42px; height: 42px; border-radius: 50%;
+    cursor: pointer; font-size: 20px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .composer .emoji-btn:hover { background: var(--hover); }
+
+  .emoji-popover {
+    position: fixed;
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 6px 20px rgba(0,0,0,.15);
+    padding: 8px;
+    z-index: 1000;
+    display: grid;
+    grid-template-columns: repeat(8, 32px);
+    gap: 2px;
+  }
+  .emoji-popover button {
+    background: none; border: none;
+    font-size: 20px; line-height: 1;
+    width: 32px; height: 32px;
+    cursor: pointer; border-radius: 6px;
+    padding: 0; font-family: inherit;
+  }
+  .emoji-popover button:hover { background: var(--hover); }
 
   /* ---------- Modal (new chat) ---------- */
   .modal-back {
@@ -872,7 +900,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.069</div>
+    <div class="login-version">v1.070</div>
   </div>
 </div>
 
@@ -880,7 +908,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.069</span>
+    <span class="ver">v1.070</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -953,6 +981,7 @@
         </div>
         <div class="messages" id="messages"></div>
         <div class="composer">
+          <button class="emoji-btn" id="emojiBtn" title="Insert emoji">😀</button>
           <textarea id="composerInput" placeholder="Type a message" rows="1"></textarea>
           <button class="ai-btn" id="suggestReplyBtn" title="AI suggested reply (Claude)">✨</button>
           <button class="send-btn" id="sendBtn" title="Send">➤</button>
@@ -1126,7 +1155,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.069";
+const APP_VERSION = "v1.070";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -1191,6 +1220,7 @@ const messagesEl = $("messages");
 const composerInput = $("composerInput");
 const sendBtn = $("sendBtn");
 const suggestReplyBtn = $("suggestReplyBtn");
+const emojiBtn = $("emojiBtn");
 const newChatBtn = $("newChatBtn");
 const newChatModal = $("newChatModal");
 const newChatCancel = $("newChatCancel");
@@ -3004,7 +3034,7 @@ function formatNoteTime(ts) {
 //   3. phone digits                                             → "919..."
 // Brackets on the manual case signal "this is our internal label, not an authoritative
 // name from Ferra." Edge case: if the manual name exactly equals the Ferra name (e.g.
-// legacy rows from the Ferra browser before v1.069 used to write contactName), treat
+// legacy rows from the Ferra browser before v1.070 used to write contactName), treat
 // it as Ferra-sourced and skip the brackets.
 function resolveDisplayName(phone, explicitName, opts) {
   // Groups get their stored groupName (no brackets, no Ferra lookup)
@@ -3055,7 +3085,7 @@ function renderChatList(rows) {
   if (currentStatusFilter === "My tickets" && myChatKeys.size > 0) {
     const sample = enriched.slice(0, 3).map(r => r.chatKey);
     if (!enriched.some(r => myChatKeys.has(r.chatKey))) {
-      console.warn("[v1.069] My-tickets has keys but no chat-rows match. myChatKeys:", Array.from(myChatKeys), "sample r.chatKey:", sample);
+      console.warn("[v1.070] My-tickets has keys but no chat-rows match. myChatKeys:", Array.from(myChatKeys), "sample r.chatKey:", sample);
     }
   }
   const isCurrentUserAdmin = isAdmin(currentUser?.email);
@@ -3705,6 +3735,79 @@ composerInput.addEventListener("input", () => {
   composerInput.style.height = Math.min(composerInput.scrollHeight, 160) + "px";
 });
 sendBtn.onclick = doSend;
+
+// ====== EMOJI PICKER ======
+// Curated set of emojis useful for fitness coaching / customer support context.
+const COMMON_EMOJIS = [
+  "👍","❤️","🙏","🙌","👏","💪","🔥","✅",
+  "🎉","🥳","😊","😃","😅","😂","🤣","🙂",
+  "😉","😍","🥰","😎","🤔","😅","🤗","🤝",
+  "👋","💯","⚡","⭐","🌟","✨","🎯","🚀",
+  "📅","⏰","📞","📷","🎥","📎","📍","🔗",
+  "🏃","🏋️","🧘","🤸","🥗","🍎","💧","☕",
+  "❌","⚠️","ℹ️","📊","📈","💡","🎁","🏆",
+];
+let _emojiPop = null;
+emojiBtn.onclick = (e) => {
+  e.stopPropagation();
+  if (_emojiPop) { closeEmojiPopover(); return; }
+  openEmojiPopover();
+};
+
+function openEmojiPopover() {
+  closeEmojiPopover();
+  const pop = document.createElement("div");
+  pop.className = "emoji-popover";
+  pop.innerHTML = COMMON_EMOJIS.map(em => `<button type="button" data-e="${em}" title="${em}">${em}</button>`).join("");
+  document.body.appendChild(pop);
+
+  // Position above the emoji button
+  const rect = emojiBtn.getBoundingClientRect();
+  const popHeight = pop.offsetHeight;
+  let top = rect.top - popHeight - 6;
+  if (top < 8) top = rect.bottom + 6; // fallback below if no space above
+  let left = rect.left;
+  const popWidth = pop.offsetWidth;
+  if (left + popWidth > window.innerWidth - 8) left = window.innerWidth - popWidth - 8;
+  if (left < 8) left = 8;
+  pop.style.top = top + "px";
+  pop.style.left = left + "px";
+
+  // mousedown delegate — fires before click + before outside-close so the emoji
+  // inserts reliably even if click events have other listeners
+  pop.addEventListener("mousedown", (ev) => {
+    const btn = ev.target.closest("button[data-e]");
+    if (!btn) return;
+    ev.preventDefault(); // keep textarea focused (don't shift focus to popover)
+    ev.stopPropagation();
+    insertAtCursor(composerInput, btn.dataset.e);
+    closeEmojiPopover();
+  });
+
+  _emojiPop = pop;
+  setTimeout(() => document.addEventListener("mousedown", _emojiOutsideClick), 0);
+  document.addEventListener("keydown", _emojiEscape);
+}
+function _emojiOutsideClick(e) {
+  if (_emojiPop && !_emojiPop.contains(e.target) && e.target !== emojiBtn) closeEmojiPopover();
+}
+function _emojiEscape(e) { if (e.key === "Escape") closeEmojiPopover(); }
+function closeEmojiPopover() {
+  if (_emojiPop) { _emojiPop.remove(); _emojiPop = null; }
+  document.removeEventListener("mousedown", _emojiOutsideClick);
+  document.removeEventListener("keydown", _emojiEscape);
+}
+
+function insertAtCursor(textarea, text) {
+  const start = textarea.selectionStart || 0;
+  const end = textarea.selectionEnd || 0;
+  textarea.value = textarea.value.slice(0, start) + text + textarea.value.slice(end);
+  const pos = start + text.length;
+  textarea.focus();
+  textarea.setSelectionRange(pos, pos);
+  // Trigger input event so any size-adjust listener kicks in
+  textarea.dispatchEvent(new Event("input"));
+}
 
 // AI suggested reply — Claude drafts a short response based on the recent thread
 suggestReplyBtn.onclick = async () => {
