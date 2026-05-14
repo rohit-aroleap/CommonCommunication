@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.070</title>
+<title>CommonCommunication v1.071</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -335,6 +335,63 @@
     padding: 0; font-family: inherit;
   }
   .emoji-popover button:hover { background: var(--hover); }
+
+  /* Slash-command template picker */
+  .tpl-popover {
+    position: fixed;
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0,0,0,.15);
+    padding: 4px;
+    z-index: 1000;
+    min-width: 300px;
+    max-width: 480px;
+    max-height: 280px;
+    overflow-y: auto;
+  }
+  .tpl-item {
+    padding: 7px 10px; border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .tpl-item:hover, .tpl-item.focused { background: var(--header); }
+  .tpl-item .tpl-name { font-weight: 600; }
+  .tpl-item .tpl-preview {
+    font-size: 11px; color: var(--muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    margin-top: 2px;
+  }
+  .tpl-empty { padding: 12px; text-align: center; color: var(--muted); font-size: 12px; }
+  .tpl-hint {
+    border-top: 1px solid var(--border);
+    margin-top: 4px; padding: 6px 10px;
+    font-size: 10px; color: var(--muted);
+  }
+  .tpl-row {
+    background: var(--header);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-bottom: 6px;
+  }
+  .tpl-row .tpl-top {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 4px;
+  }
+  .tpl-row .tpl-name { font-weight: 600; font-size: 13px; flex: 1; }
+  .tpl-row .tpl-actions { display: flex; gap: 4px; }
+  .tpl-row .tpl-actions button {
+    background: none; border: 1px solid var(--border);
+    border-radius: 4px; padding: 2px 8px;
+    font-size: 11px; cursor: pointer; font-family: inherit;
+  }
+  .tpl-row .tpl-actions button:hover { background: var(--hover); }
+  .tpl-row .tpl-text {
+    background: white; border-radius: 4px;
+    padding: 6px 8px; font-size: 12px;
+    white-space: pre-wrap; word-wrap: break-word;
+    border: 1px solid var(--border);
+  }
 
   /* ---------- Modal (new chat) ---------- */
   .modal-back {
@@ -900,7 +957,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.070</div>
+    <div class="login-version">v1.071</div>
   </div>
 </div>
 
@@ -908,7 +965,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.070</span>
+    <span class="ver">v1.071</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -916,6 +973,7 @@
     <span class="user">
       <button class="logout" id="densityBtn" style="margin-right:6px;" title="Toggle compact / comfortable density">⇕</button>
       <button class="logout" id="ticketsBtn" style="margin-right:6px;" title="All tickets">🎫 All tickets</button>
+      <button class="logout" id="templatesBtn" style="display:none; margin-right:6px;" title="Manage quick reply templates">📋 Templates</button>
       <button class="logout" id="namesBtn" style="display:none; margin-right:6px;" title="Name unknown contacts">📝 Names</button>
       <button class="logout" id="backfillBtn" style="display:none; margin-right:6px;" title="Import chat history from Periskope">📥 Backfill</button>
       <button class="logout" id="teamBtn" style="display:none; margin-right:6px;" title="Manage team">👥 Team</button>
@@ -1022,6 +1080,31 @@
     </div>
     <div class="actions" style="margin-top:18px;">
       <button class="btn btn-secondary" id="teamClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============== TEMPLATES MODAL ============== -->
+<div class="modal-back" id="templatesModal">
+  <div class="modal" style="width:600px; max-width:94vw; max-height:88vh; display:flex; flex-direction:column;">
+    <h3>Quick reply templates</h3>
+    <div style="font-size:12px; color:var(--muted); margin-bottom:12px;">
+      Type <code style="background:var(--header); padding:1px 5px; border-radius:3px;">/</code> in the composer to use a template.
+      Variables: <code style="background:var(--header); padding:1px 5px; border-radius:3px;">{name}</code>
+      <code style="background:var(--header); padding:1px 5px; border-radius:3px;">{firstName}</code>
+      <code style="background:var(--header); padding:1px 5px; border-radius:3px;">{phone}</code>
+      <code style="background:var(--header); padding:1px 5px; border-radius:3px;">{tag}</code>
+      <code style="background:var(--header); padding:1px 5px; border-radius:3px;">{trainerName}</code>
+    </div>
+    <div id="tplList" style="flex:1; overflow-y:auto; min-height:120px;"></div>
+    <div style="margin-top:10px; border-top:1px solid var(--border); padding-top:10px;">
+      <label style="font-weight:600;">Add template</label>
+      <input id="tplNameInput" placeholder="Short name (used to /search)" style="width:100%; margin-top:6px; border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-size:13px; font-family:inherit; box-sizing:border-box;" />
+      <textarea id="tplTextInput" placeholder="Template text — use {name}, {phone}, etc. as variables" style="width:100%; margin-top:6px; border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-size:13px; font-family:inherit; min-height:80px; resize:vertical; box-sizing:border-box;"></textarea>
+    </div>
+    <div class="actions" style="margin-top:10px;">
+      <button class="btn btn-secondary" id="tplClose">Close</button>
+      <button class="btn btn-primary" id="tplSave">Save</button>
     </div>
   </div>
 </div>
@@ -1155,7 +1238,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.070";
+const APP_VERSION = "v1.071";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -1207,6 +1290,13 @@ const threadActive = $("threadActive");
 const threadContent = $("threadContent");
 const densityBtn = $("densityBtn");
 const ticketsBtn = $("ticketsBtn");
+const templatesBtn = $("templatesBtn");
+const templatesModal = $("templatesModal");
+const tplList = $("tplList");
+const tplNameInput = $("tplNameInput");
+const tplTextInput = $("tplTextInput");
+const tplClose = $("tplClose");
+const tplSave = $("tplSave");
 const ticketsModal = $("ticketsModal");
 const ttStats = $("ttStats");
 const ttTable = $("ttTable");
@@ -1354,6 +1444,7 @@ onAuthStateChanged(auth, async (user) => {
     teamBtn.style.display = isAdmin(user.email) ? "" : "none";
     backfillBtn.style.display = isAdmin(user.email) ? "" : "none";
     namesBtn.style.display = isAdmin(user.email) ? "" : "none";
+    templatesBtn.style.display = isAdmin(user.email) ? "" : "none";
     ferraRefreshBtn.style.display = isAdmin(user.email) ? "" : "none";
     listenFerraData();
     await update(ref(db, `${ROOT}/users/${user.uid}`), {
@@ -1367,6 +1458,7 @@ onAuthStateChanged(auth, async (user) => {
     listenTeamUsers();
     listenTickets();
     listenMyLastSeen();
+    listenTemplates();
     pingWorker();
   } else {
     currentUser = null;
@@ -3034,7 +3126,7 @@ function formatNoteTime(ts) {
 //   3. phone digits                                             → "919..."
 // Brackets on the manual case signal "this is our internal label, not an authoritative
 // name from Ferra." Edge case: if the manual name exactly equals the Ferra name (e.g.
-// legacy rows from the Ferra browser before v1.070 used to write contactName), treat
+// legacy rows from the Ferra browser before v1.071 used to write contactName), treat
 // it as Ferra-sourced and skip the brackets.
 function resolveDisplayName(phone, explicitName, opts) {
   // Groups get their stored groupName (no brackets, no Ferra lookup)
@@ -3085,7 +3177,7 @@ function renderChatList(rows) {
   if (currentStatusFilter === "My tickets" && myChatKeys.size > 0) {
     const sample = enriched.slice(0, 3).map(r => r.chatKey);
     if (!enriched.some(r => myChatKeys.has(r.chatKey))) {
-      console.warn("[v1.070] My-tickets has keys but no chat-rows match. myChatKeys:", Array.from(myChatKeys), "sample r.chatKey:", sample);
+      console.warn("[v1.071] My-tickets has keys but no chat-rows match. myChatKeys:", Array.from(myChatKeys), "sample r.chatKey:", sample);
     }
   }
   const isCurrentUserAdmin = isAdmin(currentUser?.email);
@@ -3735,6 +3827,204 @@ composerInput.addEventListener("input", () => {
   composerInput.style.height = Math.min(composerInput.scrollHeight, 160) + "px";
 });
 sendBtn.onclick = doSend;
+
+// ====== QUICK REPLY TEMPLATES ======
+let templatesCache = {};   // templateId → { name, text, createdBy, createdAt }
+let _editingTplId = null;  // when set, modal save updates instead of creates
+
+function listenTemplates() {
+  onValue(ref(db, `${ROOT}/config/templates`), (snap) => {
+    templatesCache = snap.val() || {};
+    if (templatesModal.classList.contains("visible")) renderTemplatesList();
+  });
+}
+
+templatesBtn.onclick = () => {
+  _editingTplId = null;
+  tplNameInput.value = "";
+  tplTextInput.value = "";
+  tplSave.textContent = "Save";
+  renderTemplatesList();
+  templatesModal.classList.add("visible");
+};
+tplClose.onclick = () => templatesModal.classList.remove("visible");
+tplSave.onclick = async () => {
+  const name = tplNameInput.value.trim();
+  const text = tplTextInput.value.trim();
+  if (!name || !text) { alert("Both name and text are required."); return; }
+  try {
+    if (_editingTplId) {
+      await update(ref(db, `${ROOT}/config/templates/${_editingTplId}`), { name, text, updatedAt: Date.now() });
+    } else {
+      const newRef = push(ref(db, `${ROOT}/config/templates`));
+      await set(newRef, {
+        name, text,
+        createdBy: currentUser.uid,
+        createdByName: currentUser.displayName || currentUser.email,
+        createdAt: Date.now(),
+      });
+    }
+    _editingTplId = null;
+    tplNameInput.value = "";
+    tplTextInput.value = "";
+    tplSave.textContent = "Save";
+  } catch (e) { alert("Save failed: " + (e?.message || e)); }
+};
+
+function renderTemplatesList() {
+  const all = Object.entries(templatesCache).map(([id, t]) => ({ id, ...(t || {}) }));
+  if (!all.length) {
+    tplList.innerHTML = `<div style="padding:30px; text-align:center; color:var(--muted); font-size:13px;">No templates yet. Add one below.</div>`;
+    return;
+  }
+  all.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  tplList.innerHTML = all.map(t => `
+    <div class="tpl-row">
+      <div class="tpl-top">
+        <span class="tpl-name">/${escapeHtml(t.name)}</span>
+        <div class="tpl-actions">
+          <button data-act="edit"   data-id="${escapeHtml(t.id)}">Edit</button>
+          <button data-act="delete" data-id="${escapeHtml(t.id)}">Delete</button>
+        </div>
+      </div>
+      <div class="tpl-text">${escapeHtml(t.text)}</div>
+    </div>
+  `).join("");
+  tplList.querySelectorAll("button[data-act]").forEach(b => {
+    b.onclick = async () => {
+      const id = b.dataset.id;
+      const t = templatesCache[id];
+      if (!t) return;
+      if (b.dataset.act === "edit") {
+        _editingTplId = id;
+        tplNameInput.value = t.name || "";
+        tplTextInput.value = t.text || "";
+        tplSave.textContent = "Update";
+        tplNameInput.focus();
+      } else if (b.dataset.act === "delete") {
+        if (!confirm(`Delete template /${t.name}?`)) return;
+        try { await set(ref(db, `${ROOT}/config/templates/${id}`), null); }
+        catch (e) { alert("Delete failed: " + (e?.message || e)); }
+      }
+    };
+  });
+}
+
+// Substitute {var} placeholders with values from the chat context
+function substituteTemplateVars(text, meta) {
+  const ferraUser = meta?.phone ? findFerraUserByPhone(meta.phone) : null;
+  const tag = meta?.phone ? getSubscriptionTag(meta.phone) : null;
+  const fullName = (meta?.contactName || meta?.displayName || ferraUser?.name || meta?.phone || "");
+  const firstName = String(fullName).split(/\s+/)[0] || "";
+  const trainer = currentUser?.displayName || currentUser?.email || "";
+  return String(text || "")
+    .replace(/\{name\}/g, fullName)
+    .replace(/\{firstName\}/g, firstName)
+    .replace(/\{phone\}/g, meta?.phone || "")
+    .replace(/\{tag\}/g, tag || "")
+    .replace(/\{trainerName\}/g, trainer);
+}
+
+// ====== Slash-template picker (composer) ======
+let _tplPicker = null;
+let _tplFocusIdx = 0;
+
+composerInput.addEventListener("input", () => {
+  const val = composerInput.value;
+  if (val.startsWith("/")) {
+    const q = val.slice(1).toLowerCase().trim();
+    openTplPicker(q);
+  } else {
+    closeTplPicker();
+  }
+});
+composerInput.addEventListener("keydown", (e) => {
+  if (!_tplPicker) return;
+  const items = _tplPicker.querySelectorAll(".tpl-item");
+  if (!items.length) return;
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    _tplFocusIdx = (_tplFocusIdx + 1) % items.length;
+    updateTplFocus(items);
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    _tplFocusIdx = (_tplFocusIdx - 1 + items.length) % items.length;
+    updateTplFocus(items);
+  } else if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    items[_tplFocusIdx]?.click();
+  } else if (e.key === "Escape") {
+    closeTplPicker();
+  }
+});
+function updateTplFocus(items) {
+  items.forEach((it, i) => it.classList.toggle("focused", i === _tplFocusIdx));
+  items[_tplFocusIdx]?.scrollIntoView({ block: "nearest" });
+}
+
+function openTplPicker(query) {
+  closeTplPicker();
+  const all = Object.entries(templatesCache).map(([id, t]) => ({ id, ...(t || {}) }));
+  const matches = !query
+    ? all
+    : all.filter(t => (t.name || "").toLowerCase().includes(query));
+  matches.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  if (!matches.length && !all.length) return; // nothing to show
+
+  const pop = document.createElement("div");
+  pop.className = "tpl-popover";
+  if (!matches.length) {
+    pop.innerHTML = `<div class="tpl-empty">No templates match "/${escapeHtml(query)}"</div>` +
+                    `<div class="tpl-hint">Type a different name, or remove the slash</div>`;
+  } else {
+    pop.innerHTML = matches.map((t, idx) => `
+      <div class="tpl-item ${idx === 0 ? "focused" : ""}" data-id="${escapeHtml(t.id)}">
+        <div class="tpl-name">/${escapeHtml(t.name)}</div>
+        <div class="tpl-preview">${escapeHtml(t.text || "")}</div>
+      </div>
+    `).join("") +
+    `<div class="tpl-hint">↑↓ to navigate · Enter to insert · Esc to dismiss</div>`;
+  }
+
+  document.body.appendChild(pop);
+  // Position above the composer
+  const rect = composerInput.getBoundingClientRect();
+  const popH = pop.offsetHeight;
+  let top = rect.top - popH - 6;
+  if (top < 8) top = rect.bottom + 6;
+  let left = rect.left;
+  if (left + pop.offsetWidth > window.innerWidth - 8) left = window.innerWidth - pop.offsetWidth - 8;
+  pop.style.top = top + "px";
+  pop.style.left = left + "px";
+
+  pop.addEventListener("mousedown", (ev) => {
+    const item = ev.target.closest(".tpl-item");
+    if (!item) return;
+    ev.preventDefault();
+    insertTemplateById(item.dataset.id);
+  });
+
+  _tplPicker = pop;
+  _tplFocusIdx = 0;
+}
+
+function closeTplPicker() {
+  if (_tplPicker) { _tplPicker.remove(); _tplPicker = null; }
+  _tplFocusIdx = 0;
+}
+
+function insertTemplateById(id) {
+  const t = templatesCache[id];
+  if (!t || !currentChatId) return;
+  const meta = chatsCache[currentChatId] || {};
+  const text = substituteTemplateVars(t.text, meta);
+  composerInput.value = text;
+  composerInput.style.height = "auto";
+  composerInput.style.height = Math.min(composerInput.scrollHeight, 160) + "px";
+  composerInput.focus();
+  composerInput.setSelectionRange(text.length, text.length);
+  closeTplPicker();
+}
 
 // ====== EMOJI PICKER ======
 // Curated set of emojis useful for fitness coaching / customer support context.
