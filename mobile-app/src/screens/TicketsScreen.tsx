@@ -17,12 +17,14 @@ import { useAuth } from "@/auth/AuthContext";
 import { resolveDisplayName } from "@/lib/displayName";
 import { formatTime } from "@/lib/format";
 import { encodeKey } from "@/lib/encodeKey";
-import type { NativeStackScreenProps } from "@react-navigation/native-stack";
+import { useNavigation } from "@react-navigation/native";
+import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "@/screens/types";
 
-type Props = NativeStackScreenProps<RootStackParamList, "Tickets">;
+type Nav = NativeStackNavigationProp<RootStackParamList>;
 
-export function TicketsScreen({ navigation }: Props) {
+export function TicketsScreen() {
+  const navigation = useNavigation<Nav>();
   const { user } = useAuth();
   const {
     tickets,

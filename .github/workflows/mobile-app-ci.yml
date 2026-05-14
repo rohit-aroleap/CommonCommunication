@@ -1,0 +1,35 @@
+name: mobile-app CI
+
+on:
+  push:
+    paths:
+      - "mobile-app/**"
+      - ".github/workflows/mobile-app-ci.yml"
+  pull_request:
+    paths:
+      - "mobile-app/**"
+      - ".github/workflows/mobile-app-ci.yml"
+
+# CI for the React Native client. Typecheck + unit tests on every push that
+# touches mobile-app/. We deliberately don't try to do a full Expo build
+# here — those need an EAS account and signing keys we don't keep in CI.
+
+jobs:
+  typecheck-and-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile-app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: mobile-app/package-lock.json
+      - name: Install
+        run: npm ci --no-audit --no-fund
+      - name: Typecheck
+        run: npm run lint:tsc
+      - name: Test
+        run: npm test -- --colors=false

@@ -49,6 +49,7 @@ import { resolveDisplayName } from "@/lib/displayName";
 import { dayLabel } from "@/lib/format";
 import { chatKeyToChatId } from "@/lib/encodeKey";
 import { fetchChatInfo, sendMessage } from "@/lib/worker";
+import { dedupMessages } from "@/lib/messageDedup";
 import { MessageBubble } from "@/components/MessageBubble";
 import { TicketBanner } from "@/components/TicketBanner";
 import { CreateTicketModal } from "@/components/CreateTicketModal";
@@ -155,8 +156,8 @@ export function ThreadScreen({ route, navigation }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatKey]);
 
-  // Deduplicate by inner unique id — same logic as PWA.
-  const visible = useMemo(() => dedup(messages), [messages]);
+  // Deduplicate by inner unique id — see lib/messageDedup for the rationale.
+  const visible = useMemo(() => dedupMessages(messages), [messages]);
 
   const banner = useMemo<Ticket[]>(
     () => openTicketsForChat(tickets, chatKey),
@@ -526,31 +527,6 @@ function ActionSheet({
       </Pressable>
     </Modal>
   );
-}
-
-// Same dedup logic as the PWA: collapse outbound /send copies against their
-// webhook echoes by extracting the inner unique id from periskopeMsgId.
-function dedup(list: Message[]): Message[] {
-  const extractInnerId = (m: Message): string | null => {
-    if (m.periskopeUniqueId) return m.periskopeUniqueId;
-    if (m.periskopeMsgId) {
-      const parts = String(m.periskopeMsgId).split("_");
-      return parts[parts.length - 1] || null;
-    }
-    return null;
-  };
-  const byId = new Map<string, Message>();
-  const noId: Message[] = [];
-  for (const m of list) {
-    const id = extractInnerId(m);
-    if (!id) {
-      noId.push(m);
-      continue;
-    }
-    const existing = byId.get(id);
-    if (!existing || (m.sentByName && !existing.sentByName)) byId.set(id, m);
-  }
-  return [...byId.values(), ...noId].sort((a, b) => (a.ts || 0) - (b.ts || 0));
 }
 
 const styles = StyleSheet.create({

@@ -14,12 +14,17 @@ import { FilterBar } from "@/components/FilterBar";
 import { DAILY_SENTINEL } from "@/types";
 import { FERRA_TAG_STAGE } from "@/config";
 import { normalizeFerraPhone } from "@/lib/ferra";
-import type { NativeStackScreenProps } from "@react-navigation/native-stack";
+import { useNavigation } from "@react-navigation/native";
+import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "@/screens/types";
 
-type Props = NativeStackScreenProps<RootStackParamList, "Chats">;
+// ChatsScreen lives inside the tab navigator but pushes to the root stack's
+// Thread route. Using useNavigation typed against the stack avoids the
+// "tab screen but used as stack" prop mismatch.
+type Nav = NativeStackNavigationProp<RootStackParamList>;
 
-export function ChatsScreen({ navigation }: Props) {
+export function ChatsScreen() {
+  const navigation = useNavigation<Nav>();
   const { isAdmin } = useAuth();
   const {
     chatRows,

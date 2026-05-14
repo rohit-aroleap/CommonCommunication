@@ -5,6 +5,9 @@ Same backend (Cloudflare Worker + Firebase RTDB + Periskope) as the desktop
 dashboard and the `mobile.html` PWA — clients just render different views of
 the same data.
 
+> **First time?** Follow [CHECKLIST.md](./CHECKLIST.md) end-to-end. It walks
+> through accounts, Firebase Console, OAuth IDs, and the first build.
+
 ## What you need to set up before this can run
 
 These steps are blocking and must happen on **your** side (Firebase /
@@ -24,16 +27,16 @@ Google / Apple consoles). I can't do them for you.
   server key (Android FCM). For iOS, upload an **APNs auth key** (`.p8`)
   generated at developer.apple.com → Certificates → Keys.
 
-Copy the three OAuth client IDs (iOS / Android / Web) into
-`mobile-app/app.json` under `extra.googleSignIn`. Replace the
-`REPLACE_WITH_…` placeholders.
+Copy `.env.example` → `.env` and fill in the three OAuth client IDs
+(`GOOGLE_IOS_CLIENT_ID`, `GOOGLE_ANDROID_CLIENT_ID`, `GOOGLE_WEB_CLIENT_ID`).
+`.env` is gitignored. `app.config.js` reads these at startup.
 
 ### 2. Expo account
 
 - Sign up at https://expo.dev (free).
 - `npm install -g eas-cli && eas login`
-- From `mobile-app/`, run `eas init` — it'll create a project and write the
-  `eas.projectId` into `app.json`. Replace the placeholder there.
+- From `mobile-app/`, run `eas init` — it'll print a project ID. Add it to
+  `.env` as `EAS_PROJECT_ID=...`.
 
 ### 3. Apple Developer & Play Console
 
@@ -84,8 +87,11 @@ eas submit --platform ios
 mobile-app/
 ├── App.tsx                    # auth gate + navigation
 ├── index.ts                   # entry, registers App with Expo
-├── app.json / eas.json        # Expo + EAS config
+├── app.config.js / eas.json   # Expo + EAS config (reads .env)
+├── .env.example               # template for the gitignored .env
+├── CHECKLIST.md               # first-run setup steps
 ├── package.json
+├── __tests__/                 # Jest tests for src/lib/*
 └── src/
     ├── config.ts              # Firebase config, Worker URL, constants
     ├── theme.ts               # colors / spacing — matches mobile.html
@@ -93,11 +99,22 @@ mobile-app/
     ├── firebase.ts            # Firebase init w/ AsyncStorage persistence
     ├── auth/                  # AuthProvider + LoginScreen
     ├── data/                  # AppDataProvider (chats / tickets / ferra)
-    ├── lib/                   # name resolution, format, worker, encodeKey
+    ├── lib/                   # name resolution, format, worker, encodeKey,
+    │                          # chats (isDailyGroup), messageDedup
     ├── notifications/         # Expo push token registration
     ├── screens/               # ChatsScreen, TicketsScreen, ThreadScreen
     └── components/            # rows, modals, banner, filter bar
 ```
+
+## Tests
+
+```bash
+npm test
+```
+
+34 tests covering the data layer (name resolution, dedup, Ferra index,
+encode/decode, daily-group predicate). Run on every PR via the GitHub
+Action at `.github/workflows/mobile-app-ci.yml`.
 
 ## What this app does (same as the PWA)
 

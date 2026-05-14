@@ -13,9 +13,10 @@ import React, {
 import { onValue, ref, set } from "firebase/database";
 import { db } from "@/firebase";
 import { useAuth } from "@/auth/AuthContext";
-import { ROOT, DAILY_GROUP_PREFIX } from "@/config";
+import { ROOT } from "@/config";
 import { encodeKey, chatKeyToChatId } from "@/lib/encodeKey";
 import { buildFerraIndex, type FerraIndex } from "@/lib/ferra";
+import { isDailyGroup as _isDailyGroup } from "@/lib/chats";
 import type {
   ChatMeta,
   ChatRow,
@@ -42,12 +43,9 @@ interface AppDataValue {
 
 const AppDataContext = createContext<AppDataValue | null>(null);
 
-export function isDailyGroup(r: ChatRow): boolean {
-  return (
-    r.chatType === "group" &&
-    String(r.groupName || "").startsWith(DAILY_GROUP_PREFIX)
-  );
-}
+// Re-export so existing call sites that import from this module keep working.
+// The implementation lives in lib/chats.ts so it's unit-testable.
+export const isDailyGroup = _isDailyGroup;
 
 export function AppDataProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
