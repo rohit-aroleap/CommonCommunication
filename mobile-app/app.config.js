@@ -20,7 +20,11 @@ module.exports = ({ config }) => ({
   orientation: "portrait",
   icon: "./assets/icon.png",
   userInterfaceStyle: "light",
-  splash: { backgroundColor: "#008069" },
+  splash: {
+    image: "./assets/splash.png",
+    resizeMode: "contain",
+    backgroundColor: "#008069",
+  },
   assetBundlePatterns: ["**/*"],
   ios: {
     bundleIdentifier: "com.aroleap.commoncomm",
@@ -29,7 +33,10 @@ module.exports = ({ config }) => ({
   },
   android: {
     package: "com.aroleap.commoncomm",
-    adaptiveIcon: { backgroundColor: "#008069" },
+    adaptiveIcon: {
+      foregroundImage: "./assets/adaptive-icon.png",
+      backgroundColor: "#008069",
+    },
     permissions: [
       "NOTIFICATIONS",
       "RECEIVE_BOOT_COMPLETED",
@@ -39,6 +46,7 @@ module.exports = ({ config }) => ({
       "READ_MEDIA_AUDIO",
     ],
   },
+  web: { favicon: "./assets/favicon.png" },
   plugins: [
     [
       "expo-image-picker",
