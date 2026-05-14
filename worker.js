@@ -121,6 +121,7 @@ async function handleWebhook(request, env) {
   const rawChatId = msg.chat_id || msg.chatId;
   if (!rawChatId) return json({ ok: true, skipped: "no chat_id" });
   const chatId = String(rawChatId);
+  const isGroup = chatId.endsWith("@g.us");
 
   const isFromMe = msg.from_me === true || msg.fromMe === true;
   const text = msg.body || msg.message || msg.text || "";
@@ -154,14 +155,23 @@ async function handleWebhook(request, env) {
       msgKey: pushed.name,
     });
   }
-  await fbPatch(env, `${ROOT}/chats/${encodeKey(chatId)}/meta`, {
-    phone: senderPhone,
+  // For groups, senderPhone/senderName is the individual group member who sent
+  // this message — NOT the group's identity. Don't write that as contactName.
+  // The group's display name comes from backfill (chat.chat_name) into groupName.
+  const metaUpdate = {
     chatId,
-    contactName: senderName || null,
+    chatType: isGroup ? "group" : "user",
     lastMsgAt: ts,
     lastMsgPreview: (text || `[${messageType}]`).slice(0, 120),
     lastMsgDirection: isFromMe ? "out" : "in",
-  });
+  };
+  if (!isGroup) {
+    metaUpdate.phone = senderPhone;
+    metaUpdate.contactName = senderName || null;
+  } else {
+    metaUpdate.phone = chatIdToPhone(chatId); // the group id portion, for reference
+  }
+  await fbPatch(env, `${ROOT}/chats/${encodeKey(chatId)}/meta`, metaUpdate);
 
   return json({ ok: true, event: evtType });
 }
@@ -170,7 +180,8 @@ async function handleWebhook(request, env) {
 // ---------- /backfill-batch (admin-triggered import from Periskope) ----------
 // Two modes:
 //   1. Existing chats only — pass { chatIds: [...], msgsPerChat }. Skips Periskope chat-list.
-//   2. All Periskope chats — pass { chatOffset, chatLimit, msgsPerChat }. Pages through GET /chats.
+//   2. All Periskope chats — pass { chatOffset, chatLimit, msgsPerChat, chatType? }.
+//      chatType: "user" (default) | "group" | "" for both.
 async function handleBackfillBatch(request, env) {
   const body = await request.json().catch(() => ({}));
   const msgsPerChat = Math.min(500, Math.max(1, Number(body.msgsPerChat) || 100));
@@ -189,8 +200,11 @@ async function handleBackfillBatch(request, env) {
     // Mode 2: full Periskope list
     const chatOffset = Math.max(0, Number(body.chatOffset) || 0);
     const chatLimit = Math.min(10, Math.max(1, Number(body.chatLimit) || 3));
+    const allowedTypes = new Set(["user", "group", "business"]);
+    const rawType = body.chatType === undefined ? "user" : String(body.chatType || "");
+    const typeQs = (rawType && allowedTypes.has(rawType)) ? `&chat_type=${rawType}` : "";
     const chatsRes = await fetch(
-      `${PERISKOPE_BASE}/chats?offset=${chatOffset}&limit=${chatLimit}&chat_type=user`,
+      `${PERISKOPE_BASE}/chats?offset=${chatOffset}&limit=${chatLimit}${typeQs}`,
       { headers: periskopeHeaders(env) }
     );
     const chatsJson = await safeJson(chatsRes);
@@ -217,6 +231,7 @@ async function backfillOneChat(env, chat, msgsPerChat) {
   const chatId = chat.chat_id;
   if (!chatId) return { error: "no chatId" };
   const chatKey = encodeKey(chatId);
+  const isGroup = chatId.endsWith("@g.us");
 
   // (1) Fetch messages from Periskope
   const msgsRes = await fetch(
@@ -274,8 +289,18 @@ async function backfillOneChat(env, chat, msgsPerChat) {
   if (written > 0) {
     updates[`${ROOT}/chats/${chatKey}/meta/chatId`] = chatId;
     updates[`${ROOT}/chats/${chatKey}/meta/phone`] = chatIdToPhone(chatId);
-    if (chat.chat_name && !existingMeta?.contactName) {
-      updates[`${ROOT}/chats/${chatKey}/meta/contactName`] = chat.chat_name;
+    updates[`${ROOT}/chats/${chatKey}/meta/chatType`] = isGroup ? "group" : "user";
+    if (chat.chat_name) {
+      // For groups we store as groupName (separate from contactName to avoid the
+      // (parens) "manual override" rendering). For 1-on-1 chats, populate
+      // contactName only if it's not set yet.
+      if (isGroup) {
+        if (!existingMeta?.groupName) {
+          updates[`${ROOT}/chats/${chatKey}/meta/groupName`] = chat.chat_name;
+        }
+      } else if (!existingMeta?.contactName) {
+        updates[`${ROOT}/chats/${chatKey}/meta/contactName`] = chat.chat_name;
+      }
     }
     if (latestTs > 0 && (!existingMeta?.lastMsgAt || latestTs > existingMeta.lastMsgAt)) {
       updates[`${ROOT}/chats/${chatKey}/meta/lastMsgAt`] = latestTs;
