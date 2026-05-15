@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.086</title>
+<title>CommonCommunication v1.087</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -617,7 +617,9 @@
     font-size: 18px; color: var(--muted); padding: 0 4px;
   }
   .info-drawer .id-body {
-    flex: 1; overflow-y: auto; padding: 6px 0;
+    flex: 1; overflow-y: auto; overflow-x: hidden;
+    padding: 6px 0;
+    min-width: 0;
   }
 
   /* 7-day activity grid */
@@ -656,9 +658,19 @@
   .info-grid {
     display: grid; grid-template-columns: 110px 1fr;
     gap: 4px 12px; font-size: 13px;
+    min-width: 0;
   }
   .info-grid .k { color: var(--muted); }
-  .info-grid .v { color: var(--text); word-break: break-word; }
+  /* overflow-wrap: anywhere forces UTM tracking strings (Campaign, Term,
+     Landing — often a single 80-char token with no spaces) to break at any
+     character. word-break: break-word doesn't break those, which overflowed
+     the drawer width and pushed the whole layout into horizontal scroll. */
+  .info-grid .v {
+    color: var(--text);
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    min-width: 0;
+  }
   .info-empty {
     padding: 30px 20px; text-align: center; color: var(--muted); font-size: 13px;
   }
@@ -1058,7 +1070,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.086</div>
+    <div class="login-version">v1.087</div>
   </div>
 </div>
 
@@ -1066,7 +1078,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.086</span>
+    <span class="ver">v1.087</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -1379,7 +1391,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.086";
+const APP_VERSION = "v1.087";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
