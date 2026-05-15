@@ -855,7 +855,9 @@ async function handleMediaProxy(request, env) {
   const u = url.searchParams.get("u");
   if (!u) return new Response("missing ?u", { status: 400 });
   // Only allow Periskope-hosted URLs (and a sensible CDN allow-list) so this
-  // can't be abused as an open proxy.
+  // can't be abused as an open proxy. Periskope stores attachments on Google
+  // Cloud Storage — googleapis / googleusercontent — so those are in the
+  // allow-list even though they aren't periskope.app domains.
   let host;
   try { host = new URL(u).hostname; } catch { return new Response("bad url", { status: 400 }); }
   const ok = (
@@ -865,22 +867,41 @@ async function handleMediaProxy(request, env) {
     host.endsWith(".cdninstagram.com") ||
     host.endsWith(".fbcdn.net") ||
     host.endsWith(".supabase.co") ||
-    host.endsWith("amazonaws.com")
+    host.endsWith("amazonaws.com") ||
+    host === "storage.googleapis.com" ||
+    host.endsWith(".storage.googleapis.com") ||
+    host.endsWith(".googleusercontent.com")
   );
   if (!ok) return new Response("host not allowed: " + host, { status: 403 });
 
-  // Try with Periskope auth first; if the resource is public, retry without.
-  let r = await fetch(u, { headers: periskopeHeaders(env) });
-  if (!r.ok && r.status === 401) r = await fetch(u);
-  if (!r.ok) return new Response(`upstream ${r.status}`, { status: 502 });
+  // Forward Range header so <video>/<audio> tags can stream + seek. Without
+  // this the proxy always returns 200 with the whole body; Chrome's video
+  // element will refuse to play larger files and shows an empty 0:00 player.
+  const range = request.headers.get("Range");
+  const upstreamHeaders = { ...periskopeHeaders(env) };
+  if (range) upstreamHeaders["Range"] = range;
 
-  const ct = r.headers.get("Content-Type") || "application/octet-stream";
-  return new Response(r.body, {
-    headers: {
-      "Content-Type": ct,
-      "Cache-Control": "public, max-age=3600",
-    },
-  });
+  let r = await fetch(u, { headers: upstreamHeaders });
+  // Public resources reject the Periskope Authorization header with 401; retry
+  // without auth in that case.
+  if (!r.ok && r.status === 401) {
+    const retryHeaders = range ? { Range: range } : {};
+    r = await fetch(u, { headers: retryHeaders });
+  }
+  if (!r.ok && r.status !== 206) return new Response(`upstream ${r.status}`, { status: 502 });
+
+  // Pass through the headers a browser needs for ranged streaming. The body
+  // is streamed by passing r.body through — no buffering in worker memory.
+  const respHeaders = {
+    "Content-Type": r.headers.get("Content-Type") || "application/octet-stream",
+    "Cache-Control": "public, max-age=3600",
+    "Accept-Ranges": "bytes",
+  };
+  const cl = r.headers.get("Content-Length");
+  if (cl) respHeaders["Content-Length"] = cl;
+  const cr = r.headers.get("Content-Range");
+  if (cr) respHeaders["Content-Range"] = cr;
+  return new Response(r.body, { status: r.status, headers: respHeaders });
 }
 
 // ---------- /summarize (Claude-powered chat summary) ----------
