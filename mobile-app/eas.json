@@ -7,14 +7,28 @@
     },
     "preview": {
       "distribution": "internal",
+      "channel": "preview",
       "ios": { "simulator": false },
       "android": { "buildType": "apk" }
     },
     "production": {
-      "autoIncrement": true
+      "channel": "production",
+      "autoIncrement": true,
+      "ios": { "resourceClass": "m-medium" },
+      "android": { "buildType": "app-bundle" }
     }
   },
   "submit": {
-    "production": {}
+    "production": {
+      "ios": {
+        "//": "Fill these in after you create the app in App Store Connect.",
+        "//": "appleId is your Apple ID email. ascAppId is the numeric App ID",
+        "//": "from App Store Connect (e.g. 6712345678). appleTeamId is the",
+        "//": "10-char Team ID from developer.apple.com → Membership.",
+        "appleId": "YOUR_APPLE_ID@example.com",
+        "ascAppId": "YOUR_NUMERIC_ASC_APP_ID",
+        "appleTeamId": "YOUR_10_CHAR_TEAM_ID"
+      }
+    }
   }
 }

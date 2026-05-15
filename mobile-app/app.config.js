@@ -26,10 +26,37 @@ module.exports = ({ config }) => ({
     backgroundColor: "#008069",
   },
   assetBundlePatterns: ["**/*"],
+  // EAS Update (OTA) config. Once expo-updates is installed and `eas update`
+  // has been run once, JS-only changes ship without a new TestFlight build.
+  // runtimeVersion.policy = "appVersion" ties an OTA bundle to a specific
+  // version string — bump `version` above only when you change native code
+  // (new permissions, new modules), then re-build via TestFlight. JS-only
+  // tweaks reuse the existing runtimeVersion and ship via `eas update`.
+  runtimeVersion: { policy: "appVersion" },
+  updates: {
+    url: `https://u.expo.dev/${e.EAS_PROJECT_ID ?? ""}`,
+    fallbackToCacheTimeout: 0,
+    checkAutomatically: "ON_LOAD",
+  },
   ios: {
     bundleIdentifier: "com.aroleap.commoncomm",
+    buildNumber: "1",
     supportsTablet: false,
-    infoPlist: { ITSAppUsesNonExemptEncryption: false },
+    // Apple wants every app to declare its encryption posture. We only use
+    // standard HTTPS, so we tag as non-exempt = false. Without this, TestFlight
+    // submissions get blocked until you fill it in App Store Connect each time.
+    infoPlist: {
+      ITSAppUsesNonExemptEncryption: false,
+      // iOS requires a usage description for every Apple-flagged data source.
+      // expo-image-picker injects these via its plugin (below), but Apple
+      // sometimes still rejects if the strings are too generic. Specifics here:
+      NSPhotoLibraryUsageDescription:
+        "Choose a photo or video to send to a customer in a WhatsApp chat.",
+      NSCameraUsageDescription:
+        "Take a photo to send to a customer in a WhatsApp chat.",
+      NSMicrophoneUsageDescription:
+        "Record a voice note to send to a customer in a WhatsApp chat.",
+    },
   },
   android: {
     package: "com.aroleap.commoncomm",
@@ -57,6 +84,7 @@ module.exports = ({ config }) => ({
     ],
     ["expo-document-picker", { iCloudContainerEnvironment: "Production" }],
     ["expo-notifications", { color: "#008069" }],
+    "expo-updates",
   ],
   extra: {
     eas: { projectId: e.EAS_PROJECT_ID ?? "" },

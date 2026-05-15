@@ -2,12 +2,13 @@
 // for the Thread screen. Registers for push notifications once on sign-in.
 
 import React, { useEffect } from "react";
-import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, AppState, StyleSheet, Text, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { NavigationContainer } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
+import * as Updates from "expo-updates";
 
 import { AuthProvider, useAuth } from "@/auth/AuthContext";
 import { AppDataProvider } from "@/data/AppDataContext";
@@ -107,7 +108,33 @@ function Gate() {
   return <LoginScreen />;
 }
 
+// EAS Update / OTA: on cold start AND on every foreground transition, check
+// the Update server for a newer JS bundle. If one is available, fetch it and
+// reload silently. Dev builds skip the check (expo-updates is no-op in dev).
+function useOtaUpdates() {
+  useEffect(() => {
+    if (__DEV__) return;
+    async function check() {
+      try {
+        const result = await Updates.checkForUpdateAsync();
+        if (!result.isAvailable) return;
+        await Updates.fetchUpdateAsync();
+        await Updates.reloadAsync();
+      } catch (e) {
+        // Silent: missing OTA config in dev / no network / etc. shouldn't
+        // crash the app. The user just keeps running the embedded bundle.
+      }
+    }
+    check();
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") check();
+    });
+    return () => sub.remove();
+  }, []);
+}
+
 export default function App() {
+  useOtaUpdates();
   return (
     <SafeAreaProvider>
       <StatusBar style="light" backgroundColor={colors.greenDark} />

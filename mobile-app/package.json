@@ -26,6 +26,7 @@
     "expo-image-picker": "~15.0.7",
     "expo-notifications": "~0.28.16",
     "expo-status-bar": "~1.12.1",
+    "expo-updates": "~0.25.27",
     "expo-web-browser": "~13.0.3",
     "firebase": "^10.13.0",
     "react": "18.2.0",
