@@ -23,10 +23,7 @@
       "ios": {
         "appleId": "rohitpatel.mailid297@gmail.com",
         "appleTeamId": "85X9566VCY",
-        "//": "ascAppId — fill this in after creating the CommonCommunication app",
-        "//": "in App Store Connect. It's the numeric ID shown in the URL of the",
-        "//": "app's Info page (e.g. appstoreconnect.apple.com/apps/6712345678/...)",
-        "ascAppId": "YOUR_NUMERIC_ASC_APP_ID"
+        "ascAppId": "6769791827"
       }
     }
   }
