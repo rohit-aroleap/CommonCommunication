@@ -585,19 +585,24 @@ async function handleFetchChatInfo(request, env) {
 }
 
 // Pull a normalized media descriptor out of a Periskope message payload.
-// Returns null for plain-text messages. We're defensive about field names
-// because the live API shape isn't documented exhaustively.
+// Returns null for plain-text messages. Periskope's real shape uses:
+//   media.path     (the URL — NOT media.url)
+//   media.mimetype (NOT mime_type)
+//   media.filename (NOT file_name)
+//   media.size     (NOT file_size)
+// We also check the camelCase / snake_case alternatives just in case the API
+// shape evolves or differs between event types.
 function extractMedia(msg) {
   if (!msg) return null;
   const mediaObj = msg.media || msg.attachment || null;
   if (!mediaObj || typeof mediaObj !== "object") return null;
-  const url = mediaObj.url || mediaObj.media_url || mediaObj.link || mediaObj.href || null;
+  const url = mediaObj.path || mediaObj.url || mediaObj.media_url || mediaObj.link || mediaObj.href || null;
   if (!url) return null;
   return {
     url,
-    mimeType: mediaObj.mime_type || mediaObj.mimeType || mediaObj.contentType || null,
-    fileName: mediaObj.file_name || mediaObj.fileName || mediaObj.name || null,
-    fileSize: mediaObj.file_size || mediaObj.fileSize || null,
+    mimeType: mediaObj.mimetype || mediaObj.mime_type || mediaObj.mimeType || mediaObj.contentType || null,
+    fileName: mediaObj.filename || mediaObj.file_name || mediaObj.fileName || mediaObj.name || null,
+    fileSize: mediaObj.size || mediaObj.file_size || mediaObj.fileSize || null,
     caption:  mediaObj.caption  || null,
   };
 }
