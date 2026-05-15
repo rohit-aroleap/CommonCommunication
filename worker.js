@@ -49,6 +49,9 @@ export default {
       if (url.pathname === "/summarize" && request.method === "POST") {
         return cors(env, await handleSummarize(request, env));
       }
+      if (url.pathname === "/ai-query" && request.method === "POST") {
+        return cors(env, await handleAiQuery(request, env));
+      }
       if (url.pathname === "/suggest-reply" && request.method === "POST") {
         return cors(env, await handleSuggestReply(request, env));
       }
@@ -726,6 +729,126 @@ Use simple markdown bullets. Stay under 180 words. Never invent facts not presen
   const summary = claudeJson?.content?.[0]?.text || "(empty response)";
   return json({
     summary,
+    count: recent.length,
+    total: all.length,
+    model: claudeJson?.model || null,
+    usage: claudeJson?.usage || null,
+  });
+}
+
+// ---------- /ai-query (Claude answers a free-form question about one chat) ----------
+// Caller passes { chatId, question, history? }. `history` is an optional array
+// of prior { role: "user"|"assistant", content } turns so the trainer can ask
+// follow-up questions in the same modal. Returns { answer, count, total, usage }.
+async function handleAiQuery(request, env) {
+  if (!env.CLAUDE_API_KEY) {
+    return json({ error: "CLAUDE_API_KEY not configured on worker" }, 500);
+  }
+  const body = await request.json().catch(() => ({}));
+  const chatId = body?.chatId;
+  const question = String(body?.question || "").trim();
+  const history = Array.isArray(body?.history) ? body.history : [];
+  const maxMessages = Math.min(400, Math.max(10, Number(body?.maxMessages) || 250));
+  if (!chatId) return json({ error: "missing chatId" }, 400);
+  if (!question) return json({ error: "missing question" }, 400);
+
+  const chatKey = encodeKey(chatId);
+  const [rawMessages, meta] = await Promise.all([
+    fbGet(env, `${ROOT}/chats/${chatKey}/messages`),
+    fbGet(env, `${ROOT}/chats/${chatKey}/meta`),
+  ]);
+  if (!rawMessages || typeof rawMessages !== "object") {
+    return json({ answer: "There are no messages in this chat yet.", count: 0, total: 0 });
+  }
+
+  // Same dedup logic as /summarize.
+  const extractInnerId = (m) => {
+    if (m.periskopeUniqueId) return m.periskopeUniqueId;
+    if (m.periskopeMsgId) {
+      const parts = String(m.periskopeMsgId).split("_");
+      return parts[parts.length - 1] || null;
+    }
+    return null;
+  };
+  const byId = new Map();
+  const noId = [];
+  for (const m of Object.values(rawMessages)) {
+    if (!m || !m.text) continue;
+    const id = extractInnerId(m);
+    if (!id) { noId.push(m); continue; }
+    const existing = byId.get(id);
+    if (!existing || (m.sentByName && !existing.sentByName)) byId.set(id, m);
+  }
+  const all = [...byId.values(), ...noId].sort((a, b) => (a.ts || 0) - (b.ts || 0));
+  const recent = all.slice(-maxMessages);
+  if (!recent.length) {
+    return json({ answer: "There are no text messages in this chat to reason about.", count: 0, total: all.length });
+  }
+
+  const isGroup = String(chatId).endsWith("@g.us");
+  const customerName = meta?.contactName || meta?.displayName || meta?.groupName || null;
+  const customerLabel = customerName
+    ? `${customerName}${meta?.phone ? ` (${meta.phone})` : ""}`
+    : meta?.phone || "unknown";
+
+  const lines = recent.map(m => {
+    const ts = m.ts ? new Date(m.ts).toISOString().slice(0, 16).replace("T", " ") : "";
+    const speaker = m.direction === "out"
+      ? `Agent${m.sentByName ? ` (${m.sentByName})` : ""}`
+      : (isGroup
+          ? `Member${m.senderPhone ? ` ${m.senderPhone}` : ""}`
+          : `Customer`);
+    return `[${ts}] ${speaker}: ${m.text}`;
+  });
+
+  const systemPrompt = `You are an Aroleap fitness team assistant. The trainer is looking at one WhatsApp chat and will ask you questions about it. Answer using ONLY the conversation provided as context.
+
+Rules:
+- Be concise and direct. Use short paragraphs or bullets — match the question's shape.
+- Quote short message snippets when useful (in quotes), and reference approximate dates ("on May 8") if the question is time-related.
+- If the answer is not present or unclear from the messages, say so plainly ("Not mentioned in this chat" / "Unclear from the messages") instead of guessing.
+- Never invent facts, names, prices, appointments, or trainer details not in the conversation.
+- Don't restate the entire chat. Answer the question.
+
+Context — ${isGroup ? "Group chat" : "Customer"}: ${customerLabel}
+Messages available: last ${recent.length} of ${all.length}
+
+Conversation (oldest first):
+
+${lines.join("\n")}`;
+
+  // Build the message list: prior turns from the modal, then the new question.
+  const turns = [];
+  for (const h of history) {
+    if (!h || typeof h !== "object") continue;
+    const role = h.role === "assistant" ? "assistant" : "user";
+    const content = String(h.content || "").trim();
+    if (!content) continue;
+    turns.push({ role, content });
+  }
+  turns.push({ role: "user", content: question });
+
+  const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": env.CLAUDE_API_KEY,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 1024,
+      system: systemPrompt,
+      messages: turns,
+    }),
+  });
+  const claudeJson = await safeJson(claudeRes);
+  if (!claudeRes.ok) {
+    return json({ error: "claude_api_failed", details: claudeJson, status: claudeRes.status }, 502);
+  }
+  const answer = claudeJson?.content?.[0]?.text || "(empty response)";
+  return json({
+    answer,
     count: recent.length,
     total: all.length,
     model: claudeJson?.model || null,

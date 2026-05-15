@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.077</title>
+<title>CommonCommunication v1.078</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -982,7 +982,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.077</div>
+    <div class="login-version">v1.078</div>
   </div>
 </div>
 
@@ -990,7 +990,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.077</span>
+    <span class="ver">v1.078</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -1049,6 +1049,7 @@
               <button id="editNameBtn" class="icon-btn" style="width:32px; height:32px; font-size:16px;" title="Edit / add manual name">✏️</button>
               <button id="chatBackfillBtn" class="icon-btn" style="width:32px; height:32px; font-size:16px;" title="Backfill this chat's history from Periskope">📥</button>
               <button id="summarizeBtn" class="icon-btn" style="width:32px; height:32px; font-size:16px;" title="AI summary of this chat">🧠</button>
+              <button id="aiQueryBtn" class="icon-btn" style="width:32px; height:32px; font-size:16px;" title="Ask AI about this chat">💬</button>
               <button id="privateToggleBtn" class="icon-btn" style="width:32px; height:32px; font-size:16px; display:none;" title="Mark as private (admins only)">🔒</button>
             </div>
             <div class="sub" id="threadSub">—</div>
@@ -1168,6 +1169,25 @@
   </div>
 </div>
 
+<!-- ============== AI QUERY MODAL ============== -->
+<div class="modal-back" id="aiQueryModal">
+  <div class="modal" style="width:640px; max-width:94vw; height:640px; max-height:88vh; display:flex; flex-direction:column;">
+    <h3 style="margin-bottom:4px;">Ask AI about this chat</h3>
+    <div id="aiQuerySub" style="font-size:12px; color:var(--muted); margin-bottom:12px;">Ask any question — the AI answers using this customer's chat history as context.</div>
+    <div id="aiQueryConversation" style="flex:1; overflow-y:auto; background:var(--header); border-radius:6px; padding:12px 14px; display:flex; flex-direction:column; gap:10px; min-height:120px;">
+      <div id="aiQueryEmpty" style="color:var(--muted); font-size:13px; text-align:center; padding:24px 8px;">No questions yet. Try: <em>"What did the customer last ask about?"</em> or <em>"Has any pricing been discussed?"</em></div>
+    </div>
+    <div style="display:flex; gap:8px; margin-top:12px; align-items:flex-end;">
+      <textarea id="aiQueryInput" placeholder="Ask a question about this chat… (Enter to send, Shift+Enter for newline)" rows="2" style="flex:1; border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-size:14px; font-family:inherit; resize:vertical; min-height:40px; max-height:140px; box-sizing:border-box;"></textarea>
+      <button class="btn btn-primary" id="aiQuerySend" style="height:40px;">Ask</button>
+    </div>
+    <div class="actions" style="margin-top:12px;">
+      <button class="btn btn-secondary" id="aiQueryClear">Clear</button>
+      <button class="btn btn-primary" id="aiQueryClose">Close</button>
+    </div>
+  </div>
+</div>
+
 <!-- ============== NAMES MODAL ============== -->
 <div class="modal-back" id="namesModal">
   <div class="modal" style="width:600px; max-width:94vw; height:640px; max-height:88vh; display:flex; flex-direction:column;">
@@ -1266,7 +1286,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.077";
+const APP_VERSION = "v1.078";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -1371,6 +1391,15 @@ const summarySub = $("summarySub");
 const summaryCopy = $("summaryCopy");
 const summaryRegen = $("summaryRegen");
 const summaryClose = $("summaryClose");
+const aiQueryBtn = $("aiQueryBtn");
+const aiQueryModal = $("aiQueryModal");
+const aiQuerySub = $("aiQuerySub");
+const aiQueryConversation = $("aiQueryConversation");
+const aiQueryEmpty = $("aiQueryEmpty");
+const aiQueryInput = $("aiQueryInput");
+const aiQuerySend = $("aiQuerySend");
+const aiQueryClear = $("aiQueryClear");
+const aiQueryClose = $("aiQueryClose");
 const teamBtn = $("teamBtn");
 const teamModal = $("teamModal");
 const teamClose = $("teamClose");
@@ -3560,6 +3589,142 @@ async function runSummarize(force) {
   } finally {
     summaryRegen.disabled = false;
     summaryCopy.disabled = false;
+  }
+}
+
+// AI query: free-form Q&A about the current chat. Modal keeps a turn-by-turn
+// history per chat so the trainer can ask follow-ups. History is reset when
+// they switch chats or hit Clear.
+let _aiQueryChatId = null;
+let _aiQueryHistory = []; // [{ role: "user"|"assistant", content }]
+let _aiQueryInFlight = false;
+
+aiQueryBtn.onclick = () => openAiQuery();
+aiQueryClose.onclick = () => aiQueryModal.classList.remove("visible");
+aiQueryClear.onclick = () => { _aiQueryHistory = []; renderAiQuery(); };
+aiQuerySend.onclick = () => sendAiQuery();
+aiQueryInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    sendAiQuery();
+  }
+});
+
+function openAiQuery() {
+  if (!currentChatId || !WORKER_URL) return;
+  const meta = chatsCache[currentChatId] || {};
+  const chatId = meta.chatId || currentChatId;
+  // Reset conversation if switched to a different chat since last open
+  if (_aiQueryChatId !== chatId) {
+    _aiQueryChatId = chatId;
+    _aiQueryHistory = [];
+  }
+  const name = resolveDisplayName(meta.phone, meta.contactName || meta.displayName,
+    { chatType: (meta.chatType === "group" || String(chatId).endsWith("@g.us")) ? "group" : "user", groupName: meta.groupName });
+  aiQuerySub.textContent = `About ${name}. Ask any question — the AI answers using this chat's history as context.`;
+  aiQueryModal.classList.add("visible");
+  renderAiQuery();
+  setTimeout(() => aiQueryInput.focus(), 50);
+}
+
+function renderAiQuery() {
+  aiQueryConversation.innerHTML = "";
+  if (!_aiQueryHistory.length) {
+    aiQueryConversation.appendChild(aiQueryEmpty);
+    aiQueryEmpty.style.display = "";
+    return;
+  }
+  aiQueryEmpty.style.display = "none";
+  for (const turn of _aiQueryHistory) {
+    const row = document.createElement("div");
+    row.style.display = "flex";
+    row.style.flexDirection = "column";
+    row.style.gap = "2px";
+    const label = document.createElement("div");
+    label.style.fontSize = "11px";
+    label.style.color = "var(--muted)";
+    label.style.fontWeight = "600";
+    label.textContent = turn.role === "user" ? "You" : "AI";
+    const bubble = document.createElement("div");
+    bubble.style.background = turn.role === "user" ? "#dbeafe" : "white";
+    bubble.style.border = "1px solid var(--border)";
+    bubble.style.borderRadius = "6px";
+    bubble.style.padding = "8px 10px";
+    bubble.style.fontSize = "14px";
+    bubble.style.lineHeight = "1.5";
+    bubble.style.whiteSpace = "pre-wrap";
+    bubble.style.wordBreak = "break-word";
+    if (turn.pending) {
+      bubble.textContent = "Thinking…";
+      bubble.style.color = "var(--muted)";
+      bubble.style.fontStyle = "italic";
+    } else if (turn.error) {
+      bubble.textContent = turn.content;
+      bubble.style.color = "#b91c1c";
+    } else {
+      bubble.textContent = turn.content;
+    }
+    row.appendChild(label);
+    row.appendChild(bubble);
+    aiQueryConversation.appendChild(row);
+  }
+  aiQueryConversation.scrollTop = aiQueryConversation.scrollHeight;
+}
+
+async function sendAiQuery() {
+  if (_aiQueryInFlight) return;
+  if (!currentChatId || !WORKER_URL) return;
+  const question = aiQueryInput.value.trim();
+  if (!question) return;
+  const meta = chatsCache[currentChatId] || {};
+  const chatId = meta.chatId || currentChatId;
+  if (_aiQueryChatId !== chatId) {
+    _aiQueryChatId = chatId;
+    _aiQueryHistory = [];
+  }
+
+  // Snapshot prior history (only completed turns) to send as multi-turn context.
+  const priorHistory = _aiQueryHistory
+    .filter(t => !t.pending && !t.error)
+    .map(t => ({ role: t.role, content: t.content }));
+
+  _aiQueryHistory.push({ role: "user", content: question });
+  const pendingTurn = { role: "assistant", content: "", pending: true };
+  _aiQueryHistory.push(pendingTurn);
+  aiQueryInput.value = "";
+  _aiQueryInFlight = true;
+  aiQuerySend.disabled = true;
+  aiQuerySend.textContent = "…";
+  renderAiQuery();
+
+  try {
+    const res = await fetch(`${WORKER_URL}/ai-query`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId, question, history: priorHistory }),
+    });
+    const j = await res.json();
+    // Bail out silently if user switched chats mid-flight
+    if (_aiQueryChatId !== chatId) return;
+    if (!res.ok) {
+      pendingTurn.pending = false;
+      pendingTurn.error = true;
+      pendingTurn.content = "Failed: " + (j.error || JSON.stringify(j));
+    } else {
+      pendingTurn.pending = false;
+      pendingTurn.content = j.answer || "(empty)";
+    }
+  } catch (e) {
+    if (_aiQueryChatId !== chatId) return;
+    pendingTurn.pending = false;
+    pendingTurn.error = true;
+    pendingTurn.content = "Network error: " + e.message;
+  } finally {
+    _aiQueryInFlight = false;
+    aiQuerySend.disabled = false;
+    aiQuerySend.textContent = "Ask";
+    renderAiQuery();
+    aiQueryInput.focus();
   }
 }
 
