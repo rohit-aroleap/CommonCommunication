@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.084</title>
+<title>CommonCommunication v1.085</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -1058,7 +1058,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.084</div>
+    <div class="login-version">v1.085</div>
   </div>
 </div>
 
@@ -1066,7 +1066,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.084</span>
+    <span class="ver">v1.085</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -1077,6 +1077,8 @@
       <button class="logout" id="templatesBtn" style="display:none; margin-right:6px;" title="Manage quick reply templates">📋 Templates</button>
       <button class="logout" id="namesBtn" style="display:none; margin-right:6px;" title="Name unknown contacts">📝 Names</button>
       <button class="logout" id="backfillBtn" style="display:none; margin-right:6px;" title="Import chat history from Periskope">📥 Backfill</button>
+      <button class="logout" id="triageBackfillBtn" style="display:none; margin-right:6px;" title="Run AI triage on every chat's latest inbound message">🚨 Triage all</button>
+      <button class="logout" id="notifBtn" style="margin-right:6px;" title="Enable desktop notifications for new inbound messages">🔔</button>
       <button class="logout" id="teamBtn" style="display:none; margin-right:6px;" title="Manage team">👥 Team</button>
       <img id="userPhoto" alt="" />
       <span id="userName"></span>
@@ -1377,7 +1379,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.084";
+const APP_VERSION = "v1.085";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -1499,6 +1501,8 @@ const allowedListEl = $("allowedList");
 const newAllowEmail = $("newAllowEmail");
 const addAllowBtn = $("addAllowBtn");
 const backfillBtn = $("backfillBtn");
+const triageBackfillBtn = $("triageBackfillBtn");
+const notifBtn = $("notifBtn");
 const ferraSyncStatus = $("ferraSyncStatus");
 const ferraRefreshBtn = $("ferraRefreshBtn");
 const namesBtn = $("namesBtn");
@@ -1594,6 +1598,7 @@ onAuthStateChanged(auth, async (user) => {
     userName.textContent = user.displayName || user.email;
     teamBtn.style.display = isAdmin(user.email) ? "" : "none";
     backfillBtn.style.display = isAdmin(user.email) ? "" : "none";
+    triageBackfillBtn.style.display = isAdmin(user.email) ? "" : "none";
     namesBtn.style.display = isAdmin(user.email) ? "" : "none";
     templatesBtn.style.display = isAdmin(user.email) ? "" : "none";
     ferraRefreshBtn.style.display = isAdmin(user.email) ? "" : "none";
@@ -2518,6 +2523,85 @@ function listenContacts() {
   });
 }
 
+// ====== BROWSER NOTIFICATIONS ======
+// Show a desktop notification when a new inbound message arrives, gated by
+// the same targeting rules the worker uses for mobile push (ticket assignee
+// or admin if the chat has open tickets; everyone otherwise). The user must
+// explicitly grant permission first via the bell button in the topbar.
+const _notifiedAt = {};         // chatKey -> last lastMsgAt we notified on
+let _notifInitialized = false;  // skip notifications on the very first listener fire
+
+function notifSupported() { return typeof window !== "undefined" && "Notification" in window; }
+function notifGranted() { return notifSupported() && Notification.permission === "granted"; }
+
+function shouldNotifyForChat(chatKey, meta) {
+  if (!meta || meta.lastMsgDirection !== "in") return false;
+  if (!meta.lastMsgAt) return false;
+  if (meta.lastMsgAt <= (_notifiedAt[chatKey] || 0)) return false;
+  // Don't notify about the chat the user is actively looking at IF the tab
+  // is focused — they're already seeing it. If the tab is backgrounded, do
+  // notify even for the open chat (the trainer might not realize someone
+  // replied).
+  if (chatKey === currentChatId && document.hasFocus()) return false;
+  // Non-admins never see private chats.
+  if (meta.private && !isAdmin(currentUser?.email)) return false;
+  // Ticket-aware targeting: if any open ticket is assigned to someone, only
+  // ping the assignee + admins. Else broadcast.
+  const openTix = chatOpenTickets[chatKey] || [];
+  const assignees = openTix.filter(t => t.assignee).map(t => t.assignee);
+  if (assignees.length > 0) {
+    const me = currentUser?.uid;
+    if (!assignees.includes(me) && !isAdmin(currentUser?.email)) return false;
+  }
+  return true;
+}
+
+function showChatNotification(chatKey, meta) {
+  if (!notifGranted()) return;
+  const isGroup = meta.chatType === "group" || String(meta.chatId || "").endsWith("@g.us");
+  const display = resolveDisplayName(
+    meta.phone || chatKey.replace(/_c_us$/, ""),
+    meta.contactName || meta.displayName,
+    { chatType: isGroup ? "group" : "user", groupName: meta.groupName },
+  );
+  const urgent = meta.triageUrgency === "urgent";
+  const title = urgent ? `🚨 ${display}` : display;
+  const body = String(meta.lastMsgPreview || "(new message)").slice(0, 200);
+  try {
+    const n = new Notification(title, {
+      body,
+      tag: `cc-${chatKey}`,         // collapses repeated pings for the same chat
+      renotify: false,
+      icon: "https://www.google.com/s2/favicons?domain=whatsapp.com&sz=64",
+      requireInteraction: urgent,   // urgent notifications stay visible until clicked
+    });
+    n.onclick = () => {
+      window.focus();
+      openChat(chatKey);
+      n.close();
+    };
+    _notifiedAt[chatKey] = meta.lastMsgAt;
+  } catch { /* swallow — notifications are best-effort */ }
+}
+
+function processNotificationsFromSnapshot(chats) {
+  if (!notifGranted()) return;
+  if (!_notifInitialized) {
+    // First snapshot: prime _notifiedAt with current values so we don't
+    // dump a notification flood for every chat with recent activity.
+    for (const [chatKey, meta] of Object.entries(chats)) {
+      _notifiedAt[chatKey] = meta.lastMsgAt || 0;
+    }
+    _notifInitialized = true;
+    return;
+  }
+  for (const [chatKey, meta] of Object.entries(chats)) {
+    if (shouldNotifyForChat(chatKey, meta)) {
+      showChatNotification(chatKey, meta);
+    }
+  }
+}
+
 function listenChats() {
   const chatsRef = ref(db, `${ROOT}/chats`);
   onValue(chatsRef, (snap) => {
@@ -2564,6 +2648,7 @@ function listenChats() {
     _chatsListenerFired = true;
     renderChatList(rows);
     updateTabTitle();
+    processNotificationsFromSnapshot(chatsCache);
     // If a non-admin currently has a private chat open (admin just flagged it
     // while their thread was already up), force-close the thread for them.
     if (currentChatId && !isAdmin(currentUser?.email)) {
@@ -3933,6 +4018,107 @@ async function sendAiQuery() {
     aiQueryInput.focus();
   }
 }
+
+// Admin: triage every recent inbound chat in one pass. Chunks through the
+// worker's /triage-backfill in pages so a slow Haiku queue doesn't time the
+// worker request out. The button label doubles as a live progress indicator.
+triageBackfillBtn.onclick = async () => {
+  if (!WORKER_URL) return;
+  const sinceDaysStr = prompt("Triage chats with inbound activity in the last N days:", "30");
+  if (sinceDaysStr === null) return;
+  const sinceDays = Math.max(1, Math.min(365, parseInt(sinceDaysStr, 10) || 30));
+  const orig = triageBackfillBtn.textContent;
+  triageBackfillBtn.disabled = true;
+  let offset = 0;
+  let totalProcessed = 0;
+  let totalUrgent = 0;
+  let total = null;
+  try {
+    while (true) {
+      triageBackfillBtn.textContent = total === null
+        ? "⏳ Loading…"
+        : `⏳ ${totalProcessed}/${total} (${totalUrgent} urgent)`;
+      const res = await fetch(`${WORKER_URL}/triage-backfill`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ offset, limit: 20, sinceDays }),
+      });
+      const j = await res.json();
+      if (!res.ok) {
+        alert(`Triage failed: ${j?.error || res.statusText}`);
+        break;
+      }
+      total = j.total;
+      totalProcessed += j.processed;
+      for (const t of (j.triaged || [])) {
+        if (t.urgency === "urgent") totalUrgent++;
+      }
+      if (j.done) {
+        triageBackfillBtn.textContent = `✓ ${totalProcessed} done · ${totalUrgent} urgent`;
+        break;
+      }
+      offset = j.nextOffset;
+    }
+  } catch (e) {
+    alert(`Triage error: ${e?.message || e}`);
+  } finally {
+    setTimeout(() => {
+      triageBackfillBtn.textContent = orig;
+      triageBackfillBtn.disabled = false;
+    }, 4000);
+  }
+};
+
+// Bell button: request permission for desktop notifications, reflect state.
+function syncNotifBtn() {
+  if (!notifSupported()) {
+    notifBtn.textContent = "🔕";
+    notifBtn.title = "Browser doesn't support notifications";
+    notifBtn.disabled = true;
+    return;
+  }
+  const p = Notification.permission;
+  if (p === "granted") {
+    notifBtn.textContent = "🔔";
+    notifBtn.title = "Desktop notifications enabled";
+  } else if (p === "denied") {
+    notifBtn.textContent = "🔕";
+    notifBtn.title = "Notifications blocked — adjust in your browser site settings";
+  } else {
+    notifBtn.textContent = "🔔";
+    notifBtn.title = "Click to enable desktop notifications for new messages";
+  }
+}
+syncNotifBtn();
+notifBtn.onclick = async () => {
+  if (!notifSupported()) return;
+  if (Notification.permission === "granted") {
+    alert("Desktop notifications are already enabled. To disable, use your browser's site settings.");
+    return;
+  }
+  if (Notification.permission === "denied") {
+    alert("Notifications are blocked. Open your browser site settings for this page and allow notifications, then refresh.");
+    return;
+  }
+  const p = await Notification.requestPermission();
+  syncNotifBtn();
+  if (p === "granted") {
+    // Prime _notifiedAt from the live cache so we don't dump a flood for
+    // every chat that already had recent activity before permission was on.
+    for (const [chatKey, meta] of Object.entries(chatsCache)) {
+      _notifiedAt[chatKey] = meta.lastMsgAt || 0;
+    }
+    _notifInitialized = true;
+    // Send a confirmation ping so the user sees what it looks like.
+    try {
+      const n = new Notification("CommonCommunication", {
+        body: "Notifications are on. You'll be pinged for new inbound messages on your tickets.",
+        tag: "cc-welcome",
+      });
+      setTimeout(() => n.close(), 4000);
+    } catch {}
+  }
+};
 
 // Single-chat backfill — fast path so a trainer opening a chat with no history
 // can pull its messages from Periskope without using the full Backfill modal.

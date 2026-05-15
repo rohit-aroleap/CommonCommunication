@@ -75,6 +75,9 @@ export default {
       if (url.pathname === "/search-messages" && request.method === "GET") {
         return cors(env, await handleSearchMessages(request, env));
       }
+      if (url.pathname === "/triage-backfill" && request.method === "POST") {
+        return cors(env, await handleTriageBackfill(request, env));
+      }
       return cors(env, json({ error: "not_found" }, 404));
     } catch (err) {
       return cors(env, json({ error: String(err && err.message || err) }, 500));
@@ -435,14 +438,8 @@ async function resolvePushTargetUids(env, chatId) {
 
 // AI triage: classify an inbound message into { urgency, intent } and stamp
 // it on chat meta so the dashboard can highlight urgent chats. Best-effort —
-// failures are swallowed and the message is still delivered normally.
-async function triageInbound(env, { chatId, text, media, messageType }) {
-  if (!env.CLAUDE_API_KEY) return;
-  const chatKey = encodeKey(chatId);
-  const body = (text || "").trim() || (media ? `[${messageType || "media"}: ${media.fileName || ""}]` : "");
-  if (!body) return;
-
-  const systemPrompt = `Classify a single inbound WhatsApp message from a fitness/wellness customer.
+// failures return null and the message is still delivered normally.
+const TRIAGE_SYSTEM_PROMPT = `Classify a single inbound WhatsApp message from a fitness/wellness customer.
 
 Reply with ONE LINE of compact JSON, no markdown, no commentary, exactly this shape:
 {"urgency":"urgent|normal|low","intent":"complaint|question|booking|chitchat|other"}
@@ -457,6 +454,11 @@ Rules:
 - chitchat: greetings, thanks, casual banter
 - other: anything else`;
 
+async function classifyTriage(env, body) {
+  if (!env.CLAUDE_API_KEY) return null;
+  const trimmed = String(body || "").trim().slice(0, 500);
+  if (!trimmed) return null;
+
   let claudeJson;
   try {
     const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
@@ -469,31 +471,107 @@ Rules:
       body: JSON.stringify({
         model: "claude-haiku-4-5-20251001",
         max_tokens: 60,
-        system: systemPrompt,
-        messages: [{ role: "user", content: body.slice(0, 500) }],
+        system: TRIAGE_SYSTEM_PROMPT,
+        messages: [{ role: "user", content: trimmed }],
       }),
     });
-    if (!claudeRes.ok) return;
+    if (!claudeRes.ok) return null;
     claudeJson = await safeJson(claudeRes);
-  } catch { return; }
+  } catch { return null; }
 
   const raw = claudeJson?.content?.[0]?.text || "";
   let parsed;
   try {
-    // Strip code fences if the model ignored instructions.
     const cleaned = raw.replace(/```(?:json)?/gi, "").trim();
     parsed = JSON.parse(cleaned);
-  } catch { return; }
+  } catch { return null; }
 
   const allowedUrgency = new Set(["urgent", "normal", "low"]);
   const allowedIntent = new Set(["complaint", "question", "booking", "chitchat", "other"]);
   const urgency = allowedUrgency.has(parsed?.urgency) ? parsed.urgency : "normal";
   const intent = allowedIntent.has(parsed?.intent) ? parsed.intent : "other";
+  return { urgency, intent };
+}
 
+async function triageInbound(env, { chatId, text, media, messageType }) {
+  const chatKey = encodeKey(chatId);
+  const body = (text || "").trim() || (media ? `[${messageType || "media"}: ${media.fileName || ""}]` : "");
+  const result = await classifyTriage(env, body);
+  if (!result) return;
   await fbPatch(env, `${ROOT}/chats/${chatKey}/meta`, {
-    triageUrgency: urgency,
-    triageIntent: intent,
+    triageUrgency: result.urgency,
+    triageIntent: result.intent,
     triageAt: Date.now(),
+  });
+}
+
+// ---------- /triage-backfill (one-shot pass over existing chats) ----------
+// Chunked admin endpoint: pass { offset, limit, sinceDays }. Processes a
+// window of chats whose latest message is INBOUND and within sinceDays.
+// Returns { processed, total, nextOffset, done, triaged: [...] }. Dashboard
+// loops until done.
+//
+// Why chunked: Cloudflare worker requests have a CPU budget; running Haiku
+// on 500 chats in a single request would time out. Caller controls chunk
+// size (default 20).
+async function handleTriageBackfill(request, env) {
+  if (!env.CLAUDE_API_KEY) return json({ error: "CLAUDE_API_KEY not configured" }, 500);
+  const body = await request.json().catch(() => ({}));
+  const offset = Math.max(0, Number(body.offset) || 0);
+  const limit = Math.min(40, Math.max(1, Number(body.limit) || 20));
+  const sinceDays = Math.max(1, Number(body.sinceDays) || 30);
+  const force = body.force === true; // re-triage even if triageAt is already newer than the message
+
+  const cutoff = Date.now() - sinceDays * 24 * 60 * 60 * 1000;
+
+  // Single Firebase read of all chat metas. Cheap relative to the AI calls.
+  const chats = await fbGet(env, `${ROOT}/chats`);
+  if (!chats || typeof chats !== "object") {
+    return json({ processed: 0, total: 0, nextOffset: null, done: true, triaged: [] });
+  }
+
+  // Filter to "candidate" chats: latest message is inbound + recent.
+  // Skip groups (we don't triage groups in handleWebhook either).
+  // Skip already-triaged unless force=true.
+  const candidates = [];
+  for (const [chatKey, chat] of Object.entries(chats)) {
+    const meta = chat?.meta || {};
+    if (meta.chatType === "group" || String(meta.chatId || "").endsWith("@g.us")) continue;
+    if (meta.lastMsgDirection !== "in") continue;
+    if (!meta.lastMsgAt || meta.lastMsgAt < cutoff) continue;
+    const preview = String(meta.lastMsgPreview || "").trim();
+    if (!preview) continue;
+    if (!force && meta.triageAt && meta.triageAt >= meta.lastMsgAt) continue;
+    candidates.push({ chatKey, meta });
+  }
+  // Stable order by lastMsgAt desc so chunking is deterministic across requests.
+  candidates.sort((a, b) => (b.meta.lastMsgAt || 0) - (a.meta.lastMsgAt || 0));
+
+  const slice = candidates.slice(offset, offset + limit);
+  const triaged = [];
+
+  for (const { chatKey, meta } of slice) {
+    const result = await classifyTriage(env, meta.lastMsgPreview);
+    if (!result) {
+      triaged.push({ chatKey, error: "classify_failed" });
+      continue;
+    }
+    await fbPatch(env, `${ROOT}/chats/${chatKey}/meta`, {
+      triageUrgency: result.urgency,
+      triageIntent: result.intent,
+      triageAt: Date.now(),
+    });
+    triaged.push({ chatKey, ...result });
+  }
+
+  const nextOffset = offset + slice.length;
+  const done = nextOffset >= candidates.length;
+  return json({
+    processed: slice.length,
+    total: candidates.length,
+    nextOffset: done ? null : nextOffset,
+    done,
+    triaged,
   });
 }
 
