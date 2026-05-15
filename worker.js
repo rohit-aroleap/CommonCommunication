@@ -32,7 +32,7 @@ export default {
         return cors(env, json({
           service: "CommonCommunication Worker",
           status: "ok",
-          endpoints: ["/health", "/send (POST)", "/webhook (POST)", "/messages?chatId=... (GET)"],
+          endpoints: ["/health", "/send (POST)", "/webhook (POST)", "/messages?chatId=... (GET)", "/transcribe (POST)"],
         }));
       }
       if (url.pathname === "/messages" && request.method === "GET") {
@@ -49,6 +49,9 @@ export default {
       }
       if (url.pathname === "/suggest-reply" && request.method === "POST") {
         return cors(env, await handleSuggestReply(request, env));
+      }
+      if (url.pathname === "/transcribe" && request.method === "POST") {
+        return cors(env, await handleTranscribe(request, env));
       }
       if (url.pathname === "/media" && request.method === "GET") {
         return cors(env, await handleMediaProxy(request, env));
@@ -734,6 +737,90 @@ Rules:
   }
   const reply = (claudeJson?.content?.[0]?.text || "").trim();
   return json({ reply, count: recent.length, usage: claudeJson?.usage || null });
+}
+
+// ---------- /transcribe (Workers AI Whisper for voice notes) ----------
+// Frontend records audio via MediaRecorder, base64-encodes it, POSTs here.
+// We run whisper-large-v3-turbo, then a quick Claude pass to strip fillers
+// ("um", "uh"), fix punctuation, and tighten the phrasing without inventing
+// facts — so what the trainer sees is a clean note draft, not raw dictation.
+// Audio is NEVER sent to the customer; the frontend drops the result into
+// the notes-panel draft form.
+async function handleTranscribe(request, env) {
+  if (!env.AI) {
+    return json({ error: "workers_ai_not_bound", hint: "Add [ai] binding=\"AI\" in wrangler.toml and redeploy" }, 500);
+  }
+  const body = await request.json().catch(() => null);
+  const audioB64 = body?.audio;
+  if (!audioB64 || typeof audioB64 !== "string") {
+    return json({ error: "missing audio (base64 string)" }, 400);
+  }
+
+  // (1) Whisper transcription
+  let rawText = "";
+  try {
+    const result = await env.AI.run("@cf/openai/whisper-large-v3-turbo", {
+      audio: audioB64,
+    });
+    rawText = String(result?.text || "").trim();
+  } catch (e) {
+    return json({ error: "transcribe_failed", details: String(e?.message || e) }, 502);
+  }
+  if (!rawText) {
+    return json({ text: "", raw: "", cleaned: false, reason: "no_speech" });
+  }
+
+  // (2) Claude cleanup pass. If the key isn't configured, or the call fails,
+  // we fall back to the raw transcript so the feature never hard-fails.
+  if (!env.CLAUDE_API_KEY) {
+    return json({ text: rawText, raw: rawText, cleaned: false, reason: "claude_not_configured" });
+  }
+
+  const systemPrompt = `You are cleaning up a voice-dictated private note from an Aroleap fitness team member about a customer. The raw audio transcript may contain filler words ("um", "uh", "like", "you know"), false starts, repeated words, and missing punctuation.
+
+Your job:
+- Remove fillers, false starts, and obvious stammers.
+- Fix punctuation, capitalization, and run-on sentences.
+- Preserve the trainer's voice and meaning — don't rewrite for "formality".
+- Keep ALL specifics exactly as spoken: customer names, phone numbers, dates, times, prices, body parts, injuries, medical terms, equipment/machine names, addresses.
+- Do NOT add facts, dates, or details that aren't in the transcript.
+- Do NOT add greetings, signoffs, headers ("Note:", "Summary:"), or bullets unless the transcript itself is clearly multi-topic.
+- If the transcript is already clean, return it as-is with only punctuation fixes.
+
+Output ONLY the cleaned note text — no preamble, no explanation, no quotes around it.`;
+
+  try {
+    const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": env.CLAUDE_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 800,
+        system: systemPrompt,
+        messages: [{ role: "user", content: rawText }],
+      }),
+    });
+    const claudeJson = await safeJson(claudeRes);
+    if (!claudeRes.ok) {
+      return json({ text: rawText, raw: rawText, cleaned: false, reason: "claude_api_failed", details: claudeJson });
+    }
+    const cleaned = String(claudeJson?.content?.[0]?.text || "").trim();
+    if (!cleaned) {
+      return json({ text: rawText, raw: rawText, cleaned: false, reason: "claude_empty" });
+    }
+    return json({
+      text: cleaned,
+      raw: rawText,
+      cleaned: true,
+      usage: claudeJson?.usage || null,
+    });
+  } catch (e) {
+    return json({ text: rawText, raw: rawText, cleaned: false, reason: "claude_network_error", details: String(e?.message || e) });
+  }
 }
 
 async function handleFetchMessages(request, env) {

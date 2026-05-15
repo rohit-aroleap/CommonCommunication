@@ -315,6 +315,31 @@
   }
   .composer .emoji-btn:hover { background: var(--hover); }
 
+  .composer .mic-btn {
+    background: var(--header); border: 1px solid var(--border);
+    color: #555;
+    width: 42px; height: 42px; border-radius: 50%;
+    cursor: pointer; font-size: 18px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    transition: background .15s, color .15s, border-color .15s;
+  }
+  .composer .mic-btn:hover:not(:disabled):not(.recording):not(.transcribing) { background: var(--hover); }
+  .composer .mic-btn:disabled { opacity: .5; cursor: not-allowed; }
+  .composer .mic-btn.recording {
+    background: #ef4444; color: white; border-color: #ef4444;
+    font-size: 13px; font-weight: 600;
+    animation: micPulse 1.2s ease-in-out infinite;
+  }
+  .composer .mic-btn.transcribing {
+    background: #fbbf24; color: white; border-color: #fbbf24;
+    cursor: wait;
+  }
+  @keyframes micPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,.55); }
+    50%      { box-shadow: 0 0 0 8px rgba(239,68,68,0); }
+  }
+
   .emoji-popover {
     position: fixed;
     background: white;
@@ -1044,6 +1069,7 @@
           <input type="file" id="fileInput" style="display:none;" accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx" />
           <textarea id="composerInput" placeholder="Type a message" rows="1"></textarea>
           <button class="ai-btn" id="suggestReplyBtn" title="AI suggested reply (Claude)">✨</button>
+          <button class="mic-btn" id="voiceNoteBtn" title="Record a voice note — transcribed and saved as a private note (NOT sent to the customer)">🎤</button>
           <button class="send-btn" id="sendBtn" title="Send">➤</button>
         </div>
       </div>
@@ -1312,6 +1338,7 @@ const messagesEl = $("messages");
 const composerInput = $("composerInput");
 const sendBtn = $("sendBtn");
 const suggestReplyBtn = $("suggestReplyBtn");
+const voiceNoteBtn = $("voiceNoteBtn");
 const emojiBtn = $("emojiBtn");
 const attachBtn = $("attachBtn");
 const fileInput = $("fileInput");
@@ -4140,6 +4167,129 @@ suggestReplyBtn.onclick = async () => {
     suggestReplyBtn.disabled = false;
     suggestReplyBtn.textContent = orig;
   }
+};
+
+// ====== VOICE NOTES (mic → Whisper → notes-panel draft) ======
+// Records mic audio via MediaRecorder, sends it to /transcribe (Cloudflare
+// Workers AI whisper-large-v3-turbo), then opens the notes draft form with
+// the transcript pre-filled so the trainer can edit/save. Audio is NEVER
+// sent to the customer — this only feeds the private notes panel.
+let mediaRecorder = null;
+let audioChunks = [];
+let recordingStartTs = 0;
+let recordingTimer = null;
+const MAX_RECORDING_MS = 120_000; // 2 min cap
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(",")[1] || "");
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(blob);
+  });
+}
+
+function resetVoiceBtn() {
+  voiceNoteBtn.classList.remove("recording", "transcribing");
+  voiceNoteBtn.textContent = "🎤";
+  voiceNoteBtn.title = "Record a voice note — transcribed and saved as a private note (NOT sent to the customer)";
+  voiceNoteBtn.disabled = false;
+}
+
+async function startVoiceNote() {
+  if (!currentChatId) { alert("Open a chat first."); return; }
+  if (!WORKER_URL) { alert("Worker URL not configured."); return; }
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+    alert("Voice recording isn't supported in this browser. Try Chrome, Edge, or Firefox.");
+    return;
+  }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    alert("Microphone access denied: " + (e?.message || e));
+    return;
+  }
+  audioChunks = [];
+  // Prefer webm/opus — small, well-supported, and Whisper handles it. Fall
+  // back to whatever the browser will accept (Safari often gives mp4/aac).
+  const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"];
+  const mime = candidates.find(m => MediaRecorder.isTypeSupported?.(m)) || "";
+  try {
+    mediaRecorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+  } catch (e) {
+    stream.getTracks().forEach(t => t.stop());
+    alert("Couldn't start recorder: " + (e?.message || e));
+    return;
+  }
+  mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) audioChunks.push(e.data); };
+  mediaRecorder.onstop = async () => {
+    stream.getTracks().forEach(t => t.stop());
+    const type = mediaRecorder.mimeType || mime || "audio/webm";
+    const blob = new Blob(audioChunks, { type });
+    audioChunks = [];
+    await transcribeAndDraft(blob);
+  };
+  mediaRecorder.start();
+  recordingStartTs = Date.now();
+  voiceNoteBtn.classList.add("recording");
+  voiceNoteBtn.textContent = "0s";
+  voiceNoteBtn.title = "Stop recording";
+  recordingTimer = setInterval(() => {
+    const secs = Math.floor((Date.now() - recordingStartTs) / 1000);
+    voiceNoteBtn.textContent = secs + "s";
+    if (Date.now() - recordingStartTs >= MAX_RECORDING_MS) stopVoiceNote();
+  }, 250);
+}
+
+function stopVoiceNote() {
+  if (!mediaRecorder || mediaRecorder.state !== "recording") return;
+  if (recordingTimer) { clearInterval(recordingTimer); recordingTimer = null; }
+  voiceNoteBtn.classList.remove("recording");
+  voiceNoteBtn.classList.add("transcribing");
+  voiceNoteBtn.textContent = "…";
+  voiceNoteBtn.title = "Transcribing…";
+  voiceNoteBtn.disabled = true;
+  try { mediaRecorder.stop(); } catch { /* already stopped */ }
+}
+
+async function transcribeAndDraft(blob) {
+  try {
+    if (!blob || blob.size < 500) { alert("Recording was too short."); return; }
+    const base64 = await blobToBase64(blob);
+    const res = await fetch(`${WORKER_URL}/transcribe`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ audio: base64 }),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      alert("Transcribe failed: " + (j.error || ("HTTP " + res.status)));
+      return;
+    }
+    const text = (j.text || "").trim();
+    if (!text) { alert("No speech detected in the recording."); return; }
+    // Open the notes draft pre-filled with the transcript so the trainer
+    // reviews/edits before committing. Reuses the existing note-form UI.
+    addingNote = true;
+    setNotesExpanded(true);
+    renderNotes();
+    const input = document.getElementById("noteNewInput");
+    if (input) {
+      input.value = text;
+      input.focus();
+      input.setSelectionRange(text.length, text.length);
+    }
+  } catch (e) {
+    alert("Transcribe network error: " + (e?.message || e));
+  } finally {
+    resetVoiceBtn();
+  }
+}
+
+voiceNoteBtn.onclick = () => {
+  if (mediaRecorder && mediaRecorder.state === "recording") stopVoiceNote();
+  else startVoiceNote();
 };
 
 // Attach: open file picker, then base64-encode and send via worker
