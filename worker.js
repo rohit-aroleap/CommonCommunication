@@ -3,11 +3,13 @@
 //   PERISKOPE_API_KEY   - Bearer JWT from Periskope console
 //   PERISKOPE_PHONE     - org WhatsApp phone, digits only, e.g. 919187651332
 //   FIREBASE_DB_SECRET  - Firebase RTDB legacy database secret
-//   CLAUDE_API_KEY      - Anthropic API key (for /summarize)
+//   CLAUDE_API_KEY      - Anthropic API key (for /summarize, /suggest-reply)
+//   EXPO_ACCESS_TOKEN   - optional, raises Expo Push rate limits
 //
 // Vars (wrangler.toml):
 //   FIREBASE_DB_URL     - https://motherofdashboard-default-rtdb.asia-southeast1.firebasedatabase.app
 //   ALLOWED_ORIGIN      - dashboard origin (e.g. https://rohit-aroleap.github.io)
+// AI binding (wrangler.toml [ai] binding = "AI"): Workers AI Whisper for /transcribe
 
 const PERISKOPE_BASE = "https://api.periskope.app/v1";
 const ROOT = "commonComm";
@@ -32,7 +34,7 @@ export default {
         return cors(env, json({
           service: "CommonCommunication Worker",
           status: "ok",
-          endpoints: ["/health", "/send (POST)", "/webhook (POST)", "/messages?chatId=... (GET)", "/transcribe (POST)"],
+          endpoints: ["/health", "/send (POST)", "/webhook (POST)", "/messages?chatId=... (GET)", "/transcribe (POST)", "/register-push-token (POST)"],
         }));
       }
       if (url.pathname === "/messages" && request.method === "GET") {
@@ -55,6 +57,9 @@ export default {
       }
       if (url.pathname === "/media" && request.method === "GET") {
         return cors(env, await handleMediaProxy(request, env));
+      }
+      if (url.pathname === "/register-push-token" && request.method === "POST") {
+        return cors(env, await handleRegisterPushToken(request, env));
       }
       return cors(env, json({ error: "not_found" }, 404));
     } catch (err) {
@@ -263,7 +268,85 @@ async function handleWebhook(request, env) {
     } catch { /* swallow — webhook should still succeed even if name lookup fails */ }
   }
 
+  // Push notification fan-out. Only ping mobile devices for INBOUND messages
+  // (not for our own outbound echoes). Fire-and-forget so we don't slow the
+  // webhook ACK that Periskope is waiting on.
+  if (!isFromMe) {
+    const senderLabel = (!isGroup && senderName) ? senderName :
+                        (isGroup ? `Group ${chatIdToPhone(chatId)}` : chatIdToPhone(chatId));
+    const bodyText = mediaPreview(media, messageType, text);
+    if (typeof globalThis.queueMicrotask === "function") {
+      globalThis.queueMicrotask(() => {
+        fanoutPush(env, {
+          title: senderLabel,
+          body: bodyText.slice(0, 200),
+          data: { chatKey: encodeKey(chatId), chatId },
+        }).catch(e => console.warn("[push] fanout failed:", e));
+      });
+    }
+  }
+
   return json({ ok: true, event: evtType });
+}
+
+// ---------- /register-push-token (mobile clients) ----------
+// Mobile clients call this once per sign-in. We stamp the token under
+// commonComm/pushTokens/{uid}/{tokenKey} so handleWebhook can broadcast.
+async function handleRegisterPushToken(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const { uid, token, platform } = body || {};
+  if (!uid || !token) return json({ error: "missing uid/token" }, 400);
+  const tokenKey = encodeKey(token);
+  await fbPatch(env, `${ROOT}/pushTokens/${uid}/${tokenKey}`, {
+    token,
+    platform: platform || "unknown",
+    lastSeen: Date.now(),
+  });
+  return json({ ok: true });
+}
+
+// ---------- Push fan-out (Expo Push Service) ----------
+// Reads every registered token across the org and POSTs to Expo's push API.
+// Expo accepts up to 100 notifications per request; we batch accordingly.
+// For v1 we notify ALL signed-in agents on every inbound message — same model
+// as "everyone in the group gets pinged". Refine to "only ticket owners +
+// recent senders" once the user base grows enough that broad pings annoy.
+async function fanoutPush(env, { title, body, data }) {
+  const all = await fbGet(env, `${ROOT}/pushTokens`);
+  if (!all || typeof all !== "object") return;
+  const messages = [];
+  for (const userMap of Object.values(all)) {
+    if (!userMap || typeof userMap !== "object") continue;
+    for (const entry of Object.values(userMap)) {
+      if (!entry || !entry.token) continue;
+      // Expo tokens look like "ExponentPushToken[...]" — skip anything that
+      // doesn't match so we never POST garbage upstream.
+      if (!/^ExponentPushToken\[.+\]$/.test(entry.token)) continue;
+      messages.push({
+        to: entry.token,
+        title,
+        body,
+        data,
+        sound: "default",
+        priority: "high",
+        channelId: "default",
+      });
+    }
+  }
+  if (!messages.length) return;
+  for (let i = 0; i < messages.length; i += 100) {
+    const batch = messages.slice(i, i + 100);
+    const headers = { "Content-Type": "application/json", "Accept": "application/json" };
+    // EXPO_ACCESS_TOKEN is optional but recommended for higher rate limits.
+    if (env.EXPO_ACCESS_TOKEN) headers["Authorization"] = `Bearer ${env.EXPO_ACCESS_TOKEN}`;
+    try {
+      await fetch("https://exp.host/--/api/v2/push/send", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(batch),
+      });
+    } catch (e) { /* swallow — push is best-effort */ }
+  }
 }
 
 // ---------- /messages?chatId=...  (reconciliation poller fallback) ----------
