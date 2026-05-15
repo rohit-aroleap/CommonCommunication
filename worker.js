@@ -76,8 +76,14 @@ async function handleSend(request, env) {
   const body = await request.json();
   const { chatId, phone, message, sentByUid, sentByName, localMsgId } = body || {};
 
-  if (!message || (!chatId && !phone)) {
-    return json({ error: "missing chatId/phone or message" }, 400);
+  if (!chatId && !phone) {
+    return json({ error: "missing chatId/phone" }, 400);
+  }
+  // Allow media-only sends (no caption). Reject only when BOTH message and
+  // media are missing.
+  const hasMedia = !!(body.media && (body.media.filedata || body.media.url));
+  if (!message && !hasMedia) {
+    return json({ error: "missing message or media" }, 400);
   }
   if (!sentByUid || !sentByName) {
     return json({ error: "missing sentByUid/sentByName" }, 400);
@@ -140,11 +146,23 @@ async function handleSend(request, env) {
     const pushed = await fbPush(env, `${ROOT}/chats/${encodeKey(resolvedChatId)}/messages`, msgRecord);
     msgKey = pushed?.name || null;
   }
+  // Preview: caption if provided, else a media-aware placeholder. Avoids the
+  // empty preview that results from a media-only send.
+  let preview = (message || "").slice(0, 120);
+  if (!preview && body.media) {
+    const mt = String(body.media.type || body.media.mimetype || "").toLowerCase();
+    const name = body.media.filename || "";
+    preview = mt.startsWith("image") ? `📷 ${name || "Photo"}`
+            : mt.startsWith("video") ? `🎥 ${name || "Video"}`
+            : mt.startsWith("audio") ? `🎤 ${name || "Voice note"}`
+            : `📎 ${name || "Attachment"}`;
+    preview = preview.slice(0, 120);
+  }
   await fbPatch(env, `${ROOT}/chats/${encodeKey(resolvedChatId)}/meta`, {
     phone: resolvedPhone,
     chatId: resolvedChatId,
     lastMsgAt: ts,
-    lastMsgPreview: message.slice(0, 120),
+    lastMsgPreview: preview,
     lastMsgDirection: "out",
     lastMsgSentByName: sentByName,
   });
