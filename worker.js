@@ -78,6 +78,9 @@ export default {
       if (url.pathname === "/triage-backfill" && request.method === "POST") {
         return cors(env, await handleTriageBackfill(request, env));
       }
+      if (url.pathname === "/backfill-resolution-notes" && request.method === "POST") {
+        return cors(env, await handleBackfillResolutionNotes(request, env));
+      }
       return cors(env, json({ error: "not_found" }, 404));
     } catch (err) {
       return cors(env, json({ error: String(err && err.message || err) }, 500));
@@ -573,6 +576,95 @@ async function handleTriageBackfill(request, env) {
     done,
     triaged,
   });
+}
+
+// ---------- /backfill-resolution-notes (one-shot migration) ----------
+// For every ticket where status=resolved AND resolutionNote is non-empty AND
+// anchorChatId is set, mirror the resolution into the chat's notes feed —
+// same shape the live resolveTicket flow now writes (v1.090). Idempotent:
+// scans existing notes for source=ticket_resolution + matching ticketId, and
+// skips any ticket whose mirror is already present. Safe to re-run.
+async function handleBackfillResolutionNotes(request, env) {
+  const tickets = await fbGet(env, `${ROOT}/tickets`);
+  if (!tickets || typeof tickets !== "object") {
+    return json({ scanned: 0, mirrored: 0, skipped: 0, results: [] });
+  }
+
+  // Build a set of ticketIds that already have a mirror so we don't dup.
+  const chats = await fbGet(env, `${ROOT}/chats`);
+  const alreadyMirrored = new Set();
+  if (chats && typeof chats === "object") {
+    for (const chat of Object.values(chats)) {
+      const notes = chat?.notes;
+      if (!notes || typeof notes !== "object") continue;
+      for (const n of Object.values(notes)) {
+        if (n && n.source === "ticket_resolution" && n.ticketId) {
+          alreadyMirrored.add(String(n.ticketId));
+        }
+      }
+    }
+  }
+
+  const updates = {};
+  let scanned = 0, mirrored = 0, skipped = 0;
+  const results = [];
+
+  for (const [id, t] of Object.entries(tickets)) {
+    scanned++;
+    if (!t || t.status !== "resolved") { skipped++; continue; }
+    const note = (t.resolutionNote || "").trim();
+    if (!note) { skipped++; continue; }
+    if (!t.anchorChatId) { skipped++; continue; }
+    if (alreadyMirrored.has(String(id))) {
+      skipped++;
+      results.push({ ticketId: id, status: "already_mirrored" });
+      continue;
+    }
+
+    // Generate a Firebase push key client-side so the multi-path PATCH stays
+    // a single subrequest. Push keys are lexicographically ordered by time;
+    // we anchor them to resolvedAt so the mirrored notes sort naturally
+    // alongside any manually-added notes from the same period.
+    const chatKey = encodeKey(t.anchorChatId);
+    const noteKey = generatePushKey(t.resolvedAt || Date.now());
+    const titleHint = t.title ? ` "${t.title}"` : "";
+    updates[`${ROOT}/chats/${chatKey}/notes/${noteKey}`] = {
+      text: `🎫 Resolved ticket${titleHint}: ${note}`,
+      authorUid: t.resolvedBy || null,
+      authorName: t.resolvedByName || "(unknown)",
+      createdAt: t.resolvedAt || Date.now(),
+      source: "ticket_resolution",
+      ticketId: id,
+      backfilled: true,
+    };
+    mirrored++;
+    results.push({ ticketId: id, chatKey, status: "mirrored" });
+  }
+
+  if (Object.keys(updates).length > 0) {
+    await fbPatchRoot(env, updates);
+  }
+
+  return json({ scanned, mirrored, skipped, results });
+}
+
+// Firebase RTDB push-key generator. Same algorithm as the JS SDK: 8 chars
+// of timestamp + 12 chars of randomness, all in a 64-char alphabet that
+// preserves lex order. Used by the one-shot migration so we can write all
+// the mirror notes in a single multi-path PATCH without one push() per note.
+const PUSH_CHARS = "-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz";
+function generatePushKey(now) {
+  let ts = now;
+  const timeChars = new Array(8);
+  for (let i = 7; i >= 0; i--) {
+    timeChars[i] = PUSH_CHARS.charAt(ts % 64);
+    ts = Math.floor(ts / 64);
+  }
+  let id = timeChars.join("");
+  for (let i = 0; i < 12; i++) {
+    id += PUSH_CHARS.charAt(Math.floor(Math.random() * 64));
+  }
+  return id;
 }
 
 // ---------- /messages?chatId=...  (reconciliation poller fallback) ----------
