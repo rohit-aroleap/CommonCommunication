@@ -14,6 +14,14 @@
 const PERISKOPE_BASE = "https://api.periskope.app/v1";
 const ROOT = "commonComm";
 
+// Admin emails always receive push pings, even when a chat has a targeted
+// ticket assignee. Mirror the dashboard's BOOTSTRAP_ADMINS list — if the
+// dashboard learns a new admin, bump this list too.
+const ADMIN_EMAILS = new Set([
+  "rohit@aroleap.com",
+  "rohitpatel.mailid297@gmail.com",
+]);
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -63,6 +71,9 @@ export default {
       }
       if (url.pathname === "/register-push-token" && request.method === "POST") {
         return cors(env, await handleRegisterPushToken(request, env));
+      }
+      if (url.pathname === "/search-messages" && request.method === "GET") {
+        return cors(env, await handleSearchMessages(request, env));
       }
       return cors(env, json({ error: "not_found" }, 404));
     } catch (err) {
@@ -291,7 +302,8 @@ async function handleWebhook(request, env) {
 
   // Push notification fan-out. Only ping mobile devices for INBOUND messages
   // (not for our own outbound echoes). Fire-and-forget so we don't slow the
-  // webhook ACK that Periskope is waiting on.
+  // webhook ACK that Periskope is waiting on. Targeting: ticket assignees +
+  // admins when the chat has open tickets, broadcast otherwise.
   if (!isFromMe) {
     const senderLabel = (!isGroup && senderName) ? senderName :
                         (isGroup ? `Group ${chatIdToPhone(chatId)}` : chatIdToPhone(chatId));
@@ -302,7 +314,19 @@ async function handleWebhook(request, env) {
           title: senderLabel,
           body: bodyText.slice(0, 200),
           data: { chatKey: encodeKey(chatId), chatId },
+          chatId,
         }).catch(e => console.warn("[push] fanout failed:", e));
+      });
+    }
+  }
+
+  // Best-effort AI triage — tag urgency/intent on inbound (1-on-1) messages
+  // so the dashboard can surface urgent chats. Fire-and-forget; don't block
+  // the webhook ACK. Skip groups (too noisy) and our own outbound echoes.
+  if (!isFromMe && !isGroup && (text || media)) {
+    if (typeof globalThis.queueMicrotask === "function") {
+      globalThis.queueMicrotask(() => {
+        triageInbound(env, { chatId, text, media, messageType }).catch(() => {});
       });
     }
   }
@@ -329,15 +353,25 @@ async function handleRegisterPushToken(request, env) {
 // ---------- Push fan-out (Expo Push Service) ----------
 // Reads every registered token across the org and POSTs to Expo's push API.
 // Expo accepts up to 100 notifications per request; we batch accordingly.
-// For v1 we notify ALL signed-in agents on every inbound message — same model
-// as "everyone in the group gets pinged". Refine to "only ticket owners +
-// recent senders" once the user base grows enough that broad pings annoy.
-async function fanoutPush(env, { title, body, data }) {
+//
+// Targeting:
+//   - If the chat has open tickets with assignees → ping those assignees
+//     + every admin (admins always get fan-out as safety net).
+//   - Otherwise → broadcast to every signed-in trainer (legacy behavior).
+//
+// Why: once tickets are widely used, broadcasting every inbound trains
+// people to ignore the app. But unassigned messages still need someone to
+// triage them, so the fallback stays inclusive.
+async function fanoutPush(env, { title, body, data, chatId }) {
   const all = await fbGet(env, `${ROOT}/pushTokens`);
   if (!all || typeof all !== "object") return;
+
+  const targetUids = await resolvePushTargetUids(env, chatId);
+
   const messages = [];
-  for (const userMap of Object.values(all)) {
+  for (const [uid, userMap] of Object.entries(all)) {
     if (!userMap || typeof userMap !== "object") continue;
+    if (targetUids && !targetUids.has(uid)) continue;
     for (const entry of Object.values(userMap)) {
       if (!entry || !entry.token) continue;
       // Expo tokens look like "ExponentPushToken[...]" — skip anything that
@@ -368,6 +402,99 @@ async function fanoutPush(env, { title, body, data }) {
       });
     } catch (e) { /* swallow — push is best-effort */ }
   }
+}
+
+// Returns a Set of uids to push to, or null for "broadcast to everyone".
+// Logic: look at the chat's open tickets. If any are assigned, push to those
+// assignees + all admins. If none assigned, return null (broadcast).
+async function resolvePushTargetUids(env, chatId) {
+  if (!chatId) return null;
+  const chatKey = encodeKey(chatId);
+  const ticketIdsMap = await fbGet(env, `${ROOT}/chats/${chatKey}/tickets`);
+  if (!ticketIdsMap || typeof ticketIdsMap !== "object") return null;
+
+  const assignees = new Set();
+  for (const id of Object.keys(ticketIdsMap)) {
+    const t = await fbGet(env, `${ROOT}/tickets/${id}`);
+    if (t && t.status === "open" && t.assignee) {
+      assignees.add(String(t.assignee));
+    }
+  }
+  if (!assignees.size) return null;
+
+  // Add admins (looked up by email match in users/).
+  const users = await fbGet(env, `${ROOT}/users`);
+  if (users && typeof users === "object") {
+    for (const [uid, u] of Object.entries(users)) {
+      const email = String(u?.email || "").toLowerCase();
+      if (email && ADMIN_EMAILS.has(email)) assignees.add(uid);
+    }
+  }
+  return assignees;
+}
+
+// AI triage: classify an inbound message into { urgency, intent } and stamp
+// it on chat meta so the dashboard can highlight urgent chats. Best-effort —
+// failures are swallowed and the message is still delivered normally.
+async function triageInbound(env, { chatId, text, media, messageType }) {
+  if (!env.CLAUDE_API_KEY) return;
+  const chatKey = encodeKey(chatId);
+  const body = (text || "").trim() || (media ? `[${messageType || "media"}: ${media.fileName || ""}]` : "");
+  if (!body) return;
+
+  const systemPrompt = `Classify a single inbound WhatsApp message from a fitness/wellness customer.
+
+Reply with ONE LINE of compact JSON, no markdown, no commentary, exactly this shape:
+{"urgency":"urgent|normal|low","intent":"complaint|question|booking|chitchat|other"}
+
+Rules:
+- urgent: angry tone, refund requests, cancellations, injuries, today/tomorrow-deadline asks, safety, no-show callouts
+- normal: ordinary questions, scheduling, status updates that need a reply
+- low: chitchat, thanks, emoji-only, "ok", read-receipts, automated text
+- complaint: explicit dissatisfaction, problem reports
+- question: asking how/what/when/why
+- booking: scheduling, rescheduling, location/time confirmation
+- chitchat: greetings, thanks, casual banter
+- other: anything else`;
+
+  let claudeJson;
+  try {
+    const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": env.CLAUDE_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 60,
+        system: systemPrompt,
+        messages: [{ role: "user", content: body.slice(0, 500) }],
+      }),
+    });
+    if (!claudeRes.ok) return;
+    claudeJson = await safeJson(claudeRes);
+  } catch { return; }
+
+  const raw = claudeJson?.content?.[0]?.text || "";
+  let parsed;
+  try {
+    // Strip code fences if the model ignored instructions.
+    const cleaned = raw.replace(/```(?:json)?/gi, "").trim();
+    parsed = JSON.parse(cleaned);
+  } catch { return; }
+
+  const allowedUrgency = new Set(["urgent", "normal", "low"]);
+  const allowedIntent = new Set(["complaint", "question", "booking", "chitchat", "other"]);
+  const urgency = allowedUrgency.has(parsed?.urgency) ? parsed.urgency : "normal";
+  const intent = allowedIntent.has(parsed?.intent) ? parsed.intent : "other";
+
+  await fbPatch(env, `${ROOT}/chats/${chatKey}/meta`, {
+    triageUrgency: urgency,
+    triageIntent: intent,
+    triageAt: Date.now(),
+  });
 }
 
 // ---------- /messages?chatId=...  (reconciliation poller fallback) ----------
@@ -1083,6 +1210,52 @@ async function handleFetchMessages(request, env) {
   });
   const j = await safeJson(r);
   return json(j, r.ok ? 200 : 502);
+}
+
+// ---------- /search-messages?q=...&limit=50 ----------
+// Substring search across every message in commonComm/chats. Single Firebase
+// fetch of the chats branch; in-memory scan; return top N hits newest-first
+// with enough metadata for the dashboard to render result rows + jump to the
+// chat. Skips outbound-only matches when scope=in is set (rarely used).
+async function handleSearchMessages(request, env) {
+  const url = new URL(request.url);
+  const q = String(url.searchParams.get("q") || "").trim().toLowerCase();
+  const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit")) || 50));
+  if (q.length < 2) return json({ error: "query must be at least 2 chars" }, 400);
+
+  const chats = await fbGet(env, `${ROOT}/chats`);
+  if (!chats || typeof chats !== "object") return json({ results: [] });
+
+  const hits = [];
+  for (const [chatKey, chat] of Object.entries(chats)) {
+    if (!chat || typeof chat !== "object") continue;
+    const meta = chat.meta || {};
+    const messages = chat.messages || {};
+    if (typeof messages !== "object") continue;
+    for (const [msgKey, m] of Object.entries(messages)) {
+      if (!m || typeof m !== "object") continue;
+      const hay = String(m.text || "").toLowerCase() +
+                  (m.media?.caption ? " " + String(m.media.caption).toLowerCase() : "") +
+                  (m.media?.fileName ? " " + String(m.media.fileName).toLowerCase() : "");
+      if (!hay.includes(q)) continue;
+      hits.push({
+        chatKey,
+        chatId: meta.chatId || null,
+        chatName: meta.groupName || meta.contactName || meta.displayName || null,
+        phone: meta.phone || null,
+        chatType: meta.chatType || "user",
+        msgKey,
+        text: (m.text || m.media?.caption || m.media?.fileName || "").slice(0, 300),
+        ts: m.ts || 0,
+        direction: m.direction || "in",
+        sentByName: m.sentByName || null,
+        messageType: m.messageType || null,
+      });
+    }
+  }
+
+  hits.sort((a, b) => b.ts - a.ts);
+  return json({ results: hits.slice(0, limit), total: hits.length });
 }
 
 // ---------- Periskope helpers ----------

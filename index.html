@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.082</title>
+<title>CommonCommunication v1.083</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -150,6 +150,60 @@
     background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%2354656f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='8'/><line x1='21' y1='21' x2='16.65' y2='16.65'/></svg>");
     background-repeat: no-repeat; background-position: 12px center;
   }
+  .msg-search-toggle {
+    margin-top: 6px;
+    width: 100%; padding: 6px 10px;
+    background: transparent; border: 1px dashed var(--border);
+    border-radius: 6px; cursor: pointer;
+    font-size: 12px; color: var(--muted);
+    transition: all .15s;
+  }
+  .msg-search-toggle:hover { background: var(--hover); color: var(--text); border-color: var(--text); }
+  .msg-search-toggle:disabled { opacity: .4; cursor: not-allowed; }
+  /* Modal-style message search results panel */
+  .msg-search-modal {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+    display: none; align-items: flex-start; justify-content: center;
+    z-index: 9000; padding: 60px 20px;
+  }
+  .msg-search-modal.visible { display: flex; }
+  .msg-search-panel {
+    background: var(--side); border-radius: 10px;
+    width: 100%; max-width: 720px; max-height: 80vh;
+    display: flex; flex-direction: column;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.2);
+  }
+  .msg-search-head {
+    padding: 14px 18px; border-bottom: 1px solid var(--border);
+    display: flex; gap: 10px; align-items: center;
+  }
+  .msg-search-head input {
+    flex: 1; height: 36px; border: 1px solid var(--border);
+    border-radius: 6px; padding: 0 12px; font-size: 14px; outline: none;
+  }
+  .msg-search-head input:focus { border-color: var(--green); }
+  .msg-search-head button {
+    background: var(--green); color: white; border: none;
+    border-radius: 6px; padding: 0 14px; height: 36px;
+    font-weight: 600; cursor: pointer;
+  }
+  .msg-search-head button.cancel { background: transparent; color: var(--muted); padding: 0 8px; }
+  .msg-search-results {
+    flex: 1; overflow-y: auto; padding: 8px 0;
+  }
+  .msg-search-result {
+    padding: 10px 18px; cursor: pointer;
+    border-bottom: 1px solid var(--border);
+  }
+  .msg-search-result:hover { background: var(--hover); }
+  .msg-search-result .who {
+    font-size: 13px; font-weight: 600; color: var(--text);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .msg-search-result .when { font-size: 11px; color: var(--muted); font-weight: 400; }
+  .msg-search-result .snippet { font-size: 13px; color: var(--muted); margin-top: 3px; }
+  .msg-search-result .snippet mark { background: #fef08a; padding: 0 2px; }
+  .msg-search-empty { padding: 24px; text-align: center; color: var(--muted); font-size: 13px; }
 
   .chat-list { flex: 1; overflow-y: auto; }
   .chat-row {
@@ -508,6 +562,11 @@
   .filter-pill:hover { background: var(--border); color: var(--text); }
   .filter-pill.active { background: var(--green); color: white; }
   .filter-pill.active:hover { background: var(--green-dark); }
+  /* Urgent pill: red when there are urgent items, regardless of active state. */
+  .filter-pill[data-filter="Urgent"]:not(.active) { background: #fee2e2; color: #991b1b; }
+  .filter-pill[data-filter="Urgent"]:not(.active):hover { background: #fecaca; }
+  .filter-pill[data-filter="Urgent"].active { background: #dc2626; color: white; }
+  .filter-pill[data-filter="Urgent"].active:hover { background: #b91c1c; }
 
   /* Customer info drawer — collapsed to a 40px rail by default, expands to a
      full push-drawer when the rail's toggle button is clicked. */
@@ -828,6 +887,23 @@
     margin-left: 4px;
     letter-spacing: .3px;
   }
+  /* AI triage badges on chat rows */
+  .ai-badge {
+    display: inline-block;
+    border-radius: 8px; padding: 1px 6px;
+    font-size: 9px; font-weight: 700;
+    margin-left: 4px;
+    letter-spacing: .3px;
+  }
+  .ai-badge.urgent { background: #fee2e2; color: #991b1b; }
+  .ai-badge.low { background: #f3f4f6; color: #6b7280; }
+  .ai-badge.intent { background: #e0e7ff; color: #3730a3; }
+  .chat-row.urgent { background: #fff5f5; }
+  .chat-row.urgent:hover { background: #ffe8e8; }
+  .chat-row.urgent .name::before {
+    content: "🚨";
+    margin-right: 4px;
+  }
 
   /* Internal notes panel pinned at top of thread */
   .notes-panel {
@@ -982,7 +1058,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.082</div>
+    <div class="login-version">v1.083</div>
   </div>
 </div>
 
@@ -990,7 +1066,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.082</span>
+    <span class="ver">v1.083</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -1024,6 +1100,7 @@
       </div>
       <div class="search-row">
         <input id="searchInput" placeholder="Search chats..." />
+        <button class="msg-search-toggle" id="msgSearchBtn" title="Search inside messages across all chats">📄 Search messages</button>
       </div>
       <div class="filter-row" id="filterRow"></div>
       <div class="tag-filter-row" id="tagFilterRow"></div>
@@ -1139,6 +1216,20 @@
 </div>
 
 <!-- ============== TICKETS (CENTRAL) MODAL ============== -->
+<!-- Full-text message search modal -->
+<div class="msg-search-modal" id="msgSearchModal">
+  <div class="msg-search-panel">
+    <div class="msg-search-head">
+      <input type="text" id="msgSearchInput" placeholder="Search every message — type 2+ chars and press Enter" autocomplete="off" />
+      <button id="msgSearchGo">Search</button>
+      <button class="cancel" id="msgSearchClose">Cancel</button>
+    </div>
+    <div class="msg-search-results" id="msgSearchResults">
+      <div class="msg-search-empty">Type a query to search across every message in every chat.</div>
+    </div>
+  </div>
+</div>
+
 <div class="modal-back" id="ticketsModal">
   <div class="modal" style="width:920px; max-width:96vw; height:680px; max-height:88vh; display:flex; flex-direction:column;">
     <h3 style="margin-bottom:6px;">All tickets</h3>
@@ -1286,7 +1377,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.082";
+const APP_VERSION = "v1.083";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -2463,6 +2554,9 @@ function listenChats() {
         preview,
         direction: meta.lastMsgDirection || "in",
         sentByName: meta.lastMsgSentByName || null,
+        triageUrgency: meta.triageUrgency || null,
+        triageIntent: meta.triageIntent || null,
+        triageAt: meta.triageAt || 0,
       });
     }
     rows.sort((a,b) => (b.lastMsgAt || 0) - (a.lastMsgAt || 0));
@@ -3255,6 +3349,10 @@ function renderChatList(rows) {
       v = v.filter(r => (r.lastMsgAt || 0) >= liveCutoff);
     } else if (currentStatusFilter === "My tickets") {
       v = v.filter(r => myChatKeys.has(r.chatKey));
+    } else if (currentStatusFilter === "Urgent") {
+      // Only count "urgent" while the latest message is still inbound — once
+      // we reply, the badge clears so the list doesn't keep blaring.
+      v = v.filter(r => r.direction === "in" && r.triageUrgency === "urgent");
     } else if (currentStatusFilter !== "All") {
       v = v.filter(r => getSubscriptionStatusFor(r.phone) === currentStatusFilter);
     }
@@ -3312,13 +3410,26 @@ function renderChatList(rows) {
     const triage = isChatNeedsTriage(r.chatKey, r.direction);
     const triageBadge = triage ? `<span class="triage-badge" title="Inbound message, no open ticket yet — needs triage">🆕 NEW</span>` : "";
     const unreadDot = unread ? `<span class="unread-dot" title="New message on your ticket"></span>` : "";
-    const rowClass = `chat-row${r.chatKey === currentChatId ? " active" : ""}${unread ? " unread" : ""}`;
+    // AI triage badge. Only show when the latest message is INBOUND (otherwise
+    // a stale tag from yesterday's customer message clutters the row after we
+    // reply). Urgent gets a row-tint + 🚨 prefix via CSS; we don't print the
+    // word "URGENT" again since the icon already conveys it.
+    const showTriage = r.direction === "in" && r.triageUrgency;
+    let aiBadge = "";
+    let urgentRowClass = "";
+    if (showTriage) {
+      if (r.triageUrgency === "urgent") urgentRowClass = " urgent";
+      else if (r.triageUrgency === "low") aiBadge += `<span class="ai-badge low" title="AI: low priority (${r.triageIntent || "chitchat"})">LOW</span>`;
+      if (r.triageIntent === "complaint") aiBadge += `<span class="ai-badge intent" title="AI: customer complaint">complaint</span>`;
+      else if (r.triageIntent === "booking") aiBadge += `<span class="ai-badge intent" title="AI: booking/scheduling">booking</span>`;
+    }
+    const rowClass = `chat-row${r.chatKey === currentChatId ? " active" : ""}${unread ? " unread" : ""}${urgentRowClass}`;
     return `
     <div class="${rowClass}" data-key="${escapeHtml(r.chatKey)}">
       <div class="${avatarClass}" style="${avatarStyle}">${escapeHtml(initial)}${extraBadge}</div>
       <div class="meta">
         <div class="top">
-          <span class="name">${lockPrefix}${escapeHtml(r.name)}${triageBadge}</span>
+          <span class="name">${lockPrefix}${escapeHtml(r.name)}${triageBadge}${aiBadge}</span>
           <span class="time">${formatTime(r.lastMsgAt)}${unreadDot}</span>
         </div>
         <div class="bottom">
@@ -3337,9 +3448,102 @@ function renderChatList(rows) {
 
 searchInput.oninput = () => renderChatList(lastChatRows);
 
+// ====== MESSAGE SEARCH MODAL ======
+// Opens a full-text search across every message in every chat. The worker
+// scans Firebase server-side and returns results newest-first. Clicking a
+// result opens the chat (we don't yet jump to the specific message — that
+// would need pagination + scroll-to-msg plumbing).
+const msgSearchBtn = $("msgSearchBtn");
+const msgSearchModal = $("msgSearchModal");
+const msgSearchInput = $("msgSearchInput");
+const msgSearchGo = $("msgSearchGo");
+const msgSearchClose = $("msgSearchClose");
+const msgSearchResults = $("msgSearchResults");
+
+function openMsgSearch() {
+  // Carry over whatever's in the chat-list search as a starting query.
+  msgSearchInput.value = searchInput.value.trim();
+  msgSearchResults.innerHTML = '<div class="msg-search-empty">Type a query to search across every message in every chat.</div>';
+  msgSearchModal.classList.add("visible");
+  setTimeout(() => msgSearchInput.focus(), 50);
+  if (msgSearchInput.value.length >= 2) runMsgSearch();
+}
+function closeMsgSearch() {
+  msgSearchModal.classList.remove("visible");
+}
+
+let _msgSearchSeq = 0;
+async function runMsgSearch() {
+  const q = msgSearchInput.value.trim();
+  if (q.length < 2) {
+    msgSearchResults.innerHTML = '<div class="msg-search-empty">Type at least 2 characters.</div>';
+    return;
+  }
+  if (!WORKER_URL) {
+    msgSearchResults.innerHTML = '<div class="msg-search-empty">Worker URL not configured.</div>';
+    return;
+  }
+  const mySeq = ++_msgSearchSeq;
+  msgSearchResults.innerHTML = '<div class="msg-search-empty">Searching…</div>';
+  try {
+    const res = await fetch(`${WORKER_URL}/search-messages?q=${encodeURIComponent(q)}&limit=80`);
+    if (mySeq !== _msgSearchSeq) return; // a newer search has been launched
+    const j = await res.json();
+    if (!res.ok || !j?.results) {
+      msgSearchResults.innerHTML = `<div class="msg-search-empty">Search failed: ${escapeHtml(j?.error || res.statusText || "unknown error")}</div>`;
+      return;
+    }
+    if (j.results.length === 0) {
+      msgSearchResults.innerHTML = `<div class="msg-search-empty">No matches for "${escapeHtml(q)}".</div>`;
+      return;
+    }
+    const re = new RegExp(escapeRegex(q), "gi");
+    msgSearchResults.innerHTML = j.results.map(r => {
+      // Resolve a friendly display name the same way the sidebar does.
+      const displayName = resolveDisplayName(r.phone, r.chatName, { chatType: r.chatType });
+      const snippet = highlightSnippet(r.text, re);
+      const whoLabel = r.direction === "out" && r.sentByName ? `${escapeHtml(r.sentByName)} → ${escapeHtml(displayName)}` : escapeHtml(displayName);
+      return `<div class="msg-search-result" data-key="${escapeHtml(r.chatKey)}">
+        <div class="who">${whoLabel}<span class="when">${formatTime(r.ts)}</span></div>
+        <div class="snippet">${snippet}</div>
+      </div>`;
+    }).join("");
+    const totalNote = j.total > j.results.length ? ` (showing ${j.results.length} of ${j.total})` : "";
+    if (totalNote) {
+      msgSearchResults.insertAdjacentHTML("afterbegin",
+        `<div class="msg-search-empty" style="text-align:left; padding:8px 18px;">${j.results.length} matches${totalNote}</div>`);
+    }
+    msgSearchResults.querySelectorAll(".msg-search-result").forEach(el => {
+      el.onclick = () => {
+        closeMsgSearch();
+        openChat(el.dataset.key);
+      };
+    });
+  } catch (e) {
+    if (mySeq !== _msgSearchSeq) return;
+    msgSearchResults.innerHTML = `<div class="msg-search-empty">Search failed: ${escapeHtml(String(e?.message || e))}</div>`;
+  }
+}
+
+function escapeRegex(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+function highlightSnippet(text, re) {
+  return escapeHtml(text).replace(re, m => `<mark>${m}</mark>`);
+}
+
+msgSearchBtn.onclick = openMsgSearch;
+msgSearchClose.onclick = closeMsgSearch;
+msgSearchGo.onclick = runMsgSearch;
+msgSearchInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); runMsgSearch(); }
+  if (e.key === "Escape") closeMsgSearch();
+});
+msgSearchModal.addEventListener("click", (e) => {
+  if (e.target === msgSearchModal) closeMsgSearch();
+});
+
 // ====== STATUS FILTER PILLS ======
 const STATUS_FILTERS = [
-  "All", "Live", "My tickets", "ACTIVE", "CANCELLED", "INITIALIZED", "PAUSED", "CUSTOMER_PAUSED", "CUSTOMER_CANCELLED", "Daily Groups"
+  "All", "Urgent", "Live", "My tickets", "ACTIVE", "CANCELLED", "INITIALIZED", "PAUSED", "CUSTOMER_PAUSED", "CUSTOMER_CANCELLED", "Daily Groups"
 ];
 const LIVE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const DAILY_GROUP_PREFIX = "Daily Workout Ferra C";
@@ -3350,6 +3554,7 @@ let currentStatusFilter = "All";
 
 // Optional small subtitle under specific pills to hint what they mean
 const PILL_HINTS = {
+  "Urgent": "(AI flagged)",
   "Live": "(last 7 days)",
   "Daily Groups": "(workout cohorts)",
 };
@@ -3439,6 +3644,7 @@ function computeStatusCounts(visibleRows, myChatKeys) {
     counts.All++;
     if ((r.lastMsgAt || 0) >= liveCutoff) counts.Live++;
     if (set.has(r.chatKey)) counts["My tickets"]++;
+    if (r.direction === "in" && r.triageUrgency === "urgent") counts["Urgent"]++;
     const st = getSubscriptionStatusFor(r.phone);
     if (st && counts[st] !== undefined) counts[st]++;
   }
