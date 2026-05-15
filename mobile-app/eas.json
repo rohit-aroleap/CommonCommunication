@@ -21,13 +21,12 @@
   "submit": {
     "production": {
       "ios": {
-        "//": "Fill these in after you create the app in App Store Connect.",
-        "//": "appleId is your Apple ID email. ascAppId is the numeric App ID",
-        "//": "from App Store Connect (e.g. 6712345678). appleTeamId is the",
-        "//": "10-char Team ID from developer.apple.com → Membership.",
-        "appleId": "YOUR_APPLE_ID@example.com",
-        "ascAppId": "YOUR_NUMERIC_ASC_APP_ID",
-        "appleTeamId": "YOUR_10_CHAR_TEAM_ID"
+        "appleId": "rohitpatel.mailid297@gmail.com",
+        "appleTeamId": "85X9566VCY",
+        "//": "ascAppId — fill this in after creating the CommonCommunication app",
+        "//": "in App Store Connect. It's the numeric ID shown in the URL of the",
+        "//": "app's Info page (e.g. appstoreconnect.apple.com/apps/6712345678/...)",
+        "ascAppId": "YOUR_NUMERIC_ASC_APP_ID"
       }
     }
   }
