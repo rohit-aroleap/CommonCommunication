@@ -27,7 +27,7 @@
     "expo-status-bar": "~55.0.6",
     "expo-updates": "~55.0.22",
     "expo-web-browser": "~55.0.16",
-    "firebase": "^10.13.0",
+    "firebase": "^11.0.0",
     "react": "19.2.0",
     "react-native": "0.83.6",
     "react-native-gesture-handler": "~2.30.0",
