@@ -1,0 +1,4 @@
+# The repo root isn't a node project — npm install here is a mistake.
+# Block the accidental package-lock from getting committed again.
+/package-lock.json
+/node_modules/
