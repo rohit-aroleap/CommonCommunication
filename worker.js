@@ -436,12 +436,17 @@ async function backfillOneChat(env, chat, msgsPerChat) {
   if (!msgsRes.ok) return { chatId, error: "msgs_fetch_failed" };
   const messages = msgsJson?.messages || [];
 
-  // (2) Fetch existing in-chat messages, build periskopeMsgId set for local dedup
+  // (2) Fetch existing in-chat messages. Build TWO maps:
+  //   existingById: periskopeMsgId -> { msgKey, existing record }
+  //   This lets us either (a) skip if already complete, or (b) UPGRADE the
+  //   existing record when Periskope now returns media we previously failed
+  //   to extract. The upgrade path is what repairs records written by older
+  //   worker versions whose extractMedia returned null.
   const existingMsgs = await fbGet(env, `${ROOT}/chats/${chatKey}/messages`);
-  const existingIds = new Set();
+  const existingById = new Map();
   if (existingMsgs && typeof existingMsgs === "object") {
-    for (const m of Object.values(existingMsgs)) {
-      if (m && m.periskopeMsgId) existingIds.add(m.periskopeMsgId);
+    for (const [key, m] of Object.entries(existingMsgs)) {
+      if (m && m.periskopeMsgId) existingById.set(m.periskopeMsgId, { msgKey: key, record: m });
     }
   }
 
@@ -450,19 +455,34 @@ async function backfillOneChat(env, chat, msgsPerChat) {
 
   // Build multi-path update
   const updates = {};
-  let written = 0, latestTs = 0, latestPreview = "", latestDir = "in";
+  let written = 0, upgraded = 0, latestTs = 0, latestPreview = "", latestDir = "in";
 
   for (const m of messages) {
     const id = m.message_id || m.unique_id || m.id?.serialized || null;
-    if (!id || existingIds.has(id)) continue;
+    if (!id) continue;
 
     const isFromMe = m.from_me === true;
     const text = m.body || "";
     const ts = parseTs(m.timestamp);
     const senderPhone = m.sender_phone ? String(m.sender_phone).split("@")[0] : chatIdToPhone(chatId);
-    const msgKey = encodeKey(id);
     const media = extractMedia(m);
 
+    const prior = existingById.get(id);
+    if (prior) {
+      // Already imported. If Periskope now has media AND the stored record
+      // is missing the URL (older worker / optimistic-send write), patch it.
+      const priorMediaUrl = prior.record?.media?.url || null;
+      if (media && media.url && !priorMediaUrl) {
+        updates[`${ROOT}/chats/${chatKey}/messages/${prior.msgKey}/media`] = media;
+        if (m.message_type) {
+          updates[`${ROOT}/chats/${chatKey}/messages/${prior.msgKey}/messageType`] = m.message_type;
+        }
+        upgraded++;
+      }
+      continue;
+    }
+
+    const msgKey = encodeKey(id);
     const msgRecord = {
       direction: isFromMe ? "out" : "in",
       text: media?.caption || text,
@@ -532,7 +552,8 @@ async function backfillOneChat(env, chat, msgsPerChat) {
     chatId,
     name: chat.chat_name || chatIdToPhone(chatId),
     written,
-    skipped: messages.length - written,
+    upgraded,
+    skipped: messages.length - written - upgraded,
     fetched: messages.length,
   };
 }
