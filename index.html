@@ -3606,24 +3606,27 @@ function renderChatList(rows) {
     return;
   }
 
-  // Partition the filtered list so favorites + chats with my open ticket
-  // float to the top. We skip partitioning for filters whose meaning IS
-  // "show me this set" (My tickets, Favorites, Daily Groups) — the user
-  // already picked a focused view.
+  // Partition the filtered list: chats with my open ticket pin to the
+  // very top, then my favorites, then everyone else. We skip partitioning
+  // for filters whose meaning IS "show me this set" (My tickets,
+  // Favorites, Daily Groups) — the user already picked a focused view.
   const partitionEligible =
     currentStatusFilter !== "Favorites" &&
     currentStatusFilter !== "My tickets" &&
     currentStatusFilter !== "Daily Groups";
-  const pinnedRows = [];
+  const ticketRows = [];
+  const favRows = [];
   const restRows = [];
   if (partitionEligible) {
     for (const r of filtered) {
-      if (isFavorite(r.chatKey) || myChatKeys.has(r.chatKey)) pinnedRows.push(r);
+      if (myChatKeys.has(r.chatKey)) ticketRows.push(r);
+      else if (isFavorite(r.chatKey)) favRows.push(r);
       else restRows.push(r);
     }
   } else {
     restRows.push(...filtered);
   }
+  const pinnedRows = [...ticketRows, ...favRows];
 
   const renderRow = (r) => {
     const isGroup = r.chatType === "group";

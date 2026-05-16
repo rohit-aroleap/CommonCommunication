@@ -124,27 +124,29 @@ export function ChatsScreen() {
     sharedSubsByPhone,
   ]);
 
-  // Partition the filtered list into a pinned block (favorites ∪ chats with
-  // an open ticket assigned to me) and the rest. Within each block we keep
-  // the existing lastMsgAt sort so recent activity floats up.
+  // Partition the filtered list into a pinned block (chats with an open
+  // ticket assigned to me first, then favorites that aren't already there)
+  // and the rest. Within each sub-block we keep the existing lastMsgAt sort
+  // so recent activity floats up.
   type ListItem =
     | { kind: "row"; key: string; item: (typeof enriched)[number] }
     | { kind: "divider"; key: string };
 
   const listData = useMemo<ListItem[]>(() => {
-    const pinned: typeof filtered = [];
+    const tickets: typeof filtered = [];
+    const favs: typeof filtered = [];
     const rest: typeof filtered = [];
     for (const r of filtered) {
-      const isPinned =
-        myFavorites[r.row.chatKey] || myTicketChatKeys.has(r.row.chatKey);
-      if (isPinned) pinned.push(r);
+      if (myTicketChatKeys.has(r.row.chatKey)) tickets.push(r);
+      else if (myFavorites[r.row.chatKey]) favs.push(r);
       else rest.push(r);
     }
     if (favoritesOnly) {
-      return pinned
+      return [...tickets, ...favs]
         .filter((r) => myFavorites[r.row.chatKey])
         .map((r) => ({ kind: "row", key: r.row.chatKey, item: r }));
     }
+    const pinned = [...tickets, ...favs];
     const items: ListItem[] = pinned.map((r) => ({
       kind: "row",
       key: r.row.chatKey,
