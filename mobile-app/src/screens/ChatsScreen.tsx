@@ -15,6 +15,7 @@ import { DAILY_SENTINEL } from "@/types";
 import { FERRA_TAG_STAGE } from "@/config";
 import { normalizeFerraPhone } from "@/lib/ferra";
 import { shouldSuggestPin } from "@/lib/favorites";
+import { getDisplayVersion } from "@/lib/version";
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "@/screens/types";
@@ -238,6 +239,11 @@ export function ChatsScreen() {
             </Text>
           </View>
         }
+        ListFooterComponent={
+          <View style={styles.versionFooter}>
+            <Text style={styles.versionTxt}>{getDisplayVersion()}</Text>
+          </View>
+        }
       />
     </SafeAreaView>
   );
@@ -247,6 +253,8 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.panel },
   empty: { padding: 60, alignItems: "center" },
   emptyTxt: { color: colors.muted, fontSize: 14 },
+  versionFooter: { paddingVertical: 16, alignItems: "center" },
+  versionTxt: { color: colors.muted, fontSize: 10 },
   divider: {
     flexDirection: "row",
     alignItems: "center",

@@ -24,6 +24,7 @@ import * as WebBrowser from "expo-web-browser";
 import { useAuth } from "./AuthContext";
 import { GOOGLE_OAUTH } from "@/config";
 import { colors } from "@/theme";
+import { getDisplayVersion } from "@/lib/version";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -183,7 +184,7 @@ export function LoginScreen() {
           </Text>
         )}
         {error && <Text style={styles.error}>{error}</Text>}
-        <Text style={styles.version}>Mobile · v0.2</Text>
+        <Text style={styles.version}>{getDisplayVersion()}</Text>
       </View>
     </KeyboardAvoidingView>
   );
