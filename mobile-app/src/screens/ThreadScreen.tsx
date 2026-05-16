@@ -43,12 +43,14 @@ import { colors, space } from "@/theme";
 import {
   useAppData,
   openTicketsForChat,
+  isDmKey,
+  pairKeyFromChatKey,
 } from "@/data/AppDataContext";
 import { useAuth } from "@/auth/AuthContext";
 import { resolveDisplayName } from "@/lib/displayName";
 import { dayLabel } from "@/lib/format";
 import { chatKeyToChatId } from "@/lib/encodeKey";
-import { fetchChatInfo, sendMessage } from "@/lib/worker";
+import { fetchChatInfo, sendMessage, notifyDm } from "@/lib/worker";
 import { dedupMessages } from "@/lib/messageDedup";
 import { MessageBubble } from "@/components/MessageBubble";
 import { TicketBanner } from "@/components/TicketBanner";
@@ -68,6 +70,7 @@ export function ThreadScreen({ route, navigation }: Props) {
     chatMetaByKey,
     tickets,
     teamUsers,
+    dmRows,
     habitUsers,
     cancelledUsers,
     ferraIndex,
@@ -75,15 +78,28 @@ export function ThreadScreen({ route, navigation }: Props) {
     markChatSeen,
   } = useAppData();
 
+  // DM mode: the chatKey is "dm:" + pairKey, not a customer chatKey. Branch
+  // here so the rest of the component can stay shape-compatible — chatId
+  // and phone are unused on the DM path.
+  const isDm = isDmKey(chatKey);
+  const pairKey = isDm ? pairKeyFromChatKey(chatKey)! : "";
+  const dmRow = isDm ? dmRows.find((r) => r.pairKey === pairKey) : undefined;
+  const otherUid =
+    isDm && user
+      ? pairKey.split("_").find((u) => u !== user.uid) || ""
+      : "";
+
   const meta = chatMetaByKey[chatKey] ?? {};
   const isGroup =
-    meta.chatType === "group" ||
-    String(meta.chatId || "").endsWith("@g.us");
-  const chatId = meta.chatId || chatKeyToChatId(chatKey);
-  const phone = meta.phone || chatId.split("@")[0];
+    !isDm &&
+    (meta.chatType === "group" ||
+      String(meta.chatId || "").endsWith("@g.us"));
+  const chatId = isDm ? "" : meta.chatId || chatKeyToChatId(chatKey);
+  const phone = isDm ? "" : meta.phone || chatId.split("@")[0];
 
   const headerName = useMemo(() => {
     if (initialTitle) return initialTitle;
+    if (isDm) return dmRow?.name || "Teammate";
     return resolveDisplayName(
       meta.phone || phone,
       meta.contactName || meta.displayName,
@@ -95,6 +111,8 @@ export function ThreadScreen({ route, navigation }: Props) {
     );
   }, [
     initialTitle,
+    isDm,
+    dmRow,
     meta,
     phone,
     isGroup,
@@ -116,30 +134,46 @@ export function ThreadScreen({ route, navigation }: Props) {
   useLayoutEffect(() => {
     navigation.setOptions({
       headerTitle: headerName,
-      headerRight: () => (
-        <TouchableOpacity
-          accessibilityLabel="Summarize"
-          onPress={() => setSummaryOpen(true)}
-          style={styles.headerBtn}
-        >
-          <Text style={styles.headerBtnTxt}>✨</Text>
-        </TouchableOpacity>
-      ),
+      // DM threads don't have an AI summary — there's no customer history
+      // to summarize. Skip the headerRight button entirely.
+      headerRight: isDm
+        ? undefined
+        : () => (
+            <TouchableOpacity
+              accessibilityLabel="Summarize"
+              onPress={() => setSummaryOpen(true)}
+              style={styles.headerBtn}
+            >
+              <Text style={styles.headerBtnTxt}>✨</Text>
+            </TouchableOpacity>
+          ),
     });
-  }, [navigation, headerName]);
+  }, [navigation, headerName, isDm]);
 
-  // Live messages listener (last 300).
+  // Live messages listener (last 300). DM messages live at /dms/{pairKey}
+  // and use fromUid instead of a direction field — we translate at the
+  // boundary so MessageBubble can stay shape-compatible.
   useEffect(() => {
-    const q = query(
-      ref(db, `${ROOT}/chats/${chatKey}/messages`),
-      orderByChild("ts"),
-      limitToLast(300),
-    );
+    const path = isDm
+      ? `${ROOT}/dms/${pairKey}/messages`
+      : `${ROOT}/chats/${chatKey}/messages`;
+    const q = query(ref(db, path), orderByChild("ts"), limitToLast(300));
     const unsub = onValue(q, (snap) => {
       const v = snap.val() || {};
       const list: Message[] = Object.entries(
-        v as Record<string, Message>,
-      ).map(([k, m]) => ({ ...m, id: k }));
+        v as Record<string, Message & { fromUid?: string; fromName?: string }>,
+      ).map(([k, m]) => {
+        if (isDm) {
+          const me = user?.uid;
+          return {
+            ...m,
+            id: k,
+            direction: m.fromUid === me ? "out" : "in",
+            sentByName: m.fromName || null,
+          } as Message;
+        }
+        return { ...m, id: k } as Message;
+      });
       list.sort((a, b) => (a.ts || 0) - (b.ts || 0));
       setMessages(list);
       markChatSeen(chatKey);
@@ -149,7 +183,7 @@ export function ThreadScreen({ route, navigation }: Props) {
       });
     });
     // Fetch group name lazily if missing.
-    if (isGroup && !meta.groupName) {
+    if (!isDm && isGroup && !meta.groupName) {
       fetchChatInfo(chatId);
     }
     return unsub;
@@ -160,11 +194,41 @@ export function ThreadScreen({ route, navigation }: Props) {
   const visible = useMemo(() => dedupMessages(messages), [messages]);
 
   const banner = useMemo<Ticket[]>(
-    () => openTicketsForChat(tickets, chatKey),
-    [tickets, chatKey],
+    () => (isDm ? [] : openTicketsForChat(tickets, chatKey)),
+    [isDm, tickets, chatKey],
   );
 
+  // DM send. Writes to /dms/{pairKey}/messages + meta in one shot; fires
+  // a worker push afterwards (best-effort). No Periscope, no "sending"
+  // status — the write IS the delivery.
+  const sendDm = useCallback(async () => {
+    const text = composer.trim();
+    if (!text || !user || !otherUid) return;
+    const ts = Date.now();
+    const fromName = user.displayName || user.email || "(team)";
+    const msgRef = push(ref(db, `${ROOT}/dms/${pairKey}/messages`));
+    await set(msgRef, { text, ts, fromUid: user.uid, fromName });
+    await update(ref(db, `${ROOT}/dms/${pairKey}/meta`), {
+      participants: { [user.uid]: true, [otherUid]: true },
+      lastMsgAt: ts,
+      lastMsgPreview: text.slice(0, 120),
+      lastMsgFromUid: user.uid,
+      lastMsgFromName: fromName,
+    });
+    setComposer("");
+    // Fire-and-forget push fan-out. Don't await — UX shouldn't depend on
+    // notification delivery.
+    notifyDm({
+      pairKey,
+      fromUid: user.uid,
+      fromName,
+      toUid: otherUid,
+      text: text.slice(0, 200),
+    });
+  }, [composer, user, pairKey, otherUid]);
+
   const send = useCallback(async () => {
+    if (isDm) return sendDm();
     const text = composer.trim();
     if (!text || !user) return;
     const ts = Date.now();
@@ -203,10 +267,17 @@ export function ThreadScreen({ route, navigation }: Props) {
     } catch (e: any) {
       await update(msgRef, { status: "failed", error: String(e) });
     }
-  }, [composer, user, chatKey, chatId, phone]);
+  }, [isDm, sendDm, composer, user, chatKey, chatId, phone]);
 
   const onAttach = useCallback(async () => {
     if (!user || attachBusy) return;
+    if (isDm) {
+      Alert.alert(
+        "Not yet",
+        "Attachments aren't supported in internal chats yet — text only for now.",
+      );
+      return;
+    }
     Alert.alert(
       "Attach",
       undefined,
@@ -343,7 +414,7 @@ export function ThreadScreen({ route, navigation }: Props) {
         await update(msgRef, { status: "failed", error: String(e) });
       }
     }
-  }, [user, attachBusy, composer, chatKey, chatId, phone]);
+  }, [isDm, user, attachBusy, composer, chatKey, chatId, phone]);
 
   const resolveSenderName = useCallback(
     (senderPhone: string) =>
@@ -386,15 +457,17 @@ export function ThreadScreen({ route, navigation }: Props) {
       behavior={Platform.OS === "ios" ? "padding" : undefined}
       keyboardVerticalOffset={Platform.OS === "ios" ? 80 : 0}
     >
-      <TicketBanner
-        tickets={banner}
-        currentUid={user?.uid ?? ""}
-        currentName={user?.displayName || user?.email || ""}
-        onReassign={(id) => {
-          const t = banner.find((x) => x.id === id);
-          if (t) setReassignTicket(t);
-        }}
-      />
+      {!isDm && (
+        <TicketBanner
+          tickets={banner}
+          currentUid={user?.uid ?? ""}
+          currentName={user?.displayName || user?.email || ""}
+          onReassign={(id) => {
+            const t = banner.find((x) => x.id === id);
+            if (t) setReassignTicket(t);
+          }}
+        />
+      )}
       <FlatList
         ref={listRef}
         data={visible}
@@ -433,6 +506,7 @@ export function ThreadScreen({ route, navigation }: Props) {
 
       <ActionSheet
         message={sheetMsg}
+        showTicket={!isDm}
         onClose={() => setSheetMsg(null)}
         onTicket={() => {
           const m = sheetMsg;
@@ -478,11 +552,13 @@ export function ThreadScreen({ route, navigation }: Props) {
 // Could be a separate file, but it's tightly coupled to the thread screen.
 function ActionSheet({
   message,
+  showTicket,
   onClose,
   onTicket,
   onCopy,
 }: {
   message: Message | null;
+  showTicket: boolean;
   onClose: () => void;
   onTicket: () => void;
   onCopy: () => void;
@@ -507,12 +583,14 @@ function ActionSheet({
           <Text style={styles.sheetQuote} numberOfLines={2}>
             {quote}
           </Text>
-          <TouchableOpacity style={styles.sheetItem} onPress={onTicket}>
-            <Text style={styles.sheetItemGlyph}>🎫</Text>
-            <Text style={styles.sheetItemTxt}>
-              Create ticket from this message
-            </Text>
-          </TouchableOpacity>
+          {showTicket && (
+            <TouchableOpacity style={styles.sheetItem} onPress={onTicket}>
+              <Text style={styles.sheetItemGlyph}>🎫</Text>
+              <Text style={styles.sheetItemTxt}>
+                Create ticket from this message
+              </Text>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity style={styles.sheetItem} onPress={onCopy}>
             <Text style={styles.sheetItemGlyph}>📋</Text>
             <Text style={styles.sheetItemTxt}>Copy text</Text>

@@ -75,6 +75,12 @@ export default {
       if (url.pathname === "/search-messages" && request.method === "GET") {
         return cors(env, await handleSearchMessages(request, env));
       }
+      if (url.pathname === "/dm-notify" && request.method === "POST") {
+        return cors(env, await handleDmNotify(request, env));
+      }
+      if (url.pathname === "/dm-search" && request.method === "GET") {
+        return cors(env, await handleDmSearch(request, env));
+      }
       if (url.pathname === "/triage-backfill" && request.method === "POST") {
         return cors(env, await handleTriageBackfill(request, env));
       }
@@ -1445,6 +1451,106 @@ async function handleSearchMessages(request, env) {
     }
   }
 
+  hits.sort((a, b) => b.ts - a.ts);
+  return json({ results: hits.slice(0, limit), total: hits.length });
+}
+
+// ---------- /dm-notify ----------
+// Fan out an Expo push to a teammate when an internal DM is delivered.
+// The client writes the message to /dms/{pairKey}/messages itself; this
+// endpoint exists only to ping the recipient's mobile device. No Periskope
+// involvement — DMs never leave Firebase.
+//
+// Body: { pairKey, fromUid, fromName, toUid, text }
+// We re-verify on the server that fromUid is actually a participant in
+// {pairKey}, so a malicious caller can't trigger pushes to arbitrary users.
+async function handleDmNotify(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const { pairKey, fromUid, fromName, toUid, text } = body || {};
+  if (!pairKey || !fromUid || !toUid) {
+    return json({ error: "missing pairKey/fromUid/toUid" }, 400);
+  }
+
+  const participants = await fbGet(env, `${ROOT}/dms/${encodeKey(pairKey)}/meta/participants`);
+  if (!participants || participants[fromUid] !== true || participants[toUid] !== true) {
+    return json({ error: "not a participant" }, 403);
+  }
+
+  const tokensMap = await fbGet(env, `${ROOT}/pushTokens/${toUid}`);
+  if (!tokensMap || typeof tokensMap !== "object") {
+    return json({ ok: true, delivered: 0 });
+  }
+
+  const messages = [];
+  for (const entry of Object.values(tokensMap)) {
+    if (!entry || !entry.token) continue;
+    if (!/^ExponentPushToken\[.+\]$/.test(entry.token)) continue;
+    messages.push({
+      to: entry.token,
+      title: fromName || "Team",
+      body: String(text || "").slice(0, 200) || "[new message]",
+      data: { dmPairKey: pairKey, kind: "dm" },
+      sound: "default",
+      priority: "high",
+      channelId: "default",
+    });
+  }
+  if (!messages.length) return json({ ok: true, delivered: 0 });
+
+  for (let i = 0; i < messages.length; i += 100) {
+    const batch = messages.slice(i, i + 100);
+    const headers = { "Content-Type": "application/json", "Accept": "application/json" };
+    if (env.EXPO_ACCESS_TOKEN) headers["Authorization"] = `Bearer ${env.EXPO_ACCESS_TOKEN}`;
+    try {
+      await fetch("https://exp.host/--/api/v2/push/send", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(batch),
+      });
+    } catch { /* swallow — push is best-effort */ }
+  }
+  return json({ ok: true, delivered: messages.length });
+}
+
+// ---------- /dm-search ----------
+// Participant-scoped full-text search across the caller's own DMs. Mirrors
+// /search-messages but only scans /dms/{pairKey} where the given uid is a
+// participant — never leaks messages from DMs the caller can't see.
+//
+// Query: ?q=...&uid=...&limit=...
+async function handleDmSearch(request, env) {
+  const url = new URL(request.url);
+  const q = String(url.searchParams.get("q") || "").trim().toLowerCase();
+  const uid = String(url.searchParams.get("uid") || "").trim();
+  const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit")) || 50));
+  if (q.length < 2) return json({ error: "query must be at least 2 chars" }, 400);
+  if (!uid) return json({ error: "missing uid" }, 400);
+
+  const dms = await fbGet(env, `${ROOT}/dms`);
+  if (!dms || typeof dms !== "object") return json({ results: [], total: 0 });
+
+  const hits = [];
+  for (const [pairKey, pair] of Object.entries(dms)) {
+    if (!pair || typeof pair !== "object") continue;
+    const participants = pair.meta?.participants;
+    if (!participants || participants[uid] !== true) continue;
+    const otherUid = Object.keys(participants).find((u) => u !== uid) || null;
+    const messages = pair.messages || {};
+    if (typeof messages !== "object") continue;
+    for (const [msgKey, m] of Object.entries(messages)) {
+      if (!m || typeof m !== "object" || !m.text) continue;
+      if (!String(m.text).toLowerCase().includes(q)) continue;
+      hits.push({
+        pairKey,
+        otherUid,
+        msgKey,
+        text: String(m.text).slice(0, 300),
+        ts: m.ts || 0,
+        fromUid: m.fromUid || null,
+        fromName: m.fromName || null,
+      });
+    }
+  }
   hits.sort((a, b) => b.ts - a.ts);
   return json({ results: hits.slice(0, limit), total: hits.length });
 }

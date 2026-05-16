@@ -22,7 +22,10 @@ import type {
   ChatRow,
   ChatType,
   ContactInfo,
+  DmMeta,
+  DmRow,
   FerraUser,
+  TeamMember,
   TeamUser,
   Ticket,
 } from "@/types";
@@ -32,6 +35,10 @@ interface AppDataValue {
   chatMetaByKey: Record<string, ChatMeta>;
   tickets: Record<string, Ticket>;
   teamUsers: Record<string, TeamUser>;
+  teamMembers: Record<string, TeamMember>;
+  teamPhones: Set<string>; // digits-only normalized phones from teamMembers
+  dmsByKey: Record<string, { meta?: DmMeta }>;
+  dmRows: DmRow[];
   contacts: Record<string, ContactInfo>;
   habitUsers: Record<string, FerraUser> | FerraUser[] | null;
   cancelledUsers: Record<string, FerraUser> | FerraUser[] | null;
@@ -39,6 +46,24 @@ interface AppDataValue {
   ferraIndex: FerraIndex;
   myLastSeen: Record<string, number>;
   markChatSeen: (chatKey: string) => void;
+}
+
+function normalizePhone(p: string): string {
+  return String(p || "").replace(/\D/g, "");
+}
+
+// Sorted-UID pairKey. Same convention as web — see index.html getPairKey().
+export function getPairKey(uidA: string, uidB: string): string {
+  return [String(uidA), String(uidB)].sort().join("_");
+}
+export function chatKeyFromPairKey(pairKey: string): string {
+  return "dm:" + pairKey;
+}
+export function pairKeyFromChatKey(chatKey: string): string | null {
+  return chatKey.startsWith("dm:") ? chatKey.slice(3) : null;
+}
+export function isDmKey(chatKey: string): boolean {
+  return chatKey.startsWith("dm:");
 }
 
 const AppDataContext = createContext<AppDataValue | null>(null);
@@ -55,6 +80,8 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
   );
   const [tickets, setTickets] = useState<Record<string, Ticket>>({});
   const [teamUsers, setTeamUsers] = useState<Record<string, TeamUser>>({});
+  const [teamMembers, setTeamMembers] = useState<Record<string, TeamMember>>({});
+  const [dmsByKey, setDmsByKey] = useState<Record<string, { meta?: DmMeta }>>({});
   const [contacts, setContacts] = useState<Record<string, ContactInfo>>({});
   const [habitUsers, setHabitUsers] = useState<
     Record<string, FerraUser> | FerraUser[] | null
@@ -78,6 +105,14 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     );
     unsubs.push(
       onValue(ref(db, `${ROOT}/users`), (s) => setTeamUsers(s.val() || {})),
+    );
+    unsubs.push(
+      onValue(ref(db, `${ROOT}/config/teamMembers`), (s) =>
+        setTeamMembers(s.val() || {}),
+      ),
+    );
+    unsubs.push(
+      onValue(ref(db, `${ROOT}/dms`), (s) => setDmsByKey(s.val() || {})),
     );
     unsubs.push(
       onValue(ref(db, `${ROOT}/contacts`), (s) => setContacts(s.val() || {})),
@@ -157,6 +192,53 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     [habitUsers, cancelledUsers],
   );
 
+  // Suppression set: every phone listed under any teammate's config record.
+  // Drives both customer-inbox filtering and the "new chat" redirect.
+  const teamPhones = useMemo(() => {
+    const out = new Set<string>();
+    for (const m of Object.values(teamMembers)) {
+      if (!m?.phones) continue;
+      for (const [ph, on] of Object.entries(m.phones)) {
+        if (on) out.add(normalizePhone(ph));
+      }
+    }
+    return out;
+  }, [teamMembers]);
+
+  // Compose dmRows for the Team screen. Pulls participant display info from
+  // teamUsers (whichever teammate isn't the current user) and unread state
+  // from myLastSeen (same mechanism customer chats use).
+  const dmRows = useMemo<DmRow[]>(() => {
+    if (!user) return [];
+    const out: DmRow[] = [];
+    for (const [pairKey, pair] of Object.entries(dmsByKey)) {
+      const meta = pair?.meta || {};
+      const parts = meta.participants || {};
+      if (parts[user.uid] !== true) continue;
+      const otherUid =
+        Object.keys(parts).find((u) => u !== user.uid) || user.uid;
+      const otherUser = teamUsers[otherUid] || {};
+      const chatKey = chatKeyFromPairKey(pairKey);
+      out.push({
+        pairKey,
+        chatKey,
+        otherUid,
+        name: otherUser.name || otherUser.email || "(teammate)",
+        email: otherUser.email || "",
+        photoURL: otherUser.photoURL || null,
+        lastMsgAt: meta.lastMsgAt || 0,
+        preview: meta.lastMsgPreview || "",
+        lastMsgFromUid: meta.lastMsgFromUid || null,
+        lastMsgFromName: meta.lastMsgFromName || null,
+        unread:
+          (meta.lastMsgAt || 0) > (myLastSeen[chatKey] || 0) &&
+          meta.lastMsgFromUid !== user.uid,
+      });
+    }
+    out.sort((a, b) => (b.lastMsgAt || 0) - (a.lastMsgAt || 0));
+    return out;
+  }, [dmsByKey, teamUsers, user, myLastSeen]);
+
   const markChatSeen = (chatKey: string) => {
     if (!user || !chatKey) return;
     set(
@@ -171,6 +253,10 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       chatMetaByKey,
       tickets,
       teamUsers,
+      teamMembers,
+      teamPhones,
+      dmsByKey,
+      dmRows,
       contacts,
       habitUsers,
       cancelledUsers,
@@ -184,6 +270,10 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       chatMetaByKey,
       tickets,
       teamUsers,
+      teamMembers,
+      teamPhones,
+      dmsByKey,
+      dmRows,
       contacts,
       habitUsers,
       cancelledUsers,
