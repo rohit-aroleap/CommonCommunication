@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.107</title>
+<title>CommonCommunication v1.108</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -226,6 +226,21 @@
   }
   .dm-picker-item .nm { font-size: 14px; font-weight: 500; color: var(--text); }
   .dm-picker-item .em { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .dm-picker-item.inactive { opacity: 0.55; }
+  .dm-picker-item.inactive:hover { background: var(--hover); opacity: 0.7; }
+  .not-signed-in-badge {
+    display: inline-block;
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: .3px;
+    color: var(--muted);
+    background: var(--header);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    margin-left: 6px;
+    text-transform: uppercase;
+  }
   .dm-picker-empty { padding: 24px; text-align: center; color: var(--muted); font-size: 13px; }
   /* Team-member phone editor inside the existing Team modal */
   .team-member-row {
@@ -1277,7 +1292,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.107</div>
+    <div class="login-version">v1.108</div>
   </div>
 </div>
 
@@ -1285,7 +1300,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.107</span>
+    <span class="ver">v1.108</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -1612,7 +1627,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.107";
+const APP_VERSION = "v1.108";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -4365,32 +4380,67 @@ dmPickerModal.addEventListener("click", (e) => {
 });
 
 function openDmPicker() {
-  // Build the list of teammates we can DM. Source of truth is
-  // commonComm/users (every signed-in teammate). Exclude self.
+  // Two-source merge: every signed-in teammate (has a uid → DM works
+  // immediately) UNION every configured teammate in config/teamMembers
+  // (email-only entries get shown as 'Not signed in' so admins know who's
+  // on the roster even if they haven't logged in yet).
   const me = currentUser?.uid;
-  const candidates = Object.entries(teamUsers)
-    .filter(([uid]) => uid !== me)
-    .map(([uid, u]) => ({
+  const myEmail = (teamUsers[me]?.email || currentUser?.email || "").toLowerCase();
+  const seenEmails = new Set();
+  const candidates = [];
+
+  // Source A — signed-in teammates (clickable, opens DM right away)
+  for (const [uid, u] of Object.entries(teamUsers)) {
+    if (uid === me) continue;
+    const emailLower = String(u?.email || "").toLowerCase();
+    if (emailLower) seenEmails.add(emailLower);
+    candidates.push({
       uid,
       name: u?.name || u?.email || "(unknown)",
       email: u?.email || "",
       photoURL: u?.photoURL || null,
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+      active: true,
+    });
+  }
+
+  // Source B — configured teammates that haven't signed in yet
+  for (const m of Object.values(teamMembersCache || {})) {
+    if (!m?.email) continue;
+    const emailLower = m.email.toLowerCase();
+    if (emailLower === myEmail) continue;
+    if (seenEmails.has(emailLower)) continue;
+    candidates.push({
+      uid: null,
+      name: m.name || m.email,
+      email: m.email,
+      photoURL: null,
+      active: false,
+    });
+    seenEmails.add(emailLower);
+  }
+
+  candidates.sort((a, b) => {
+    if (a.active !== b.active) return a.active ? -1 : 1; // signed-in first
+    return a.name.localeCompare(b.name);
+  });
 
   if (!candidates.length) {
-    dmPickerList.innerHTML = `<div class="dm-picker-empty">No other teammates have signed in yet. Ask them to sign in once, then you'll be able to DM them.</div>`;
+    dmPickerList.innerHTML = `<div class="dm-picker-empty">No teammates configured yet. Add them via 👥 Team → Manage in the topbar.</div>`;
   } else {
     dmPickerList.innerHTML = candidates.map((c) => `
-      <div class="dm-picker-item" data-uid="${escapeHtml(c.uid)}">
+      <div class="dm-picker-item ${c.active ? "" : "inactive"}" data-uid="${escapeHtml(c.uid || "")}" data-active="${c.active}" data-name="${escapeHtml(c.name)}">
         <div class="av">${escapeHtml(avatarInitial(c.name))}</div>
         <div>
-          <div class="nm">${escapeHtml(c.name)}</div>
+          <div class="nm">${escapeHtml(c.name)}${c.active ? "" : ' <span class="not-signed-in-badge">Not signed in</span>'}</div>
           <div class="em">${escapeHtml(c.email)}</div>
         </div>
       </div>`).join("");
     dmPickerList.querySelectorAll(".dm-picker-item").forEach((el) => {
       el.onclick = async () => {
+        if (el.dataset.active !== "true") {
+          alert(`${el.dataset.name} hasn't signed in to the dashboard yet. Ask them to sign in once with their email, and they'll show up here as DM-able.`);
+          return;
+        }
         const otherUid = el.dataset.uid;
         dmPickerModal.classList.remove("visible");
         await ensureDmExists(otherUid);

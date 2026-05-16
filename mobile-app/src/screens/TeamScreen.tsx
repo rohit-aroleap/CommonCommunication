@@ -9,6 +9,7 @@
 
 import React, { useMemo, useState } from "react";
 import {
+  Alert,
   FlatList,
   Modal,
   Pressable,
@@ -32,14 +33,14 @@ import { useAuth } from "@/auth/AuthContext";
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "@/screens/types";
-import type { DmRow, TeamUser } from "@/types";
+import type { DmRow, TeamMember, TeamUser } from "@/types";
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 export function TeamScreen() {
   const navigation = useNavigation<Nav>();
   const { user } = useAuth();
-  const { dmRows, teamUsers } = useAppData();
+  const { dmRows, teamUsers, teamMembers } = useAppData();
   const [pickerOpen, setPickerOpen] = useState(false);
   const [search, setSearch] = useState("");
 
@@ -130,7 +131,9 @@ export function TeamScreen() {
       <PickerModal
         visible={pickerOpen}
         teamUsers={teamUsers}
+        teamMembers={teamMembers}
         meUid={user?.uid ?? ""}
+        meEmail={user?.email ?? ""}
         onPick={openDm}
         onClose={() => setPickerOpen(false)}
       />
@@ -177,29 +180,67 @@ function DmRowItem({
   );
 }
 
+interface PickerCandidate {
+  uid: string | null;
+  name: string;
+  email: string;
+  active: boolean;
+}
+
 function PickerModal({
   visible,
   teamUsers,
+  teamMembers,
   meUid,
+  meEmail,
   onPick,
   onClose,
 }: {
   visible: boolean;
   teamUsers: Record<string, TeamUser>;
+  teamMembers: Record<string, TeamMember>;
   meUid: string;
+  meEmail: string;
   onPick: (uid: string, name: string) => void;
   onClose: () => void;
 }) {
-  const candidates = useMemo(() => {
-    return Object.entries(teamUsers)
-      .filter(([uid]) => uid !== meUid)
-      .map(([uid, u]) => ({
+  // Two-source merge so configured-but-not-yet-signed-in teammates also
+  // appear (greyed out). Source A = teamUsers (signed-in, has uid →
+  // DM works). Source B = config/teamMembers (admin-curated roster).
+  const candidates = useMemo<PickerCandidate[]>(() => {
+    const seen = new Set<string>();
+    const out: PickerCandidate[] = [];
+    const myEmailLower = meEmail.toLowerCase();
+    for (const [uid, u] of Object.entries(teamUsers)) {
+      if (uid === meUid) continue;
+      const emailLower = String(u?.email || "").toLowerCase();
+      if (emailLower) seen.add(emailLower);
+      out.push({
         uid,
         name: u?.name || u?.email || "(unknown)",
         email: u?.email || "",
-      }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-  }, [teamUsers, meUid]);
+        active: true,
+      });
+    }
+    for (const m of Object.values(teamMembers || {})) {
+      if (!m?.email) continue;
+      const emailLower = m.email.toLowerCase();
+      if (emailLower === myEmailLower) continue;
+      if (seen.has(emailLower)) continue;
+      out.push({
+        uid: null,
+        name: m.name || m.email,
+        email: m.email,
+        active: false,
+      });
+      seen.add(emailLower);
+    }
+    out.sort((a, b) => {
+      if (a.active !== b.active) return a.active ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    return out;
+  }, [teamUsers, teamMembers, meUid, meEmail]);
 
   return (
     <Modal
@@ -219,18 +260,30 @@ function PickerModal({
           {candidates.length === 0 ? (
             <View style={{ padding: 24 }}>
               <Text style={styles.emptyTxt}>
-                No other teammates have signed in yet. Ask them to sign in
-                once, then you'll be able to DM them.
+                No teammates configured yet. Ask an admin to add them via
+                the desktop dashboard → 👥 Team.
               </Text>
             </View>
           ) : (
             <FlatList
               data={candidates}
-              keyExtractor={(c) => c.uid}
+              keyExtractor={(c) => c.uid ?? `email:${c.email}`}
               renderItem={({ item }) => (
                 <TouchableOpacity
-                  style={styles.pickerItem}
-                  onPress={() => onPick(item.uid, item.name)}
+                  style={[
+                    styles.pickerItem,
+                    !item.active && styles.pickerItemInactive,
+                  ]}
+                  onPress={() => {
+                    if (!item.active) {
+                      Alert.alert(
+                        `${item.name} hasn't signed in yet`,
+                        "Ask them to sign in to the dashboard or mobile app once, then they'll show up here as DM-able.",
+                      );
+                      return;
+                    }
+                    onPick(item.uid!, item.name);
+                  }}
                 >
                   <View style={styles.pickerAvatar}>
                     <Text style={styles.pickerAvatarTxt}>
@@ -238,7 +291,16 @@ function PickerModal({
                     </Text>
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.pickerName}>{item.name}</Text>
+                    <View style={styles.pickerNameRow}>
+                      <Text style={styles.pickerName}>{item.name}</Text>
+                      {!item.active && (
+                        <View style={styles.notSignedInBadge}>
+                          <Text style={styles.notSignedInTxt}>
+                            NOT SIGNED IN
+                          </Text>
+                        </View>
+                      )}
+                    </View>
                     {item.email ? (
                       <Text style={styles.pickerEmail}>{item.email}</Text>
                     ) : null}
@@ -395,6 +457,22 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   pickerAvatarTxt: { color: "white", fontSize: 15, fontWeight: "600" },
+  pickerNameRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   pickerName: { fontSize: 14, fontWeight: "500", color: colors.text },
   pickerEmail: { fontSize: 11, color: colors.muted, marginTop: 1 },
+  pickerItemInactive: { opacity: 0.55 },
+  notSignedInBadge: {
+    backgroundColor: "#f3f4f6",
+    borderRadius: 3,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+  },
+  notSignedInTxt: {
+    fontSize: 8,
+    fontWeight: "600",
+    color: colors.muted,
+    letterSpacing: 0.3,
+  },
 });
