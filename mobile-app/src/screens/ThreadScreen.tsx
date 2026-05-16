@@ -56,6 +56,7 @@ import { resolveDisplayName } from "@/lib/displayName";
 import { dayLabel } from "@/lib/format";
 import { chatKeyToChatId } from "@/lib/encodeKey";
 import { fetchChatInfo, sendMessage, notifyDm, transcribeAudio } from "@/lib/worker";
+import { makeVoiceNoteRecordingOptions } from "@/lib/voiceRecording";
 import { dedupMessages } from "@/lib/messageDedup";
 import {
   filterTemplates,
@@ -1141,8 +1142,11 @@ function VoiceNoteMic({
   onTranscribed: (uri: string) => Promise<void>;
   transcribing: boolean;
 }) {
+  // Whisper-tuned options: 16 kHz mono AAC @ 32 kbps. ~8× smaller upload
+  // than HIGH_QUALITY with no transcription accuracy loss (Whisper resamples
+  // to 16 kHz mono internally anyway).
   const recorder = audioMod.useAudioRecorder(
-    audioMod.RecordingPresets.HIGH_QUALITY,
+    makeVoiceNoteRecordingOptions(audioMod),
   );
   const recorderState = audioMod.useAudioRecorderState(recorder);
   const isRecording = !!recorderState?.isRecording;

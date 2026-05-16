@@ -25,6 +25,7 @@ import { resolveDisplayName } from "@/lib/displayName";
 import { chatKeyToChatId } from "@/lib/encodeKey";
 import { getFerraUserByPhone, normalizeFerraPhone } from "@/lib/ferra";
 import { transcribeAudio } from "@/lib/worker";
+import { makeVoiceNoteRecordingOptions } from "@/lib/voiceRecording";
 import { FERRA_TAG_STAGE } from "@/config";
 import type { Ticket } from "@/types";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
@@ -610,8 +611,10 @@ function MicButton({
   transcribing: boolean;
   disabled: boolean;
 }) {
+  // Whisper-tuned options: 16 kHz mono AAC @ 32 kbps. ~8× smaller upload
+  // than HIGH_QUALITY with no transcription accuracy loss.
   const recorder = audioMod.useAudioRecorder(
-    audioMod.RecordingPresets.HIGH_QUALITY,
+    makeVoiceNoteRecordingOptions(audioMod),
   );
   const recorderState = audioMod.useAudioRecorderState(recorder);
   const isRecording = !!recorderState?.isRecording;
