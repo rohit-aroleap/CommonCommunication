@@ -4,27 +4,48 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   Linking,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
-import { onValue, ref } from "firebase/database";
+import * as FileSystem from "expo-file-system/legacy";
+import { onValue, push, ref, set } from "firebase/database";
 import { db } from "@/firebase";
 import { ROOT } from "@/config";
 import { colors, space } from "@/theme";
 import { useAppData, openTicketsForChat } from "@/data/AppDataContext";
+import { useAuth } from "@/auth/AuthContext";
 import { resolveDisplayName } from "@/lib/displayName";
 import { chatKeyToChatId } from "@/lib/encodeKey";
 import { getFerraUserByPhone, normalizeFerraPhone } from "@/lib/ferra";
+import { transcribeAudio } from "@/lib/worker";
 import { FERRA_TAG_STAGE } from "@/config";
 import type { Ticket } from "@/types";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "./types";
+
+// Lazy require for expo-av so an older native build (one that doesn't yet
+// have the audio module bundled) doesn't crash on import. Mic button shows
+// only when this resolves and the runtime call succeeds — otherwise we
+// surface a "needs rebuild" message and the trainer can still type the note.
+// Typed as `any` because TypeScript can't resolve expo-av types until the
+// package is installed (added in v1.109 but the dep isn't bundled yet by
+// older native builds — and we tolerate that gracefully at runtime).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let AvAudio: any = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  AvAudio = require("expo-av").Audio;
+} catch {
+  AvAudio = null;
+}
 
 // Internal note (yellow panel on desktop). Auto-mirrored to here when a
 // ticket is resolved with a note; can also be written directly via the
@@ -42,6 +63,7 @@ type Props = NativeStackScreenProps<RootStackParamList, "CustomerInfo">;
 
 export function CustomerInfoScreen({ route }: Props) {
   const { chatKey } = route.params;
+  const { user } = useAuth();
   const {
     chatMetaByKey,
     habitUsers,
@@ -134,6 +156,117 @@ export function CustomerInfoScreen({ route }: Props) {
     });
     return unsub;
   }, [chatKey]);
+
+  // Add-note state machine. Three flags so the UI can show the right buttons:
+  //   composing   — input box is open (otherwise just the "+ Add note" trigger)
+  //   recording   — actively capturing audio via expo-av
+  //   transcribing — uploading the recorded audio to /transcribe
+  //   saving      — writing the final note to Firebase
+  const [composing, setComposing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [recording, setRecording] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  // Hold the active Recording instance across renders without re-creating it.
+  // Typed as any since expo-av types aren't resolved at compile time (see
+  // the AvAudio lazy require comment).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const recordingRef = React.useRef<any>(null);
+
+  async function startRecording() {
+    if (!AvAudio) {
+      Alert.alert(
+        "Voice notes need a rebuild",
+        "This build of the app was made before voice recording was added. Ask the admin to rebuild and reinstall.",
+      );
+      return;
+    }
+    try {
+      const perm = await AvAudio.requestPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert(
+          "Microphone access denied",
+          "Enable microphone permission in your phone's Settings for CommonCommunication.",
+        );
+        return;
+      }
+      await AvAudio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+      });
+      const rec = new AvAudio.Recording();
+      // Use HIGH_QUALITY preset — Whisper is robust to compression, this just
+      // makes file sizes manageable for the base64 upload.
+      await rec.prepareToRecordAsync(
+        AvAudio.RecordingOptionsPresets.HIGH_QUALITY,
+      );
+      await rec.startAsync();
+      recordingRef.current = rec;
+      setRecording(true);
+    } catch (e) {
+      Alert.alert("Couldn't start recording", String((e as Error)?.message || e));
+    }
+  }
+
+  async function stopRecordingAndTranscribe() {
+    const rec = recordingRef.current;
+    if (!rec) return;
+    setRecording(false);
+    setTranscribing(true);
+    try {
+      await rec.stopAndUnloadAsync();
+      const uri = rec.getURI();
+      recordingRef.current = null;
+      if (!uri) throw new Error("recording produced no file");
+      // Read the raw audio bytes as base64 and POST to /transcribe. The worker
+      // runs Whisper + a Claude cleanup pass and returns the cleaned text.
+      const b64 = await FileSystem.readAsStringAsync(uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      const text = await transcribeAudio(b64);
+      // Append (don't overwrite) so a trainer can keep typing then dictate
+      // more, or vice versa.
+      setDraft((prev) => (prev ? prev + " " + text : text).trim());
+    } catch (e) {
+      Alert.alert("Transcription failed", String((e as Error)?.message || e));
+    } finally {
+      setTranscribing(false);
+    }
+  }
+
+  async function saveNote() {
+    const txt = draft.trim();
+    if (!txt || !user) return;
+    setSaving(true);
+    try {
+      const noteRef = push(ref(db, `${ROOT}/chats/${chatKey}/notes`));
+      await set(noteRef, {
+        text: txt,
+        authorUid: user.uid,
+        authorName: user.displayName || user.email || "(me)",
+        createdAt: Date.now(),
+        source: "mobile",
+      });
+      setDraft("");
+      setComposing(false);
+    } catch (e) {
+      Alert.alert("Couldn't save note", String((e as Error)?.message || e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function cancelCompose() {
+    if (recording) {
+      // Abort an in-flight recording cleanly.
+      const rec = recordingRef.current;
+      recordingRef.current = null;
+      rec?.stopAndUnloadAsync().catch(() => {});
+      setRecording(false);
+    }
+    setDraft("");
+    setComposing(false);
+  }
 
   if (isGroup) {
     return (
@@ -266,23 +399,111 @@ export function CustomerInfoScreen({ route }: Props) {
       )}
 
       {/* Notes — internal trainer notes about this customer. Persist across
-          tickets; the yellow-banner panel on desktop. Newest first. */}
-      {notes.length > 0 && (
-        <View style={[styles.section, styles.notesSection]}>
-          <Text style={styles.sectionTitle}>📝 NOTES ({notes.length})</Text>
-          {notes.map((n) => (
-            <View key={n.id} style={styles.noteCard}>
-              <Text style={styles.noteTxt}>{n.text}</Text>
-              <Text style={styles.noteMeta}>
-                {n.authorName || "(unknown)"}
-                {n.createdAt
-                  ? ` · ${new Date(n.createdAt).toLocaleDateString()}`
-                  : ""}
-              </Text>
-            </View>
-          ))}
+          tickets; the yellow-banner panel on desktop. Newest first. The
+          "+ Add note" row at the top opens an inline composer with a mic
+          button for voice → transcription → editable text. */}
+      <View style={[styles.section, styles.notesSection]}>
+        <View style={styles.notesHeader}>
+          <Text style={styles.sectionTitle}>
+            📝 NOTES ({notes.length})
+          </Text>
+          {!composing && (
+            <TouchableOpacity
+              onPress={() => setComposing(true)}
+              style={styles.addNoteBtn}
+              accessibilityLabel="Add note"
+            >
+              <Text style={styles.addNoteBtnTxt}>+ Add note</Text>
+            </TouchableOpacity>
+          )}
         </View>
-      )}
+
+        {composing && (
+          <View style={styles.composer}>
+            <TextInput
+              style={styles.composerInput}
+              value={draft}
+              onChangeText={setDraft}
+              placeholder={
+                transcribing
+                  ? "Transcribing…"
+                  : recording
+                    ? "Recording — tap stop to transcribe"
+                    : "Type a note, or tap 🎤 to dictate"
+              }
+              placeholderTextColor={colors.muted}
+              multiline
+              editable={!recording && !transcribing && !saving}
+            />
+            <View style={styles.composerActions}>
+              <TouchableOpacity
+                onPress={cancelCompose}
+                style={styles.composerBtn}
+                disabled={saving || transcribing}
+              >
+                <Text style={styles.composerBtnTxt}>Cancel</Text>
+              </TouchableOpacity>
+              <View style={{ flex: 1 }} />
+              {/* Mic button — only when expo-av loaded. Tap to start, tap
+                  again to stop + transcribe. Hidden entirely on old builds
+                  that don't have the native module. */}
+              {AvAudio && (
+                <TouchableOpacity
+                  onPress={recording ? stopRecordingAndTranscribe : startRecording}
+                  style={[
+                    styles.micBtn,
+                    recording && styles.micBtnRecording,
+                  ]}
+                  disabled={transcribing || saving}
+                  accessibilityLabel={recording ? "Stop recording" : "Record voice note"}
+                >
+                  {transcribing ? (
+                    <ActivityIndicator color="white" size="small" />
+                  ) : (
+                    <Text style={styles.micBtnTxt}>
+                      {recording ? "⏹" : "🎤"}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                onPress={saveNote}
+                style={[
+                  styles.sendBtn,
+                  (!draft.trim() || saving) && styles.sendBtnDisabled,
+                ]}
+                disabled={!draft.trim() || saving || recording || transcribing}
+                accessibilityLabel="Save note"
+              >
+                {saving ? (
+                  <ActivityIndicator color="white" size="small" />
+                ) : (
+                  <Text style={styles.sendBtnTxt}>➤</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
+        {notes.map((n) => (
+          <View key={n.id} style={styles.noteCard}>
+            <Text style={styles.noteTxt} selectable>
+              {n.text}
+            </Text>
+            <Text style={styles.noteMeta}>
+              {n.authorName || "(unknown)"}
+              {n.createdAt
+                ? ` · ${new Date(n.createdAt).toLocaleDateString()}`
+                : ""}
+            </Text>
+          </View>
+        ))}
+        {notes.length === 0 && !composing && (
+          <Text style={styles.notesEmpty}>
+            No notes yet. Tap "+ Add note" to add the first.
+          </Text>
+        )}
+      </View>
 
       {/* Habit */}
       {ferraUser && (
@@ -575,6 +796,69 @@ const styles = StyleSheet.create({
   },
   noteTxt: { fontSize: 13, color: colors.text, lineHeight: 18 },
   noteMeta: { fontSize: 10, color: colors.muted, marginTop: 4 },
+  notesHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 8,
+  },
+  addNoteBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    backgroundColor: colors.greenDark,
+  },
+  addNoteBtnTxt: { color: "white", fontSize: 11, fontWeight: "600" },
+  notesEmpty: {
+    fontSize: 12,
+    color: colors.muted,
+    fontStyle: "italic",
+    paddingVertical: 4,
+  },
+  composer: {
+    backgroundColor: "white",
+    borderRadius: 8,
+    padding: 8,
+    marginBottom: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#f0e3a0",
+  },
+  composerInput: {
+    minHeight: 60,
+    maxHeight: 140,
+    fontSize: 14,
+    color: colors.text,
+    padding: 6,
+    textAlignVertical: "top",
+  },
+  composerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 4,
+  },
+  composerBtn: { paddingHorizontal: 10, paddingVertical: 6 },
+  composerBtnTxt: { color: colors.muted, fontSize: 13 },
+  micBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: colors.greenDark,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  micBtnRecording: { backgroundColor: "#dc2626" },
+  micBtnTxt: { color: "white", fontSize: 16 },
+  sendBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: colors.green,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  sendBtnDisabled: { backgroundColor: "#8fb3a8" },
+  sendBtnTxt: { color: "white", fontSize: 16 },
   address: { fontSize: 14, color: colors.text, lineHeight: 20 },
   copyBtn: {
     alignSelf: "flex-start",

@@ -71,6 +71,7 @@ module.exports = ({ config }) => ({
       "READ_MEDIA_IMAGES",
       "READ_MEDIA_VIDEO",
       "READ_MEDIA_AUDIO",
+      "RECORD_AUDIO",
     ],
   },
   web: { favicon: "./assets/favicon.png" },

@@ -104,3 +104,20 @@ export async function registerPushToken(
     /* swallow — push will reconnect on next sign-in */
   }
 }
+
+// Voice-note transcription via /transcribe. Caller passes base64 audio;
+// worker runs Whisper + a Claude cleanup pass and returns clean text.
+// Used by the customer-info Notes panel: trainer records → text fills the
+// note input → user can edit before saving.
+export async function transcribeAudio(audioB64: string): Promise<string> {
+  const res = await fetch(`${WORKER_URL}/transcribe`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ audio: audioB64 }),
+  });
+  const j = (await res.json()) as { text?: string; error?: string };
+  if (!res.ok || j.error) {
+    throw new Error(j.error || `transcribe HTTP ${res.status}`);
+  }
+  return j.text || "";
+}
