@@ -1,7 +1,9 @@
-// Single message bubble. Long-press opens the parent's action sheet via the
-// onLongPress callback. Media is rendered through the Worker's /media proxy
-// because Periskope-hosted URLs require auth headers we can't attach to a
-// plain <Image>.
+// Single message bubble.
+//   • Single tap     → onPress (parent opens "Create ticket" flow)
+//   • Long-press     → onLongPress (parent copies text to clipboard)
+// Mirrors the webapp's click-to-ticket / long-press-to-copy split.
+// Media is rendered through the Worker's /media proxy because Periskope-
+// hosted URLs require auth headers we can't attach to a plain <Image>.
 
 import React from "react";
 import {
@@ -20,6 +22,7 @@ interface Props {
   message: Message;
   isGroup: boolean;
   resolveSenderName: (phone: string) => string;
+  onPress: (m: Message) => void;
   onLongPress: (m: Message) => void;
 }
 
@@ -27,6 +30,7 @@ export function MessageBubble({
   message: m,
   isGroup,
   resolveSenderName,
+  onPress,
   onLongPress,
 }: Props) {
   const out = m.direction === "out";
@@ -38,17 +42,27 @@ export function MessageBubble({
     ? `~ ${resolveSenderName(m.senderPhone)}`
     : null;
 
+  // Detect "empty" messages: no text, no usable media. Periskope occasionally
+  // sends these (reaction-only, deleted-for-me, system events). Without this
+  // guard they render as ghost bubbles with just a timestamp — looks broken.
+  const hasText = !!(m.text && m.text.trim());
+  const hasMedia = !!(m.media && (m.media.url || m.media.fileName));
+  if (!hasText && !hasMedia) {
+    return null;
+  }
+
   return (
     <View style={[styles.row, out ? styles.rowOut : styles.rowIn]}>
       <TouchableOpacity
         delayLongPress={420}
+        onPress={() => onPress(m)}
         onLongPress={() => onLongPress(m)}
         activeOpacity={0.85}
         style={[styles.bubble, out ? styles.bubbleOut : styles.bubbleIn]}
       >
         {senderTag && <Text style={styles.senderTag}>{senderTag}</Text>}
         <MediaBlock media={m.media} />
-        {m.text ? <Text style={styles.text}>{m.text}</Text> : null}
+        {hasText ? <Text style={styles.text}>{m.text}</Text> : null}
         <View style={styles.footer}>
           <Text style={styles.clock}>{formatClock(m.ts)}</Text>
           {out && <Status status={m.status} />}

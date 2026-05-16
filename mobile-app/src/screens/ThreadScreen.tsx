@@ -148,7 +148,10 @@ export function ThreadScreen({ route, navigation }: Props) {
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [composer, setComposer] = useState("");
-  const [sheetMsg, setSheetMsg] = useState<Message | null>(null);
+  // sheetMsg removed in v1.118 — long-press now copies directly and single
+  // tap opens the ticket-create modal, so the bottom action sheet became
+  // dead UI. Kept the ActionSheet component definition in this file for
+  // possible future use.
   const [ticketCreateFor, setTicketCreateFor] = useState<Message | null>(null);
   const [reassignTicket, setReassignTicket] = useState<Ticket | null>(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
@@ -541,7 +544,25 @@ export function ThreadScreen({ route, navigation }: Props) {
             message={item}
             isGroup={isGroup}
             resolveSenderName={resolveSenderName}
-            onLongPress={(m) => setSheetMsg(m)}
+            onPress={(m) => {
+              // Single tap → open "Create ticket from this message" flow.
+              // Matches webapp behaviour where clicking a bubble is the
+              // primary affordance for raising a ticket.
+              if (isDm) return; // DMs don't support tickets
+              setTicketCreateFor(m);
+            }}
+            onLongPress={async (m) => {
+              // Long-press → copy. Quietly puts text on clipboard and shows
+              // a light toast-style alert so the trainer knows it worked.
+              const txt =
+                m.text ||
+                m.media?.caption ||
+                m.media?.fileName ||
+                "";
+              if (!txt) return;
+              await Clipboard.setStringAsync(txt);
+              Alert.alert("Copied");
+            }}
           />
         </View>
       );
@@ -628,22 +649,6 @@ export function ThreadScreen({ route, navigation }: Props) {
         onCancel={() => setNotePreview(null)}
         onSave={saveVoiceNote}
         saving={savingNote}
-      />
-
-      <ActionSheet
-        message={sheetMsg}
-        showTicket={!isDm}
-        onClose={() => setSheetMsg(null)}
-        onTicket={() => {
-          const m = sheetMsg;
-          setSheetMsg(null);
-          if (m) setTicketCreateFor(m);
-        }}
-        onCopy={async () => {
-          const m = sheetMsg;
-          setSheetMsg(null);
-          if (m?.text) await Clipboard.setStringAsync(m.text);
-        }}
       />
 
       <CreateTicketModal
@@ -881,14 +886,17 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   list: { flex: 1, backgroundColor: colors.bg },
   listContent: { paddingHorizontal: 8, paddingVertical: 12 },
-  dayWrap: { alignItems: "center", marginVertical: 8 },
+  // v1.118: smaller, more subtle date dividers. The old teal pill drew too
+  // much attention given how often these recur. Matches WhatsApp's quiet
+  // grey-on-white style.
+  dayWrap: { alignItems: "center", marginVertical: 6 },
   day: {
-    backgroundColor: "#e1f2fb",
+    backgroundColor: "rgba(255,255,255,0.85)",
     color: colors.muted,
-    fontSize: 11,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 6,
+    fontSize: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4,
     overflow: "hidden",
   },
   composerRow: {
@@ -930,15 +938,23 @@ const styles = StyleSheet.create({
   },
   sendDisabled: { backgroundColor: "#8fb3a8" },
   sendTxt: { color: "white", fontSize: 20 },
+  // v1.118: mic gets a distinctly darker background + thin white outline
+  // so it reads as a separate, more "primary" affordance vs the 📎 attach
+  // button. Both were the same translucent white before and visually merged.
   mic: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: "rgba(255,255,255,0.18)",
+    backgroundColor: "rgba(0,0,0,0.22)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.35)",
     alignItems: "center",
     justifyContent: "center",
   },
-  micRecording: { backgroundColor: "#dc2626" },
+  micRecording: {
+    backgroundColor: "#dc2626",
+    borderColor: "#dc2626",
+  },
   micTxt: { color: "white", fontSize: 18 },
   previewBack: {
     flex: 1,

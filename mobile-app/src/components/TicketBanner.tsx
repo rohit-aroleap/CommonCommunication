@@ -1,10 +1,13 @@
 // Banner shown at the top of an open thread when there are open tickets on
-// the chat. Tap Resolve to close (confirms when the ticket isn't yours,
-// matching desktop behaviour); tap Reassign to open the reassign modal.
+// the chat. v1.118 compact redesign: single tappable pill row with link-style
+// Reassign / Resolve text actions instead of fat outline buttons. Mirrors
+// the WhatsApp-style notification-bar density.
+//   • Tap Resolve  → confirms (extra prompt when ticket isn't yours)
+//   • Tap Reassign → opens the parent's reassign modal
 
 import React from "react";
 import { Alert, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { colors, space } from "@/theme";
+import { colors } from "@/theme";
 import type { Ticket } from "@/types";
 import { ref, update } from "firebase/database";
 import { db } from "@/firebase";
@@ -28,33 +31,41 @@ export function TicketBanner({
     <View>
       {tickets.map((t) => {
         const mine = t.assignee === currentUid;
+        const bg = mine ? "#fef3c7" : "#fee2e2";
+        const border = mine ? "#fde68a" : "#fecaca";
+        const fg = mine ? "#92400e" : "#991b1b";
         return (
           <View
             key={t.id}
-            style={[styles.banner, mine ? styles.bannerMine : styles.banner]}
+            style={[
+              styles.banner,
+              { backgroundColor: bg, borderBottomColor: border },
+            ]}
           >
-            <Text style={mine ? styles.txtMine : styles.txt} numberOfLines={1}>
-              🎫 {t.title || "Ticket"}
-              {t.assigneeName ? ` · ${t.assigneeName}` : ""}
+            <Text style={[styles.txt, { color: fg }]} numberOfLines={1}>
+              🎫{" "}
+              {t.assigneeName ? (
+                <Text style={styles.assignee}>{t.assigneeName}</Text>
+              ) : (
+                <Text style={styles.unassigned}>Unassigned</Text>
+              )}
+              {t.title ? ` · ${t.title}` : ""}
             </Text>
-            <View style={styles.btnRow}>
-              <TouchableOpacity
-                style={[styles.btn, mine ? styles.btnMine : styles.btn]}
-                onPress={() => onReassign(t.id)}
-              >
-                <Text style={mine ? styles.btnTxtMine : styles.btnTxt}>
-                  Reassign
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.btn, mine ? styles.btnMine : styles.btn]}
-                onPress={() => confirmResolve(t, currentUid, currentName)}
-              >
-                <Text style={mine ? styles.btnTxtMine : styles.btnTxt}>
-                  Resolve
-                </Text>
-              </TouchableOpacity>
-            </View>
+            <TouchableOpacity
+              onPress={() => onReassign(t.id)}
+              hitSlop={8}
+              style={styles.linkBtn}
+            >
+              <Text style={[styles.link, { color: fg }]}>Reassign</Text>
+            </TouchableOpacity>
+            <Text style={[styles.sep, { color: fg }]}>·</Text>
+            <TouchableOpacity
+              onPress={() => confirmResolve(t, currentUid, currentName)}
+              hitSlop={8}
+              style={styles.linkBtn}
+            >
+              <Text style={[styles.link, { color: fg }]}>Resolve</Text>
+            </TouchableOpacity>
           </View>
         );
       })}
@@ -100,41 +111,14 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: "#fee2e2",
+    paddingVertical: 5,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#fecaca",
-    gap: 8,
+    gap: 6,
   },
-  bannerMine: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: "#fef3c7",
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#fde68a",
-    gap: 8,
-  },
-  txt: { color: "#991b1b", fontSize: 12, flex: 1 },
-  txtMine: { color: "#92400e", fontSize: 12, flex: 1 },
-  btnRow: { flexDirection: "row", gap: 4 },
-  btn: {
-    backgroundColor: "white",
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: "#991b1b",
-    paddingHorizontal: 10,
-    paddingVertical: 3,
-  },
-  btnMine: {
-    backgroundColor: "white",
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: "#92400e",
-    paddingHorizontal: 10,
-    paddingVertical: 3,
-  },
-  btnTxt: { color: "#991b1b", fontSize: 12, fontWeight: "500" },
-  btnTxtMine: { color: "#92400e", fontSize: 12, fontWeight: "500" },
+  txt: { fontSize: 12, flex: 1 },
+  assignee: { fontWeight: "600" },
+  unassigned: { fontStyle: "italic", opacity: 0.85 },
+  linkBtn: { paddingHorizontal: 2 },
+  link: { fontSize: 12, fontWeight: "600", textDecorationLine: "underline" },
+  sep: { fontSize: 12, opacity: 0.5, paddingHorizontal: 1 },
 });
