@@ -114,3 +114,11 @@ export type StageBucket =
   | "offboarding";
 
 export const DAILY_SENTINEL = "__daily_groups__";
+
+// Per-user send-activity ping stored at userState/<uid>/sendActivity/<chatKey>.
+// Powers the "Pin this?" suggestion when the current user has been actively
+// messaging a chat that isn't in their favorites yet.
+export interface SendActivity {
+  count: number;
+  lastAt: number;
+}

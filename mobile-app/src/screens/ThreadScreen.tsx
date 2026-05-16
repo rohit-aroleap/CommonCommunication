@@ -73,6 +73,7 @@ export function ThreadScreen({ route, navigation }: Props) {
     ferraIndex,
     contacts,
     markChatSeen,
+    bumpSendActivity,
   } = useAppData();
 
   const meta = chatMetaByKey[chatKey] ?? {};
@@ -186,6 +187,7 @@ export function ThreadScreen({ route, navigation }: Props) {
       lastMsgDirection: "out",
       lastMsgSentByName: user.displayName || user.email,
     });
+    bumpSendActivity(chatKey);
     setComposer("");
     try {
       const res = await sendMessage({
@@ -324,6 +326,7 @@ export function ThreadScreen({ route, navigation }: Props) {
         lastMsgDirection: "out",
         lastMsgSentByName: user.displayName || user.email,
       });
+      bumpSendActivity(chatKey);
       setComposer("");
       try {
         const res = await sendMessage({

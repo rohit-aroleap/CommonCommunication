@@ -28,9 +28,11 @@ interface Props {
   statusFilter: string;
   stageFilter: string;
   search: string;
+  favoritesOnly: boolean;
   onChangeStatus: (v: string) => void;
   onChangeStage: (v: string) => void;
   onChangeSearch: (v: string) => void;
+  onChangeFavoritesOnly: (v: boolean) => void;
 }
 
 const STAGE_OPTIONS = [
@@ -48,9 +50,11 @@ export function FilterBar({
   statusFilter,
   stageFilter,
   search,
+  favoritesOnly,
   onChangeStatus,
   onChangeStage,
   onChangeSearch,
+  onChangeFavoritesOnly,
 }: Props) {
   // Build the status dropdown options from what's actually present in the
   // data — empty buckets would just confuse the user. Daily-groups gets its
@@ -111,6 +115,21 @@ export function FilterBar({
       </View>
 
       <View style={styles.dropRow}>
+        <TouchableOpacity
+          accessibilityLabel="Show favorites only"
+          accessibilityState={{ selected: favoritesOnly }}
+          style={[styles.favChip, favoritesOnly && styles.favChipOn]}
+          onPress={() => onChangeFavoritesOnly(!favoritesOnly)}
+        >
+          <Text
+            style={[
+              styles.favChipTxt,
+              favoritesOnly && styles.favChipTxtOn,
+            ]}
+          >
+            {favoritesOnly ? "★" : "☆"} Favorites
+          </Text>
+        </TouchableOpacity>
         <TouchableOpacity
           style={[styles.drop, !!statusFilter && styles.dropActive]}
           onPress={() => setOpenSheet("status")}
@@ -262,6 +281,22 @@ const styles = StyleSheet.create({
   dropTxt: { fontSize: 13, color: colors.text },
   dropTxtActive: { color: colors.greenDark, fontWeight: "500" },
   caret: { fontSize: 10, color: colors.muted, marginLeft: 6 },
+  favChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: "#f0f2f5",
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "transparent",
+  },
+  favChipOn: {
+    backgroundColor: "#fff7e0",
+    borderColor: "#f5b50a",
+  },
+  favChipTxt: { fontSize: 13, color: colors.text },
+  favChipTxtOn: { color: "#8a6500", fontWeight: "500" },
 
   sheetBack: {
     flex: 1,

@@ -5,7 +5,7 @@
 import React, { useMemo, useState } from "react";
 import { FlatList, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { colors } from "@/theme";
+import { colors, space } from "@/theme";
 import { useAppData, isDailyGroup } from "@/data/AppDataContext";
 import { useAuth } from "@/auth/AuthContext";
 import { resolveDisplayName } from "@/lib/displayName";
@@ -14,6 +14,7 @@ import { FilterBar } from "@/components/FilterBar";
 import { DAILY_SENTINEL } from "@/types";
 import { FERRA_TAG_STAGE } from "@/config";
 import { normalizeFerraPhone } from "@/lib/ferra";
+import { shouldSuggestPin } from "@/lib/favorites";
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "@/screens/types";
@@ -35,12 +36,16 @@ export function ChatsScreen() {
     tickets,
     sharedSubsByPhone,
     myLastSeen,
+    myFavorites,
+    mySendActivity,
+    toggleFavorite,
   } = useAppData();
   const { user } = useAuth();
 
   const [statusFilter, setStatusFilter] = useState("");
   const [stageFilter, setStageFilter] = useState("");
   const [search, setSearch] = useState("");
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
 
   const myUid = user?.uid;
 
@@ -119,6 +124,41 @@ export function ChatsScreen() {
     sharedSubsByPhone,
   ]);
 
+  // Partition the filtered list into a pinned block (favorites ∪ chats with
+  // an open ticket assigned to me) and the rest. Within each block we keep
+  // the existing lastMsgAt sort so recent activity floats up.
+  type ListItem =
+    | { kind: "row"; key: string; item: (typeof enriched)[number] }
+    | { kind: "divider"; key: string };
+
+  const listData = useMemo<ListItem[]>(() => {
+    const pinned: typeof filtered = [];
+    const rest: typeof filtered = [];
+    for (const r of filtered) {
+      const isPinned =
+        myFavorites[r.row.chatKey] || myTicketChatKeys.has(r.row.chatKey);
+      if (isPinned) pinned.push(r);
+      else rest.push(r);
+    }
+    if (favoritesOnly) {
+      return pinned
+        .filter((r) => myFavorites[r.row.chatKey])
+        .map((r) => ({ kind: "row", key: r.row.chatKey, item: r }));
+    }
+    const items: ListItem[] = pinned.map((r) => ({
+      kind: "row",
+      key: r.row.chatKey,
+      item: r,
+    }));
+    if (pinned.length > 0 && rest.length > 0) {
+      items.push({ kind: "divider", key: "__divider__" });
+    }
+    for (const r of rest) {
+      items.push({ kind: "row", key: r.row.chatKey, item: r });
+    }
+    return items;
+  }, [filtered, myFavorites, myTicketChatKeys, favoritesOnly]);
+
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
       <FilterBar
@@ -127,15 +167,27 @@ export function ChatsScreen() {
         statusFilter={statusFilter}
         stageFilter={stageFilter}
         search={search}
+        favoritesOnly={favoritesOnly}
         onChangeStatus={setStatusFilter}
         onChangeStage={setStageFilter}
         onChangeSearch={setSearch}
+        onChangeFavoritesOnly={setFavoritesOnly}
       />
       <FlatList
-        data={filtered}
-        keyExtractor={(item) => item.row.chatKey}
+        data={listData}
+        keyExtractor={(item) => item.key}
         renderItem={({ item }) => {
-          const r = item.row;
+          if (item.kind === "divider") {
+            return (
+              <View style={styles.divider}>
+                <View style={styles.dividerLine} />
+                <Text style={styles.dividerTxt}>More chats</Text>
+                <View style={styles.dividerLine} />
+              </View>
+            );
+          }
+          const enrichedRow = item.item;
+          const r = enrichedRow.row;
           const tag = sharedSubsByPhone?.[normalizeFerraPhone(r.phone)];
           const stage = tag ? FERRA_TAG_STAGE[tag] ?? null : null;
           const status =
@@ -151,28 +203,39 @@ export function ChatsScreen() {
           const myTicket = myTicketChatKeys.has(r.chatKey);
           const lastSeen = myLastSeen[r.chatKey] || 0;
           const unread = r.lastMsgAt > lastSeen && r.direction === "in";
+          const isFavorite = !!myFavorites[r.chatKey];
+          const suggestPin = shouldSuggestPin(
+            r.chatKey,
+            myFavorites,
+            mySendActivity,
+          );
 
           return (
             <ChatRowItem
               row={r}
-              name={item.name}
+              name={enrichedRow.name}
               subscriptionStatus={status}
               stage={stage}
               hasOpenTicket={hasOpenTicket}
               myTicket={myTicket}
               unread={unread}
+              isFavorite={isFavorite}
+              suggestPin={suggestPin}
               onPress={() =>
                 navigation.navigate("Thread", {
                   chatKey: r.chatKey,
-                  initialTitle: item.name,
+                  initialTitle: enrichedRow.name,
                 })
               }
+              onToggleFavorite={() => toggleFavorite(r.chatKey)}
             />
           );
         }}
         ListEmptyComponent={
           <View style={styles.empty}>
-            <Text style={styles.emptyTxt}>No chats match.</Text>
+            <Text style={styles.emptyTxt}>
+              {favoritesOnly ? "No favorites yet." : "No chats match."}
+            </Text>
           </View>
         }
       />
@@ -184,4 +247,23 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.panel },
   empty: { padding: 60, alignItems: "center" },
   emptyTxt: { color: colors.muted, fontSize: 14 },
+  divider: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: space.md,
+    paddingVertical: 6,
+    backgroundColor: "#f6f7f8",
+    gap: space.sm,
+  },
+  dividerLine: {
+    flex: 1,
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.border,
+  },
+  dividerTxt: {
+    fontSize: 11,
+    color: colors.muted,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
 });

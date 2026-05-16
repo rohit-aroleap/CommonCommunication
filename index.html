@@ -239,6 +239,7 @@
   .chat-row .preview {
     color: var(--muted); font-size: 14px; overflow: hidden;
     text-overflow: ellipsis; white-space: nowrap;
+    flex: 1; min-width: 0;
   }
   .chat-row .preview .who {
     color: var(--green-dark); font-weight: 500;
@@ -573,6 +574,38 @@
   .filter-pill[data-filter="Urgent"]:not(.active):hover { background: #fecaca; }
   .filter-pill[data-filter="Urgent"].active { background: #dc2626; color: white; }
   .filter-pill[data-filter="Urgent"].active:hover { background: #b91c1c; }
+  .filter-pill[data-filter="Favorites"]:not(.active) { background: #fff7e0; color: #8a6500; }
+  .filter-pill[data-filter="Favorites"]:not(.active):hover { background: #fff0c2; }
+  .filter-pill[data-filter="Favorites"].active { background: #f5b50a; color: white; }
+  .filter-pill[data-filter="Favorites"].active:hover { background: #d99c00; }
+
+  /* Star/Pin? button — sits inline at the right of the row preview. The
+     suggest variant only appears when the current user has been actively
+     sending to a non-favorited chat (3+ sends in 7 days). */
+  .star-btn {
+    background: none; border: none; padding: 2px 6px; cursor: pointer;
+    font-size: 18px; line-height: 1; color: #c2c8cc;
+    flex-shrink: 0; border-radius: 4px;
+  }
+  .star-btn:hover { background: var(--border); color: #f5b50a; }
+  .star-btn.on { color: #f5b50a; }
+  .star-btn.suggest {
+    font-size: 11px; font-weight: 600;
+    padding: 3px 8px;
+    background: #fff7e0; color: #8a6500;
+    border: 1px solid #f5b50a; border-radius: 10px;
+  }
+  .star-btn.suggest:hover { background: #fff0c2; }
+
+  /* Thin separator between the pinned block and "everyone else". */
+  .list-divider {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 16px;
+    background: #f6f7f8;
+    font-size: 10px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .5px;
+  }
+  .list-divider .line { flex: 1; height: 1px; background: var(--border); }
 
   /* Customer info drawer — collapsed to a 40px rail by default, expands to a
      full push-drawer when the rail's toggle button is clicked. */
@@ -1381,7 +1414,7 @@ import {
   signInWithEmailAndPassword,
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 import {
-  getDatabase, ref, onValue, push, set, update, get, child, query, orderByChild, limitToLast,
+  getDatabase, ref, onValue, push, set, update, get, remove, child, query, orderByChild, limitToLast,
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
 
 // ====== CONFIG ======
@@ -1427,6 +1460,10 @@ let chatOpenTickets = {};         // chatKey -> [{id, ...}] of OPEN tickets (sor
 let teamUsers = {};               // uid -> { name, email, photoURL }
 let _openPopover = null;          // current ticket popover DOM element
 let myLastSeen = {};              // chatKey -> ts (ms): when I last opened the chat
+let myFavorites = {};             // chatKey -> true: per-user favorites/pins
+let mySendActivity = {};          // chatKey -> { count, lastAt }: my recent sends (for Pin? suggest)
+const SEND_SUGGEST_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const SEND_SUGGEST_MIN_COUNT = 3;
 let _baseTabTitle = "CommonCommunication";
 let contactsCache = {};   // phone (digits) -> { name, source, seenAt } from commonComm/contacts
 
@@ -1632,6 +1669,8 @@ onAuthStateChanged(auth, async (user) => {
     listenTeamUsers();
     listenTickets();
     listenMyLastSeen();
+    listenMyFavorites();
+    listenMySendActivity();
     listenTemplates();
     pingWorker();
   } else {
@@ -2440,6 +2479,62 @@ function markChatSeen(chatKey) {
   // Optimistic local update — listener will fire shortly with the persisted value
   myLastSeen[chatKey] = ts;
   set(ref(db, `${ROOT}/userState/${currentUser.uid}/lastSeen/${chatKey}`), ts).catch(() => {});
+}
+
+// ====== PER-USER FAVORITES (pin to top of chat list) ======
+// Trainers see 400+ chats churning whenever any teammate replies. Favorites
+// + chats with my open ticket get pinned at the top so my conversations
+// don't get pushed out of sight. The auto-suggest below nudges a pin when
+// I've been actively messaging a chat I haven't pinned yet.
+function listenMyFavorites() {
+  if (!currentUser) return;
+  onValue(ref(db, `${ROOT}/userState/${currentUser.uid}/favorites`), (snap) => {
+    myFavorites = snap.val() || {};
+    renderChatList(lastChatRows);
+  });
+}
+function listenMySendActivity() {
+  if (!currentUser) return;
+  onValue(ref(db, `${ROOT}/userState/${currentUser.uid}/sendActivity`), (snap) => {
+    mySendActivity = snap.val() || {};
+    renderChatList(lastChatRows);
+  });
+}
+function isFavorite(chatKey) {
+  return !!myFavorites[chatKey];
+}
+function toggleFavorite(chatKey) {
+  if (!currentUser || !chatKey) return;
+  const path = `${ROOT}/userState/${currentUser.uid}/favorites/${chatKey}`;
+  if (myFavorites[chatKey]) {
+    delete myFavorites[chatKey]; // optimistic
+    remove(ref(db, path)).catch(() => {});
+  } else {
+    myFavorites[chatKey] = true; // optimistic
+    set(ref(db, path), true).catch(() => {});
+  }
+  renderChatList(lastChatRows);
+}
+function shouldSuggestPin(chatKey) {
+  if (isFavorite(chatKey)) return false;
+  const a = mySendActivity[chatKey];
+  if (!a || (a.count || 0) < SEND_SUGGEST_MIN_COUNT) return false;
+  return (Date.now() - (a.lastAt || 0)) <= SEND_SUGGEST_WINDOW_MS;
+}
+// Read-modify-write the per-chat send counter — bumped after every send.
+// Resets the count when the previous activity is older than the suggest
+// window so the threshold reflects *recent* engagement, not lifetime sends.
+async function bumpSendActivity(chatKey) {
+  if (!currentUser || !chatKey) return;
+  const path = `${ROOT}/userState/${currentUser.uid}/sendActivity/${chatKey}`;
+  try {
+    const snap = await get(ref(db, path));
+    const prev = snap.val();
+    const now = Date.now();
+    const within = prev && (now - (prev.lastAt || 0)) <= SEND_SUGGEST_WINDOW_MS;
+    const next = { count: within ? (prev.count || 0) + 1 : 1, lastAt: now };
+    await set(ref(db, path), next);
+  } catch (_e) { /* hint-only, swallow errors */ }
 }
 
 // Tab title: "(N) CommonCommunication" where N = chats with my-unread state.
@@ -3472,6 +3567,8 @@ function renderChatList(rows) {
       v = v.filter(r => (r.lastMsgAt || 0) >= liveCutoff);
     } else if (currentStatusFilter === "My tickets") {
       v = v.filter(r => myChatKeys.has(r.chatKey));
+    } else if (currentStatusFilter === "Favorites") {
+      v = v.filter(r => isFavorite(r.chatKey));
     } else if (currentStatusFilter === "Urgent") {
       // Only count "urgent" while the latest message is still inbound — once
       // we reply, the badge clears so the list doesn't keep blaring.
@@ -3500,11 +3597,35 @@ function renderChatList(rows) {
   );
 
   if (!filtered.length) {
-    chatList.innerHTML = `<div class="empty">No chats${q ? " match your search" : " yet. Click + to start one."}.</div>`;
+    const empty = q
+      ? "No chats match your search."
+      : (currentStatusFilter === "Favorites"
+          ? "No favorites yet — click ☆ on any chat to pin it here."
+          : "No chats yet. Click + to start one.");
+    chatList.innerHTML = `<div class="empty">${empty}</div>`;
     return;
   }
 
-  chatList.innerHTML = filtered.map(r => {
+  // Partition the filtered list so favorites + chats with my open ticket
+  // float to the top. We skip partitioning for filters whose meaning IS
+  // "show me this set" (My tickets, Favorites, Daily Groups) — the user
+  // already picked a focused view.
+  const partitionEligible =
+    currentStatusFilter !== "Favorites" &&
+    currentStatusFilter !== "My tickets" &&
+    currentStatusFilter !== "Daily Groups";
+  const pinnedRows = [];
+  const restRows = [];
+  if (partitionEligible) {
+    for (const r of filtered) {
+      if (isFavorite(r.chatKey) || myChatKeys.has(r.chatKey)) pinnedRows.push(r);
+      else restRows.push(r);
+    }
+  } else {
+    restRows.push(...filtered);
+  }
+
+  const renderRow = (r) => {
     const isGroup = r.chatType === "group";
     const openTix = getOpenTicketsForChat(r.chatKey);
     const hasTicket = openTix.length > 0;
@@ -3546,7 +3667,12 @@ function renderChatList(rows) {
       if (r.triageIntent === "complaint") aiBadge += `<span class="ai-badge intent" title="AI: customer complaint">complaint</span>`;
       else if (r.triageIntent === "booking") aiBadge += `<span class="ai-badge intent" title="AI: booking/scheduling">booking</span>`;
     }
-    const rowClass = `chat-row${r.chatKey === currentChatId ? " active" : ""}${unread ? " unread" : ""}${urgentRowClass}`;
+    const favored = isFavorite(r.chatKey);
+    const suggest = !favored && shouldSuggestPin(r.chatKey);
+    const starHtml = suggest
+      ? `<button class="star-btn suggest" data-fav-key="${escapeHtml(r.chatKey)}" title="You've been messaging this chat — pin to favorites?">☆ Pin?</button>`
+      : `<button class="star-btn${favored ? " on" : ""}" data-fav-key="${escapeHtml(r.chatKey)}" title="${favored ? "Remove from favorites" : "Add to favorites"}">${favored ? "★" : "☆"}</button>`;
+    const rowClass = `chat-row${r.chatKey === currentChatId ? " active" : ""}${unread ? " unread" : ""}${urgentRowClass}${favored ? " favored" : ""}`;
     return `
     <div class="${rowClass}" data-key="${escapeHtml(r.chatKey)}">
       <div class="${avatarClass}" style="${avatarStyle}">${escapeHtml(initial)}${extraBadge}</div>
@@ -3557,15 +3683,30 @@ function renderChatList(rows) {
         </div>
         <div class="bottom">
           <span class="preview">${previewWho}${escapeHtml(r.preview)}</span>
+          ${starHtml}
         </div>
         ${assigneeTag}
         ${pillsHtml}
       </div>
     </div>`;
-  }).join("");
+  };
+
+  const pinnedHtml = pinnedRows.map(renderRow).join("");
+  const restHtml = restRows.map(renderRow).join("");
+  const dividerHtml = (pinnedRows.length > 0 && restRows.length > 0)
+    ? `<div class="list-divider"><span class="line"></span><span class="lbl">More chats</span><span class="line"></span></div>`
+    : "";
+  chatList.innerHTML = pinnedHtml + dividerHtml + restHtml;
 
   chatList.querySelectorAll(".chat-row").forEach(el => {
     el.onclick = () => openChat(el.dataset.key);
+  });
+  // Wire the star buttons — stopPropagation so we don't also open the chat.
+  chatList.querySelectorAll(".star-btn").forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      toggleFavorite(btn.dataset.favKey);
+    };
   });
 }
 
@@ -3666,7 +3807,7 @@ msgSearchModal.addEventListener("click", (e) => {
 
 // ====== STATUS FILTER PILLS ======
 const STATUS_FILTERS = [
-  "All", "Urgent", "Live", "My tickets", "ACTIVE", "CANCELLED", "Daily Groups"
+  "All", "Favorites", "Urgent", "Live", "My tickets", "ACTIVE", "CANCELLED", "Daily Groups"
 ];
 const LIVE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const DAILY_GROUP_PREFIX = "Daily Workout Ferra C";
@@ -3677,6 +3818,7 @@ let currentStatusFilter = "All";
 
 // Optional small subtitle under specific pills to hint what they mean
 const PILL_HINTS = {
+  "Favorites": "(your pinned)",
   "Urgent": "(AI flagged)",
   "Live": "(last 7 days)",
   "Daily Groups": "(workout cohorts)",
@@ -4957,6 +5099,7 @@ async function doSendMedia(media) {
     lastMsgDirection: "out",
     lastMsgSentByName: currentUser.displayName || currentUser.email,
   });
+  bumpSendActivity(currentChatId);
   composerInput.value = "";
   composerInput.style.height = "auto";
 
@@ -5007,6 +5150,7 @@ async function doSend() {
     lastMsgAt: ts, lastMsgPreview: text.slice(0,120),
     lastMsgDirection: "out", lastMsgSentByName: currentUser.displayName || currentUser.email,
   });
+  bumpSendActivity(currentChatId);
 
   composerInput.value = "";
   composerInput.style.height = "auto";

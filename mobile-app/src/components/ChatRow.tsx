@@ -22,7 +22,10 @@ interface Props {
   hasOpenTicket: boolean;
   myTicket: boolean;
   unread: boolean;
+  isFavorite: boolean;
+  suggestPin: boolean;
   onPress: () => void;
+  onToggleFavorite: () => void;
 }
 
 export function ChatRowItem({
@@ -33,7 +36,10 @@ export function ChatRowItem({
   hasOpenTicket,
   myTicket,
   unread,
+  isFavorite,
+  suggestPin,
   onPress,
+  onToggleFavorite,
 }: Props) {
   const isGroup = row.chatType === "group";
   const avatarBg: ViewStyle = {
@@ -51,6 +57,12 @@ export function ChatRowItem({
       : "";
 
   const time = formatTime(row.lastMsgAt);
+
+  // Stop propagation so tapping the star/Pin? button doesn't open the thread.
+  const onStarPress = (e: { stopPropagation?: () => void }) => {
+    e.stopPropagation?.();
+    onToggleFavorite();
+  };
 
   return (
     <TouchableOpacity onPress={onPress} style={styles.row} activeOpacity={0.6}>
@@ -98,9 +110,56 @@ export function ChatRowItem({
             {stage && stage !== "active" && (
               <StagePill stage={stage} />
             )}
+            <StarButton
+              isFavorite={isFavorite}
+              suggestPin={!isFavorite && suggestPin}
+              onPress={onStarPress}
+            />
           </View>
         </View>
       </View>
+    </TouchableOpacity>
+  );
+}
+
+function StarButton({
+  isFavorite,
+  suggestPin,
+  onPress,
+}: {
+  isFavorite: boolean;
+  suggestPin: boolean;
+  onPress: (e: { stopPropagation?: () => void }) => void;
+}) {
+  if (suggestPin) {
+    return (
+      <TouchableOpacity
+        accessibilityLabel="Pin this chat to favorites"
+        onPress={onPress}
+        hitSlop={8}
+        style={styles.suggestPill}
+      >
+        <Text style={styles.suggestTxt}>☆ Pin?</Text>
+      </TouchableOpacity>
+    );
+  }
+  return (
+    <TouchableOpacity
+      accessibilityLabel={
+        isFavorite ? "Remove from favorites" : "Add to favorites"
+      }
+      onPress={onPress}
+      hitSlop={8}
+      style={styles.starBtn}
+    >
+      <Text
+        style={[
+          styles.starTxt,
+          isFavorite ? styles.starTxtOn : styles.starTxtOff,
+        ]}
+      >
+        {isFavorite ? "★" : "☆"}
+      </Text>
     </TouchableOpacity>
   );
 }
@@ -213,4 +272,20 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   ticketDotTxt: { color: "white", fontSize: 11, fontWeight: "600" },
+  starBtn: {
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+  },
+  starTxt: { fontSize: 18, lineHeight: 20 },
+  starTxtOn: { color: "#f5b50a" },
+  starTxtOff: { color: "#c2c8cc" },
+  suggestPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    backgroundColor: "#fff7e0",
+    borderWidth: 1,
+    borderColor: "#f5b50a",
+  },
+  suggestTxt: { color: "#8a6500", fontSize: 11, fontWeight: "600" },
 });
