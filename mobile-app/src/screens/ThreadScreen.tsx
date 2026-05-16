@@ -214,6 +214,13 @@ export function ThreadScreen({ route, navigation }: Props) {
     };
   }, []);
 
+  // v1.129: mobile-side template creation. Opens a small modal where the
+  // trainer can save a new template without going back to the desktop.
+  // newTemplateModal is null when closed; an object holds the form state.
+  const [newTemplateModal, setNewTemplateModal] = useState<
+    { name: string; text: string; saving: boolean } | null
+  >(null);
+
   useLayoutEffect(() => {
     navigation.setOptions({
       headerTitle: headerName,
@@ -416,6 +423,42 @@ export function ThreadScreen({ route, navigation }: Props) {
       setSavingNote(false);
     }
   }
+
+  // v1.129: save a new template to commonComm/config/templates. The listener
+  // in AppDataContext picks it up immediately, so the picker refreshes and
+  // we can close the modal right after the write.
+  const saveNewTemplate = useCallback(async () => {
+    if (!newTemplateModal || !user) return;
+    const name = newTemplateModal.name.trim().replace(/^\/+/, "");
+    const text = newTemplateModal.text.trim();
+    if (!name) {
+      Alert.alert("Need a keyword", "Give the template a short slash name, e.g. 'welcome'.");
+      return;
+    }
+    if (!text) {
+      Alert.alert("Need template text", "Type the message body that should be inserted.");
+      return;
+    }
+    setNewTemplateModal({ ...newTemplateModal, saving: true });
+    try {
+      const tplRef = push(ref(db, `${ROOT}/config/templates`));
+      await set(tplRef, {
+        name,
+        text,
+        createdBy: user.uid,
+        createdByName: user.displayName || user.email || "(mobile)",
+        createdAt: Date.now(),
+      });
+      setNewTemplateModal(null);
+      // Helpful: drop the user back into the picker with their new template
+      // pre-filtered. Setting composer to "/<name>" makes the slashQuery
+      // match exactly the row that just landed.
+      setComposer(`/${name}`);
+    } catch (e) {
+      Alert.alert("Couldn't save", String((e as Error)?.message || e));
+      setNewTemplateModal((m) => (m ? { ...m, saving: false } : m));
+    }
+  }, [newTemplateModal, user]);
 
   // Insert a template into the composer (v1.126). Resolves {name},
   // {firstName}, {phone}, {trainerName} from the chat meta + signed-in
@@ -686,15 +729,16 @@ export function ThreadScreen({ route, navigation }: Props) {
       />
       {/* Slash-command template picker (v1.126). Visible whenever composer
           starts with "/". Sits BETWEEN the message list and the composer so
-          it stays put when the keyboard is open. Empty-state when no
-          templates are configured points to the desktop. */}
+          it stays put when the keyboard is open. v1.129 adds an inline
+          "+ New template" action so trainers can capture canned replies
+          from the phone without bouncing back to the desktop. */}
       {slashQuery !== null && (
         <View style={styles.tplPicker}>
           {slashMatches.length === 0 ? (
             <View style={styles.tplEmptyWrap}>
               <Text style={styles.tplEmptyTxt}>
                 {Object.keys(templates).length === 0
-                  ? "No templates yet. Admins can add them from the desktop dashboard (📋 Templates)."
+                  ? "No templates yet. Tap “+ New template” to create one."
                   : `No templates match "/${slashQuery}"`}
               </Text>
             </View>
@@ -720,6 +764,22 @@ export function ThreadScreen({ route, navigation }: Props) {
               </Text>
             </>
           )}
+          {/* + New template action sits at the bottom of the picker so it
+              doesn't shift around when filtering. Pre-fills the keyword
+              with whatever the user has already typed after the slash. */}
+          <TouchableOpacity
+            style={styles.tplNewBtn}
+            onPress={() =>
+              setNewTemplateModal({
+                name: slashQuery || "",
+                text: "",
+                saving: false,
+              })
+            }
+            activeOpacity={0.7}
+          >
+            <Text style={styles.tplNewBtnTxt}>+ New template</Text>
+          </TouchableOpacity>
         </View>
       )}
       <View
@@ -810,6 +870,72 @@ export function ThreadScreen({ route, navigation }: Props) {
         chatId={chatId}
         onClose={() => setSummaryOpen(false)}
       />
+
+      {/* v1.129: New-template composer. Same layout as NotePreviewModal so
+          the screen feels familiar — a card with two inputs (slash keyword
+          + body text) and Cancel/Save. */}
+      <Modal
+        visible={!!newTemplateModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setNewTemplateModal(null)}
+      >
+        <View style={styles.previewBack}>
+          <View style={styles.previewCard}>
+            <View style={styles.previewHead}>
+              <Text style={styles.previewTitle}>New template</Text>
+              <Text style={styles.previewSub}>
+                Shared with the whole team. Variables: {"{firstName}, {name}, {phone}, {trainerName}"}
+              </Text>
+            </View>
+            <Text style={styles.tplFormLabel}>Slash keyword</Text>
+            <TextInput
+              style={styles.tplFormInput}
+              value={newTemplateModal?.name ?? ""}
+              onChangeText={(v) =>
+                setNewTemplateModal((m) => (m ? { ...m, name: v } : m))
+              }
+              placeholder="e.g. welcome"
+              placeholderTextColor={colors.muted}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <Text style={styles.tplFormLabel}>Message body</Text>
+            <TextInput
+              style={[styles.tplFormInput, styles.tplFormBody]}
+              value={newTemplateModal?.text ?? ""}
+              onChangeText={(v) =>
+                setNewTemplateModal((m) => (m ? { ...m, text: v } : m))
+              }
+              placeholder="Hi {firstName}, welcome to Aroleap! I'm {trainerName} — let me know how I can help."
+              placeholderTextColor={colors.muted}
+              multiline
+            />
+            <View style={styles.previewActions}>
+              <TouchableOpacity
+                style={styles.previewBtn}
+                onPress={() => setNewTemplateModal(null)}
+                disabled={newTemplateModal?.saving}
+              >
+                <Text style={styles.previewBtnTxt}>Cancel</Text>
+              </TouchableOpacity>
+              <View style={{ flex: 1 }} />
+              <TouchableOpacity
+                onPress={saveNewTemplate}
+                style={[
+                  styles.previewSave,
+                  newTemplateModal?.saving && styles.previewSaveDisabled,
+                ]}
+                disabled={!!newTemplateModal?.saving}
+              >
+                <Text style={styles.previewSaveTxt}>
+                  {newTemplateModal?.saving ? "Saving…" : "Save"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -1083,6 +1209,45 @@ const styles = StyleSheet.create({
     color: "rgba(255,255,255,0.7)",
     fontSize: 13,
     lineHeight: 18,
+  },
+  // v1.129: "+ New template" action at the bottom of the picker. Reads
+  // as a CTA but stays compact (single line, no row separator below) so
+  // it doesn't drown out actual matches.
+  tplNewBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "rgba(255,255,255,0.12)",
+  },
+  tplNewBtnTxt: {
+    color: "#5eead4",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  // v1.129 new-template modal — re-uses NotePreviewModal's card chrome but
+  // adds its own labels/inputs since the layout has two fields stacked.
+  tplFormLabel: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: colors.muted,
+    marginTop: 6,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+  tplFormInput: {
+    fontSize: 14,
+    color: colors.text,
+    padding: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    borderRadius: 8,
+    marginTop: 4,
+    backgroundColor: "#fafafa",
+  },
+  tplFormBody: {
+    minHeight: 80,
+    maxHeight: 200,
+    textAlignVertical: "top",
   },
   attach: {
     width: 40,
