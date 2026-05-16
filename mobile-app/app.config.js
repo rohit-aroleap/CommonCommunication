@@ -60,6 +60,14 @@ module.exports = ({ config }) => ({
   },
   android: {
     package: "com.aroleap.commoncomm",
+    // FCM config needed for Android push notifications. The file is
+    // .gitignored — each developer/build needs their own download from
+    // Firebase Console → motherofdashboard → Project settings → General
+    // → Android app for com.aroleap.commoncomm → Download
+    // google-services.json. Without this file, expo-notifications fails
+    // to retrieve a token on Android (silent, no error) and pushes never
+    // arrive.
+    googleServicesFile: "./google-services.json",
     adaptiveIcon: {
       foregroundImage: "./assets/adaptive-icon.png",
       backgroundColor: "#008069",

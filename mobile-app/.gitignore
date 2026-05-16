@@ -11,3 +11,4 @@ ios/
 coverage/
 GoogleService-Info.plist
 google-services.json
+credentials.json
