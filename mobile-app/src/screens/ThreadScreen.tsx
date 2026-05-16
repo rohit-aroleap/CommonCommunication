@@ -56,6 +56,10 @@ import { dayLabel } from "@/lib/format";
 import { chatKeyToChatId } from "@/lib/encodeKey";
 import { fetchChatInfo, sendMessage, notifyDm, transcribeAudio } from "@/lib/worker";
 import { dedupMessages } from "@/lib/messageDedup";
+import {
+  filterTemplates,
+  substituteTemplateVars,
+} from "@/lib/templates";
 import { MessageBubble } from "@/components/MessageBubble";
 import { TicketBanner } from "@/components/TicketBanner";
 import { CreateTicketModal } from "@/components/CreateTicketModal";
@@ -100,6 +104,7 @@ export function ThreadScreen({ route, navigation }: Props) {
     contacts,
     markChatSeen,
     bumpSendActivity,
+    templates,
   } = useAppData();
 
   // DM mode: the chatKey is "dm:" + pairKey, not a customer chatKey. Branch
@@ -148,6 +153,20 @@ export function ThreadScreen({ route, navigation }: Props) {
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [composer, setComposer] = useState("");
+  // Slash-command template picker (v1.126). When the composer starts with
+  // "/", we show a floating list above the composer. Same UX as the
+  // desktop's openTplPicker, scoped to first-character "/" rather than
+  // mid-text so it doesn't fight with regular typing.
+  const slashQuery: string | null = useMemo(() => {
+    if (!composer.startsWith("/")) return null;
+    // DMs and groups should still allow templates — useful for canned
+    // "I'm offline" or "Acknowledged" replies — so we don't gate by isDm.
+    return composer.slice(1).toLowerCase().trim();
+  }, [composer]);
+  const slashMatches = useMemo(
+    () => (slashQuery === null ? [] : filterTemplates(templates, slashQuery)),
+    [slashQuery, templates],
+  );
   // sheetMsg removed in v1.118 — long-press now copies directly and single
   // tap opens the ticket-create modal, so the bottom action sheet became
   // dead UI. Kept the ActionSheet component definition in this file for
@@ -366,6 +385,23 @@ export function ThreadScreen({ route, navigation }: Props) {
       setSavingNote(false);
     }
   }
+
+  // Insert a template into the composer (v1.126). Resolves {name},
+  // {firstName}, {phone}, {trainerName} from the chat meta + signed-in
+  // trainer. Replaces the entire composer (matching desktop behavior —
+  // typing `/welcome` then picking inserts the whole canned message, the
+  // user's "/welcome" placeholder gets thrown away).
+  const insertTemplate = useCallback(
+    (templateText: string) => {
+      const resolved = substituteTemplateVars(templateText, {
+        meta: isDm ? null : meta,
+        resolvedDisplayName: isDm ? "" : headerName,
+        trainerName: user?.displayName || user?.email || "",
+      });
+      setComposer(resolved);
+    },
+    [isDm, meta, headerName, user],
+  );
 
   const onAttach = useCallback(async () => {
     if (!user || attachBusy) return;
@@ -602,6 +638,44 @@ export function ThreadScreen({ route, navigation }: Props) {
           listRef.current?.scrollToEnd({ animated: false })
         }
       />
+      {/* Slash-command template picker (v1.126). Visible whenever composer
+          starts with "/". Sits BETWEEN the message list and the composer so
+          it stays put when the keyboard is open. Empty-state when no
+          templates are configured points to the desktop. */}
+      {slashQuery !== null && (
+        <View style={styles.tplPicker}>
+          {slashMatches.length === 0 ? (
+            <View style={styles.tplEmptyWrap}>
+              <Text style={styles.tplEmptyTxt}>
+                {Object.keys(templates).length === 0
+                  ? "No templates yet. Admins can add them from the desktop dashboard (📋 Templates)."
+                  : `No templates match "/${slashQuery}"`}
+              </Text>
+            </View>
+          ) : (
+            <>
+              {slashMatches.slice(0, 6).map((t) => (
+                <TouchableOpacity
+                  key={t.id}
+                  style={styles.tplItem}
+                  onPress={() => insertTemplate(t.text || "")}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.tplName} numberOfLines={1}>
+                    /{t.name}
+                  </Text>
+                  <Text style={styles.tplPreview} numberOfLines={2}>
+                    {t.text}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+              <Text style={styles.tplHint}>
+                Tap to insert — variables fill from this chat
+              </Text>
+            </>
+          )}
+        </View>
+      )}
       <View
         style={[
           styles.composerRow,
@@ -910,6 +984,48 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
     backgroundColor: colors.greenDark,
     gap: 6,
+  },
+  // Slash-command template picker (v1.126). Anchored above the composer,
+  // dark surface so it pops against the message list. Capped at ~240px so
+  // the list itself stays visible behind it on short screens.
+  tplPicker: {
+    maxHeight: 240,
+    backgroundColor: "#1f2933",
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "rgba(255,255,255,0.15)",
+    paddingVertical: 4,
+  },
+  tplItem: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "rgba(255,255,255,0.08)",
+  },
+  tplName: {
+    color: "#5eead4",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  tplPreview: {
+    color: "rgba(255,255,255,0.85)",
+    fontSize: 13,
+    marginTop: 2,
+  },
+  tplHint: {
+    color: "rgba(255,255,255,0.55)",
+    fontSize: 11,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    fontStyle: "italic",
+  },
+  tplEmptyWrap: {
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  tplEmptyTxt: {
+    color: "rgba(255,255,255,0.7)",
+    fontSize: 13,
+    lineHeight: 18,
   },
   attach: {
     width: 40,

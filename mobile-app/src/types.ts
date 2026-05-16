@@ -208,3 +208,16 @@ export interface SendActivity {
   count: number;
   lastAt: number;
 }
+
+// Quick-reply template stored at commonComm/config/templates/{id}. Managed
+// in the desktop dashboard's Templates modal (admins only). Mobile reads
+// them and inserts via the `/` picker in the composer. Variable substitution
+// happens at insert time — see lib/templates.ts. Shape mirrors what the
+// desktop side writes; "name" is the slash keyword (e.g. "welcome" → "/welcome").
+export interface Template {
+  name: string;
+  text: string;
+  createdBy?: string;
+  createdAt?: number;
+  updatedAt?: number;
+}

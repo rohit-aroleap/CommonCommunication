@@ -30,6 +30,7 @@ import type {
   SendActivity,
   TeamMember,
   TeamUser,
+  Template,
   Ticket,
 } from "@/types";
 
@@ -62,6 +63,9 @@ interface AppDataValue {
   chatsUnreadCount: number;
   teamUnreadCount: number;
   ticketsCount: number;
+  // Quick-reply templates (read-only on mobile in v1.126; desktop manages
+  // CRUD). Slash-picker in ThreadScreen reads from this map.
+  templates: Record<string, Template>;
 }
 
 function normalizePhone(p: string): string {
@@ -116,6 +120,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
   const [mySendActivity, setMySendActivity] = useState<
     Record<string, SendActivity>
   >({});
+  const [templates, setTemplates] = useState<Record<string, Template>>({});
 
   useEffect(() => {
     if (!user) return;
@@ -173,6 +178,13 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     unsubs.push(
       onValue(ref(db, `${ROOT}/userState/${user.uid}/sendActivity`), (s) =>
         setMySendActivity(s.val() || {}),
+      ),
+    );
+    // Quick-reply templates (v1.126). Read-only on mobile; the desktop
+    // dashboard's Templates modal is the source of truth.
+    unsubs.push(
+      onValue(ref(db, `${ROOT}/config/templates`), (s) =>
+        setTemplates(s.val() || {}),
       ),
     );
     return () => {
@@ -385,6 +397,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       chatsUnreadCount,
       teamUnreadCount,
       ticketsCount,
+      templates,
     }),
     [
       chatRows,
@@ -407,6 +420,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       myLastSeen,
       myFavorites,
       mySendActivity,
+      templates,
     ],
   );
 
