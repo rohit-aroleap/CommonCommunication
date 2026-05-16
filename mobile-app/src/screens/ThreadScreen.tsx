@@ -645,8 +645,14 @@ export function ThreadScreen({ route, navigation }: Props) {
         // shrink the layout when the keyboard opens, so we pad the root
         // bottom by the actual measured keyboard height. Flex-end children
         // (composer + slash picker) then sit exactly above the keyboard.
+        //
+        // v1.128: add insets.bottom on top of the kb height. The gesture-nav
+        // pill on edge-to-edge phones is drawn OVER the keyboard, so the
+        // visually-usable area above the keyboard ends `insets.bottom` pixels
+        // higher than endCoordinates.height suggests. Without this, the send
+        // and attach buttons get clipped by ~20-30px on Pixel-style devices.
         Platform.OS === "android" && androidKbHeight > 0
-          ? { paddingBottom: androidKbHeight }
+          ? { paddingBottom: androidKbHeight + insets.bottom }
           : null,
       ]}
       // iOS keeps "padding" (works well with the bottom tab safe area).
