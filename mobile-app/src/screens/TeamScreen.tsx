@@ -186,13 +186,28 @@ export function TeamScreen() {
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
       <View style={styles.searchRow}>
-        <TextInput
-          style={styles.search}
-          value={search}
-          onChangeText={setSearch}
-          placeholder="Search teammates"
-          placeholderTextColor={colors.muted}
-        />
+        <View style={styles.searchWrap}>
+          <Text style={styles.searchIcn}>🔍</Text>
+          <TextInput
+            style={styles.searchInput}
+            value={search}
+            onChangeText={setSearch}
+            placeholder="Search teammates"
+            placeholderTextColor={colors.muted}
+            returnKeyType="search"
+            autoCorrect={false}
+            autoCapitalize="none"
+          />
+          {search.length > 0 && (
+            <Text
+              style={styles.searchClear}
+              onPress={() => setSearch("")}
+              accessibilityLabel="Clear search"
+            >
+              ×
+            </Text>
+          )}
+        </View>
       </View>
       <FlatList
         data={filtered}
@@ -452,13 +467,25 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
-  search: {
-    height: 36,
-    backgroundColor: colors.header,
-    borderRadius: 8,
-    paddingHorizontal: space.md,
-    fontSize: 14,
+  searchWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#f0f2f5",
+    borderRadius: 22,
+    paddingHorizontal: 12,
+  },
+  searchIcn: { color: colors.muted, fontSize: 13, marginRight: 8 },
+  searchInput: {
+    flex: 1,
+    paddingVertical: 10,
+    fontSize: 15,
     color: colors.text,
+  },
+  searchClear: {
+    fontSize: 22,
+    color: colors.muted,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
   },
   newRow: {
     flexDirection: "row",
