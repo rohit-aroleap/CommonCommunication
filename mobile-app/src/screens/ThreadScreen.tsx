@@ -40,6 +40,7 @@ import {
   set,
   update,
 } from "firebase/database";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { db } from "@/firebase";
 import { ROOT, MAX_MEDIA_BYTES } from "@/config";
 import { colors, space } from "@/theme";
@@ -83,6 +84,11 @@ type Props = NativeStackScreenProps<RootStackParamList, "Thread">;
 export function ThreadScreen({ route, navigation }: Props) {
   const { chatKey, initialTitle } = route.params;
   const { user } = useAuth();
+  // Bottom inset = the home indicator / gesture-nav pill on iPhones with
+  // notches and Androids with the bottom swipe-up bar. Without this padding
+  // the composer's mic/send buttons sit flush against the phone's bottom
+  // edge and get clipped by the gesture area.
+  const insets = useSafeAreaInsets();
   const {
     chatMetaByKey,
     tickets,
@@ -571,7 +577,16 @@ export function ThreadScreen({ route, navigation }: Props) {
           listRef.current?.scrollToEnd({ animated: false })
         }
       />
-      <View style={styles.composerRow}>
+      <View
+        style={[
+          styles.composerRow,
+          // Stack our base 8px composer padding on top of whatever the OS
+          // reports as the bottom inset (gesture-nav pill / home indicator).
+          // Phones without a gesture bar report 0 and we end up with 8px,
+          // same as before.
+          { paddingBottom: insets.bottom + 8 },
+        ]}
+      >
         <TouchableOpacity
           style={[styles.attach, attachBusy && styles.attachBusy]}
           onPress={onAttach}
