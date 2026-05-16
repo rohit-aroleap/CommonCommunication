@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.133</title>
+<title>CommonCommunication v1.134</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -1320,7 +1320,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.133</div>
+    <div class="login-version">v1.134</div>
   </div>
 </div>
 
@@ -1328,7 +1328,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.133</span>
+    <span class="ver">v1.134</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -1411,9 +1411,11 @@
           <button class="emoji-btn" id="emojiBtn" title="Insert emoji">😀</button>
           <button class="emoji-btn" id="attachBtn" title="Attach file (image, video, audio, document)">📎</button>
           <input type="file" id="fileInput" style="display:none;" accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx" />
+          <!-- v1.134: left = voice-to-private-note (📝). Right = voice-to-composer (🎤). -->
+          <button class="mic-btn" id="voiceNoteBtn" title="Record a private note — transcribed and added to the notes panel (NOT sent to the customer)">📝</button>
           <textarea id="composerInput" placeholder="Type a message" rows="1"></textarea>
           <button class="ai-btn" id="suggestReplyBtn" title="AI suggested reply (Claude)">✨</button>
-          <button class="mic-btn" id="voiceNoteBtn" title="Record a voice note — transcribed and saved as a private note (NOT sent to the customer)">🎤</button>
+          <button class="mic-btn" id="voiceComposerBtn" title="Record a voice message — transcribed and added to the reply box (you can edit before sending)">🎤</button>
           <button class="send-btn" id="sendBtn" title="Send">➤</button>
         </div>
       </div>
@@ -1699,7 +1701,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.133";
+const APP_VERSION = "v1.134";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -6067,15 +6069,22 @@ suggestReplyBtn.onclick = async () => {
   }
 };
 
-// ====== VOICE NOTES (mic → Whisper → notes-panel draft) ======
-// Records mic audio via MediaRecorder, sends it to /transcribe (Cloudflare
-// Workers AI whisper-large-v3-turbo), then opens the notes draft form with
-// the transcript pre-filled so the trainer can edit/save. Audio is NEVER
-// sent to the customer — this only feeds the private notes panel.
+// ====== VOICE MIC BUTTONS (v1.134) ======
+// Two mic buttons share one recording state machine, distinguished by which
+// button is "active":
+//   📝 voiceNoteBtn      (left, mode="note")     → opens notes panel
+//   🎤 voiceComposerBtn  (right, mode="composer") → appends to reply box
+// Whichever button started the recording shows the red pulsing animation +
+// the elapsed-time count-up; the other stays idle and ignores clicks until
+// the active recording stops.
 let mediaRecorder = null;
 let audioChunks = [];
 let recordingStartTs = 0;
 let recordingTimer = null;
+let activeMicBtn = null;     // The button currently animated (recording / transcribing).
+let activeMicMode = null;    // "note" | "composer" — picks the destination after transcription.
+let activeMicIdleIcon = ""; // Restored on the active button after the cycle finishes.
+let activeMicIdleTitle = "";
 const MAX_RECORDING_MS = 120_000; // 2 min cap
 
 function blobToBase64(blob) {
@@ -6087,18 +6096,29 @@ function blobToBase64(blob) {
   });
 }
 
-function resetVoiceBtn() {
-  voiceNoteBtn.classList.remove("recording", "transcribing");
-  voiceNoteBtn.textContent = "🎤";
-  voiceNoteBtn.title = "Record a voice note — transcribed and saved as a private note (NOT sent to the customer)";
-  voiceNoteBtn.disabled = false;
+function resetActiveMicBtn() {
+  if (!activeMicBtn) return;
+  activeMicBtn.classList.remove("recording", "transcribing");
+  activeMicBtn.textContent = activeMicIdleIcon;
+  activeMicBtn.title = activeMicIdleTitle;
+  activeMicBtn.disabled = false;
+  activeMicBtn = null;
+  activeMicMode = null;
+  activeMicIdleIcon = "";
+  activeMicIdleTitle = "";
 }
 
-async function startVoiceNote() {
+async function startMicRecording(btn, mode, idleIcon, idleTitle) {
   if (!currentChatId) { alert("Open a chat first."); return; }
   if (!WORKER_URL) { alert("Worker URL not configured."); return; }
   if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
     alert("Voice recording isn't supported in this browser. Try Chrome, Edge, or Firefox.");
+    return;
+  }
+  if (mediaRecorder && mediaRecorder.state === "recording") {
+    // Other mic is already recording — ignore. The user must stop that one
+    // before starting another. Belt-and-braces; the click handlers also
+    // disable the inactive button while the other is in flight.
     return;
   }
   let stream;
@@ -6120,34 +6140,40 @@ async function startVoiceNote() {
     alert("Couldn't start recorder: " + (e?.message || e));
     return;
   }
+  activeMicBtn = btn;
+  activeMicMode = mode;
+  activeMicIdleIcon = idleIcon;
+  activeMicIdleTitle = idleTitle;
   mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) audioChunks.push(e.data); };
   mediaRecorder.onstop = async () => {
     stream.getTracks().forEach(t => t.stop());
     const type = mediaRecorder.mimeType || mime || "audio/webm";
     const blob = new Blob(audioChunks, { type });
     audioChunks = [];
-    await transcribeAndDraft(blob);
+    await transcribeAndRoute(blob);
   };
   mediaRecorder.start();
   recordingStartTs = Date.now();
-  voiceNoteBtn.classList.add("recording");
-  voiceNoteBtn.textContent = "0s";
-  voiceNoteBtn.title = "Stop recording";
+  btn.classList.add("recording");
+  btn.textContent = "0s";
+  btn.title = "Stop recording";
   recordingTimer = setInterval(() => {
     const secs = Math.floor((Date.now() - recordingStartTs) / 1000);
-    voiceNoteBtn.textContent = secs + "s";
-    if (Date.now() - recordingStartTs >= MAX_RECORDING_MS) stopVoiceNote();
+    btn.textContent = secs + "s";
+    if (Date.now() - recordingStartTs >= MAX_RECORDING_MS) stopMicRecording();
   }, 250);
 }
 
-function stopVoiceNote() {
+function stopMicRecording() {
   if (!mediaRecorder || mediaRecorder.state !== "recording") return;
   if (recordingTimer) { clearInterval(recordingTimer); recordingTimer = null; }
-  voiceNoteBtn.classList.remove("recording");
-  voiceNoteBtn.classList.add("transcribing");
-  voiceNoteBtn.textContent = "…";
-  voiceNoteBtn.title = "Transcribing…";
-  voiceNoteBtn.disabled = true;
+  if (activeMicBtn) {
+    activeMicBtn.classList.remove("recording");
+    activeMicBtn.classList.add("transcribing");
+    activeMicBtn.textContent = "…";
+    activeMicBtn.title = "Transcribing…";
+    activeMicBtn.disabled = true;
+  }
   try { mediaRecorder.stop(); } catch { /* already stopped */ }
 }
 
@@ -6157,7 +6183,10 @@ function stopVoiceNote() {
 // runs Workers AI Whisper on Cloudflare). The fallback exists so a fresh
 // device works on first launch — but Groq is meaningfully faster and gives
 // each teammate their own free-tier quota.
-async function transcribeAndDraft(blob) {
+// v1.134: now also routes the cleaned text to either the notes panel
+// ("note" mode) or the composer ("composer" mode) based on activeMicMode.
+async function transcribeAndRoute(blob) {
+  const mode = activeMicMode; // snapshot — resetActiveMicBtn() clears it.
   try {
     if (!blob || blob.size < 500) { alert("Recording was too short."); return; }
 
@@ -6205,21 +6234,35 @@ async function transcribeAndDraft(blob) {
       maybeNudgeGroqSetup();
     }
 
-    // Open the notes draft pre-filled with the transcript so the trainer
-    // reviews/edits before committing. Reuses the existing note-form UI.
-    addingNote = true;
-    setNotesExpanded(true);
-    renderNotes();
-    const input = document.getElementById("noteNewInput");
-    if (input) {
-      input.value = text;
-      input.focus();
-      input.setSelectionRange(text.length, text.length);
+    if (mode === "composer") {
+      // Append to whatever's already in the reply box. Single space separator
+      // when there's existing text; otherwise just drop the transcript in.
+      const existing = composerInput.value;
+      const next = existing && existing.trim() ? existing.trimEnd() + " " + text : text;
+      composerInput.value = next;
+      composerInput.focus();
+      composerInput.setSelectionRange(next.length, next.length);
+      // Trigger autoresize + send-button enable since we mutated value
+      // programmatically (input event doesn't fire on direct .value writes).
+      composerInput.dispatchEvent(new Event("input", { bubbles: true }));
+    } else {
+      // mode === "note" — open the notes draft pre-filled with the transcript
+      // so the trainer reviews/edits before committing. Reuses the existing
+      // note-form UI.
+      addingNote = true;
+      setNotesExpanded(true);
+      renderNotes();
+      const input = document.getElementById("noteNewInput");
+      if (input) {
+        input.value = text;
+        input.focus();
+        input.setSelectionRange(text.length, text.length);
+      }
     }
   } catch (e) {
     alert("Transcribe network error: " + (e?.message || e));
   } finally {
-    resetVoiceBtn();
+    resetActiveMicBtn();
   }
 }
 
@@ -6284,9 +6327,32 @@ function maybeNudgeGroqSetup() {
   } catch { /* localStorage disabled — silently skip */ }
 }
 
+// v1.134: notes mic (left of input). Idle icon = 📝, mode = "note" — drops
+// the cleaned transcript into the notes draft form (NOT sent to customer).
+const NOTE_MIC_IDLE_ICON = "📝";
+const NOTE_MIC_IDLE_TITLE = "Record a private note — transcribed and added to the notes panel (NOT sent to the customer)";
 voiceNoteBtn.onclick = () => {
-  if (mediaRecorder && mediaRecorder.state === "recording") stopVoiceNote();
-  else startVoiceNote();
+  if (mediaRecorder && mediaRecorder.state === "recording") {
+    // Only the button that started the recording can stop it. Taps on the
+    // other mic during an active recording are ignored.
+    if (activeMicBtn === voiceNoteBtn) stopMicRecording();
+    return;
+  }
+  startMicRecording(voiceNoteBtn, "note", NOTE_MIC_IDLE_ICON, NOTE_MIC_IDLE_TITLE);
+};
+
+// v1.134: composer mic (right of input). Idle icon = 🎤, mode = "composer" —
+// appends the cleaned transcript to the reply box so the trainer can edit
+// + Send. This is the new "primary" voice button for day-to-day replies.
+const COMPOSER_MIC_IDLE_ICON = "🎤";
+const COMPOSER_MIC_IDLE_TITLE = "Record a voice message — transcribed and added to the reply box (you can edit before sending)";
+const voiceComposerBtn = $("voiceComposerBtn");
+voiceComposerBtn.onclick = () => {
+  if (mediaRecorder && mediaRecorder.state === "recording") {
+    if (activeMicBtn === voiceComposerBtn) stopMicRecording();
+    return;
+  }
+  startMicRecording(voiceComposerBtn, "composer", COMPOSER_MIC_IDLE_ICON, COMPOSER_MIC_IDLE_TITLE);
 };
 
 // Attach: open file picker, then base64-encode and send via worker
