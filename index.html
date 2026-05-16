@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.109</title>
+<title>CommonCommunication v1.110</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -295,6 +295,14 @@
     margin-left: 6px;
     letter-spacing: .3px;
   }
+  /* Team-tab placeholder rows: teammates who don't have an existing DM
+     thread yet. Muted preview text so it visually reads as "empty state"
+     not as a stale unread message. */
+  .chat-row .preview-empty { color: var(--muted); font-style: italic; opacity: .85; }
+  /* Configured-but-not-yet-signed-in teammate — listed but not actionable
+     until they log in. Greyed out + cursor stays default-ish. */
+  .chat-row.inactive { opacity: 0.55; }
+  .chat-row.inactive:hover { background: var(--hover); opacity: 0.75; }
   .icon-btn {
     background: none; border: none; cursor: pointer;
     width: 36px; height: 36px; border-radius: 50%;
@@ -1292,7 +1300,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.109</div>
+    <div class="login-version">v1.110</div>
   </div>
 </div>
 
@@ -1300,7 +1308,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.109</span>
+    <span class="ver">v1.110</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -1627,7 +1635,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.109";
+const APP_VERSION = "v1.110";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -3931,43 +3939,133 @@ function renderTeamChatList() {
   filterRow.style.display = "none";
   tagFilterRow.style.display = "none";
 
+  // List EVERY teammate (whether or not we have an existing DM thread).
+  // For small teams the explicit "Start a new chat" picker step is friction
+  // without payoff — easier to just show everyone and let the trainer tap
+  // directly. Three sources to merge:
+  //   A. dmRows                — existing DM threads (have lastMsgAt/preview/unread)
+  //   B. teamUsers             — signed-in teammates without a DM thread yet
+  //   C. teamMembersCache      — configured roster entries (no uid → can't DM
+  //                              until they sign in once; render greyed out)
+  // Existing-DM rows show first sorted by lastMsgAt desc. New (no-thread)
+  // teammates render below, signed-in ones first then unsigned, alphabetical.
+  const me = currentUser?.uid;
+  const myEmail = (teamUsers[me]?.email || currentUser?.email || "").toLowerCase();
+
+  // Map uid → dmRow for quick lookup
+  const dmByUid = {};
+  for (const r of dmRows) dmByUid[r.otherUid] = r;
+
+  const seenUids = new Set();
+  const seenEmails = new Set();
+  const rows = [];
+
+  // A: existing DM threads
+  for (const r of dmRows) {
+    seenUids.add(r.otherUid);
+    const u = teamUsers[r.otherUid] || {};
+    if (u.email) seenEmails.add(u.email.toLowerCase());
+    rows.push({
+      kind: "existing",
+      chatKey: r.chatKey,
+      otherUid: r.otherUid,
+      name: r.name,
+      email: r.email,
+      lastMsgAt: r.lastMsgAt,
+      preview: r.preview,
+      lastMsgFromUid: r.lastMsgFromUid,
+      lastMsgFromName: r.lastMsgFromName,
+      unread: r.unread,
+      active: true,
+    });
+  }
+
+  // B: signed-in teammates without a DM thread yet
+  for (const [uid, u] of Object.entries(teamUsers)) {
+    if (uid === me || seenUids.has(uid)) continue;
+    const emailLower = String(u?.email || "").toLowerCase();
+    if (emailLower) seenEmails.add(emailLower);
+    rows.push({
+      kind: "new-active",
+      otherUid: uid,
+      name: u?.name || u?.email || "(unknown)",
+      email: u?.email || "",
+      lastMsgAt: 0,
+      preview: "",
+      unread: false,
+      active: true,
+    });
+  }
+
+  // C: configured-but-not-signed-in teammates
+  for (const m of Object.values(teamMembersCache || {})) {
+    if (!m?.email) continue;
+    const emailLower = m.email.toLowerCase();
+    if (emailLower === myEmail) continue;
+    if (seenEmails.has(emailLower)) continue;
+    rows.push({
+      kind: "new-inactive",
+      otherUid: null,
+      name: m.name || m.email,
+      email: m.email,
+      lastMsgAt: 0,
+      preview: "",
+      unread: false,
+      active: false,
+    });
+    seenEmails.add(emailLower);
+  }
+
+  // Sort: existing DMs first by recency, then signed-in no-thread by name,
+  // then not-signed-in by name. Kind order is preserved via numeric weight.
+  rows.sort((a, b) => {
+    const w = (k) => (k === "existing" ? 0 : k === "new-active" ? 1 : 2);
+    if (w(a.kind) !== w(b.kind)) return w(a.kind) - w(b.kind);
+    if (a.kind === "existing") return (b.lastMsgAt || 0) - (a.lastMsgAt || 0);
+    return a.name.localeCompare(b.name);
+  });
+
+  // Search filter
   const q = searchInput.value.trim().toLowerCase();
   const visible = q
-    ? dmRows.filter(r => r.name.toLowerCase().includes(q) || (r.email || "").toLowerCase().includes(q))
-    : dmRows;
-
-  const startNew = `<div class="new-dm-row" id="newDmRow">
-      <div class="icn">+</div>
-      <div class="meta">
-        <div class="top"><span class="name">Start a new internal chat</span></div>
-        <div class="bottom"><span class="preview">Pick a teammate — message stays inside the dashboard</span></div>
-      </div>
-    </div>`;
+    ? rows.filter(r =>
+        r.name.toLowerCase().includes(q) || (r.email || "").toLowerCase().includes(q))
+    : rows;
 
   if (!visible.length) {
-    chatList.innerHTML = startNew + `<div class="empty">${q ? "No teammates match." : "No internal chats yet. Click above to start one."}</div>`;
-    wireTeamListClicks();
+    chatList.innerHTML = `<div class="empty">${q ? "No teammates match." : "No teammates configured yet. Add them via 👥 Team in the topbar."}</div>`;
     return;
   }
 
-  chatList.innerHTML = startNew + visible.map(r => {
+  chatList.innerHTML = visible.map(r => {
     const isActive = r.chatKey === currentChatId;
     const initial = avatarInitial(r.name);
-    const previewWho = r.lastMsgFromUid === currentUser?.uid && r.lastMsgFromName
+    const previewWho = r.lastMsgFromUid === me && r.lastMsgFromName
       ? `<span class="who">${escapeHtml(r.lastMsgFromName)}:</span> `
       : "";
-    const rowClass = `chat-row${isActive ? " active" : ""}${r.unread ? " unread" : ""}`;
+    const rowClass = `chat-row${isActive ? " active" : ""}${r.unread ? " unread" : ""}${!r.active ? " inactive" : ""}`;
     const unreadDot = r.unread ? `<span class="unread-dot" title="New message"></span>` : "";
+    const dataAttrs = r.active
+      ? `data-uid="${escapeHtml(r.otherUid)}" data-key="${escapeHtml(r.chatKey || "")}" data-kind="${r.kind}"`
+      : `data-inactive="true" data-name="${escapeHtml(r.name)}"`;
+    const previewHtml = r.kind === "existing"
+      ? `<span class="preview">${previewWho}${escapeHtml(r.preview)}</span>`
+      : r.kind === "new-active"
+        ? `<span class="preview preview-empty">No messages yet — tap to start</span>`
+        : `<span class="preview preview-empty">Not signed in yet</span>`;
+    const badge = r.kind === "new-inactive"
+      ? '<span class="not-signed-in-badge">NOT SIGNED IN</span>'
+      : '<span class="dm-badge">INTERNAL</span>';
     return `
-    <div class="${rowClass}" data-key="${escapeHtml(r.chatKey)}">
+    <div class="${rowClass}" ${dataAttrs}>
       <div class="avatar is-dm" title="Internal teammate">${escapeHtml(initial)}</div>
       <div class="meta">
         <div class="top">
-          <span class="name">${escapeHtml(r.name)}<span class="dm-badge">INTERNAL</span></span>
-          <span class="time">${formatTime(r.lastMsgAt)}${unreadDot}</span>
+          <span class="name">${escapeHtml(r.name)}${badge}</span>
+          <span class="time">${r.lastMsgAt ? formatTime(r.lastMsgAt) : ""}${unreadDot}</span>
         </div>
         <div class="bottom">
-          <span class="preview">${previewWho}${escapeHtml(r.preview)}</span>
+          ${previewHtml}
         </div>
       </div>
     </div>`;
@@ -3977,10 +4075,27 @@ function renderTeamChatList() {
 }
 
 function wireTeamListClicks() {
-  const newDmRow = document.getElementById("newDmRow");
-  if (newDmRow) newDmRow.onclick = openDmPicker;
+  // Row dispatch:
+  //   existing DM  → openChat(chatKey) — same as before
+  //   new-active   → ensureDmExists(uid) then openChat
+  //   new-inactive → alert with a "sign in once" hint
   chatList.querySelectorAll(".chat-row").forEach(el => {
-    el.onclick = () => openChat(el.dataset.key);
+    el.onclick = async () => {
+      if (el.dataset.inactive === "true") {
+        alert(`${el.dataset.name} hasn't signed in to the dashboard yet. Ask them to sign in once with their email, and you'll be able to DM them.`);
+        return;
+      }
+      const kind = el.dataset.kind;
+      const otherUid = el.dataset.uid;
+      if (kind === "existing") {
+        openChat(el.dataset.key);
+        return;
+      }
+      // new-active: create the DM thread if needed, then open
+      await ensureDmExists(otherUid);
+      const chatKey = chatKeyFromPairKey(getPairKey(currentUser.uid, otherUid));
+      openChat(chatKey);
+    };
   });
 }
 
