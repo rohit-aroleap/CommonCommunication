@@ -121,6 +121,15 @@ export interface FerraUser {
   subscriptionSource?: string;
   subscriptionStartDate?: number;
   userAgeDays?: number;
+  // Acquisition / UTM data — populated when the customer signed up via a
+  // paid ad. Optional because organic signups won't have these.
+  adSource?: string;
+  adMedium?: string;
+  adCampaign?: string;
+  adContent?: string;
+  adTerm?: string;
+  landingPage?: string;
+  referrer?: string;
 }
 
 export type StageBucket =

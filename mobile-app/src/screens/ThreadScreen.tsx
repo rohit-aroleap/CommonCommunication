@@ -420,6 +420,21 @@ export function ThreadScreen({ route, navigation }: Props) {
           if (t) setReassignTicket(t);
         }}
       />
+      {/* Customer Details pill — only for 1-on-1 chats (groups have many
+          members, no single "customer" to show). Visible and labeled so
+          trainers don't have to discover that the header name is tappable. */}
+      {!isGroup && (
+        <TouchableOpacity
+          style={styles.detailsPill}
+          onPress={() =>
+            navigation.navigate("CustomerInfo", { chatKey })
+          }
+          activeOpacity={0.7}
+        >
+          <Text style={styles.detailsPillTxt}>👤 Customer details</Text>
+          <Text style={styles.detailsPillChevron}>›</Text>
+        </TouchableOpacity>
+      )}
       <FlatList
         ref={listRef}
         data={visible}
@@ -627,6 +642,26 @@ const styles = StyleSheet.create({
     color: "rgba(255,255,255,0.65)",
     fontSize: 10,
     marginTop: -2,
+  },
+  detailsPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#e0f2fe",
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "#bae6fd",
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+  },
+  detailsPillTxt: {
+    color: "#075985",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  detailsPillChevron: {
+    color: "#075985",
+    fontSize: 20,
+    lineHeight: 20,
   },
 
   sheetBack: {

@@ -2,8 +2,11 @@
 // Mirrors the right-side drawer on the desktop dashboard: subscription stage,
 // habit metrics, acquisition source, ticket history. Read-only for now.
 
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { onValue, ref } from "firebase/database";
+import { db } from "@/firebase";
+import { ROOT } from "@/config";
 import { colors, space } from "@/theme";
 import { useAppData, openTicketsForChat } from "@/data/AppDataContext";
 import { resolveDisplayName } from "@/lib/displayName";
@@ -13,6 +16,18 @@ import { FERRA_TAG_STAGE } from "@/config";
 import type { Ticket } from "@/types";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "./types";
+
+// Internal note (yellow panel on desktop). Auto-mirrored to here when a
+// ticket is resolved with a note; can also be written directly via the
+// desktop UI. Mobile is read-only for now.
+interface ChatNote {
+  id: string;
+  text: string;
+  authorName?: string;
+  createdAt?: number;
+  source?: string;
+  ticketId?: string;
+}
 
 type Props = NativeStackScreenProps<RootStackParamList, "CustomerInfo">;
 
@@ -88,6 +103,23 @@ export function CustomerInfoScreen({ route }: Props) {
     [tickets, chatKey],
   );
 
+  // Internal notes — yellow-banner trainer notes from desktop, plus the
+  // auto-mirrored resolution-note entries from v1.090+. Live listener so
+  // newly-added notes show up without a refresh.
+  const [notes, setNotes] = useState<ChatNote[]>([]);
+  useEffect(() => {
+    const notesRef = ref(db, `${ROOT}/chats/${chatKey}/notes`);
+    const unsub = onValue(notesRef, (snap) => {
+      const v = snap.val() || {};
+      const list: ChatNote[] = Object.entries(
+        v as Record<string, Omit<ChatNote, "id">>,
+      ).map(([id, n]) => ({ ...n, id }));
+      list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      setNotes(list);
+    });
+    return unsub;
+  }, [chatKey]);
+
   if (isGroup) {
     return (
       <ScrollView style={styles.root} contentContainerStyle={styles.empty}>
@@ -149,6 +181,25 @@ export function CustomerInfoScreen({ route }: Props) {
         </View>
       </View>
 
+      {/* Notes — internal trainer notes about this customer. Persist across
+          tickets; the yellow-banner panel on desktop. Newest first. */}
+      {notes.length > 0 && (
+        <View style={[styles.section, styles.notesSection]}>
+          <Text style={styles.sectionTitle}>📝 NOTES ({notes.length})</Text>
+          {notes.map((n) => (
+            <View key={n.id} style={styles.noteCard}>
+              <Text style={styles.noteTxt}>{n.text}</Text>
+              <Text style={styles.noteMeta}>
+                {n.authorName || "(unknown)"}
+                {n.createdAt
+                  ? ` · ${new Date(n.createdAt).toLocaleDateString()}`
+                  : ""}
+              </Text>
+            </View>
+          ))}
+        </View>
+      )}
+
       {/* Habit */}
       {ferraUser && (
         <View style={styles.section}>
@@ -207,6 +258,34 @@ export function CustomerInfoScreen({ route }: Props) {
             {ferraUser.subscriptionSource && (
               <Row k="Source" v={ferraUser.subscriptionSource} />
             )}
+          </View>
+        )}
+
+      {/* Acquisition (UTM / ad attribution). Only shows if any UTM field is
+          present — most organic signups won't have these. */}
+      {ferraUser &&
+        (ferraUser.adSource ||
+          ferraUser.adMedium ||
+          ferraUser.adCampaign ||
+          ferraUser.adContent ||
+          ferraUser.adTerm ||
+          ferraUser.landingPage ||
+          ferraUser.referrer) && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>ACQUISITION</Text>
+            {ferraUser.adSource && <Row k="Source" v={ferraUser.adSource} />}
+            {ferraUser.adMedium && <Row k="Medium" v={ferraUser.adMedium} />}
+            {ferraUser.adCampaign && (
+              <Row k="Campaign" v={ferraUser.adCampaign} />
+            )}
+            {ferraUser.adContent && (
+              <Row k="Content" v={ferraUser.adContent} />
+            )}
+            {ferraUser.adTerm && <Row k="Term" v={ferraUser.adTerm} />}
+            {ferraUser.landingPage && (
+              <Row k="Landing" v={ferraUser.landingPage} />
+            )}
+            {ferraUser.referrer && <Row k="Referrer" v={ferraUser.referrer} />}
           </View>
         )}
 
@@ -372,6 +451,17 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontStyle: "italic",
   },
+  notesSection: { backgroundColor: "#fff8e7" },
+  noteCard: {
+    backgroundColor: "white",
+    borderRadius: 6,
+    padding: 10,
+    marginBottom: 6,
+    borderLeftWidth: 3,
+    borderLeftColor: "#f59e0b",
+  },
+  noteTxt: { fontSize: 13, color: colors.text, lineHeight: 18 },
+  noteMeta: { fontSize: 10, color: colors.muted, marginTop: 4 },
   empty: {
     padding: 24,
     alignItems: "center",
