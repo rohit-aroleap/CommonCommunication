@@ -132,6 +132,20 @@ export interface FerraUser {
   referrer?: string;
 }
 
+// Subset of Ferra subscription columns the ferra-sync worker now writes
+// to ferraSubscriptions/v1/customerDetails/{phone}. Address is the headline
+// field — the rest is bonus context for the Customer Info panel.
+export interface CustomerDetail {
+  name?: string;
+  address?: string;
+  email?: string;
+  status?: string;
+  planTier?: string;
+  startDate?: string;
+  lastPaymentStatus?: string;
+  lastPaymentDate?: string;
+}
+
 export type StageBucket =
   | "setup"
   | "onboarding"

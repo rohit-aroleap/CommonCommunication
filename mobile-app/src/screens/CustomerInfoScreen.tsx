@@ -40,6 +40,7 @@ export function CustomerInfoScreen({ route }: Props) {
     ferraIndex,
     contacts,
     sharedSubsByPhone,
+    sharedCustomerDetails,
     tickets,
   } = useAppData();
 
@@ -83,6 +84,11 @@ export function CustomerInfoScreen({ route }: Props) {
   const subscriptionStatus = ferraIndex.phoneToStatus[normalizedPhone] ?? null;
   const isActive = subscriptionStatus === "ACTIVE";
   const isCancelled = ferraIndex.cancelledPhones.has(normalizedPhone);
+
+  // Customer details from ferraSubscriptions/v1/customerDetails — synced from
+  // the upstream Ferra Cloud Function. Contains address, email, plan tier,
+  // last payment status, etc. Keyed by normalized phone.
+  const customerDetail = sharedCustomerDetails?.[normalizedPhone] ?? null;
 
   const subTag = sharedSubsByPhone?.[normalizedPhone] ?? null;
   const subStage = subTag ? FERRA_TAG_STAGE[subTag] : null;
@@ -181,6 +187,16 @@ export function CustomerInfoScreen({ route }: Props) {
         </View>
       </View>
 
+      {/* Address — pulled from Ferra subscriptions via the ferra-sync worker.
+          Shown right under the header since it's the field trainers will
+          most often reference (delivery checks, installation queries). */}
+      {customerDetail?.address && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>📍 ADDRESS</Text>
+          <Text style={styles.address}>{customerDetail.address}</Text>
+        </View>
+      )}
+
       {/* Notes — internal trainer notes about this customer. Persist across
           tickets; the yellow-banner panel on desktop. Newest first. */}
       {notes.length > 0 && (
@@ -233,33 +249,45 @@ export function CustomerInfoScreen({ route }: Props) {
       )}
 
       {/* Subscription */}
-      {ferraUser &&
-        (ferraUser.subscriptionPlanTier ||
-          ferraUser.subscriptionStartDate ||
-          ferraUser.subscriptionSource) && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>SUBSCRIPTION</Text>
-            {ferraUser.subscriptionPlanTier && (
-              <Row k="Plan" v={ferraUser.subscriptionPlanTier} />
-            )}
-            {ferraUser.subscriptionStatus && (
-              <Row k="Status" v={ferraUser.subscriptionStatus} />
-            )}
-            {ferraUser.subscriptionStartDate && (
-              <Row
-                k="Started"
-                v={new Date(ferraUser.subscriptionStartDate).toLocaleDateString()}
-              />
-            )}
-            {ferraUser.userAgeDays != null && (
-              <Row k="Age" v={`${ferraUser.userAgeDays}d`} />
-            )}
-            {ferraUser.segment && <Row k="Segment" v={ferraUser.segment} />}
-            {ferraUser.subscriptionSource && (
-              <Row k="Source" v={ferraUser.subscriptionSource} />
-            )}
-          </View>
-        )}
+      {(ferraUser?.subscriptionPlanTier ||
+        ferraUser?.subscriptionStartDate ||
+        ferraUser?.subscriptionSource ||
+        customerDetail?.email ||
+        customerDetail?.lastPaymentStatus) && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>SUBSCRIPTION</Text>
+          {ferraUser?.subscriptionPlanTier && (
+            <Row k="Plan" v={ferraUser.subscriptionPlanTier} />
+          )}
+          {ferraUser?.subscriptionStatus && (
+            <Row k="Status" v={ferraUser.subscriptionStatus} />
+          )}
+          {ferraUser?.subscriptionStartDate && (
+            <Row
+              k="Started"
+              v={new Date(ferraUser.subscriptionStartDate).toLocaleDateString()}
+            />
+          )}
+          {ferraUser?.userAgeDays != null && (
+            <Row k="Age" v={`${ferraUser.userAgeDays}d`} />
+          )}
+          {ferraUser?.segment && <Row k="Segment" v={ferraUser.segment} />}
+          {ferraUser?.subscriptionSource && (
+            <Row k="Source" v={ferraUser.subscriptionSource} />
+          )}
+          {customerDetail?.email && <Row k="Email" v={customerDetail.email} />}
+          {customerDetail?.lastPaymentStatus && (
+            <Row
+              k="Last payment"
+              v={
+                customerDetail.lastPaymentDate
+                  ? `${customerDetail.lastPaymentStatus} · ${new Date(customerDetail.lastPaymentDate).toLocaleDateString()}`
+                  : customerDetail.lastPaymentStatus
+              }
+            />
+          )}
+        </View>
+      )}
 
       {/* Acquisition (UTM / ad attribution). Only shows if any UTM field is
           present — most organic signups won't have these. */}
@@ -462,6 +490,7 @@ const styles = StyleSheet.create({
   },
   noteTxt: { fontSize: 13, color: colors.text, lineHeight: 18 },
   noteMeta: { fontSize: 10, color: colors.muted, marginTop: 4 },
+  address: { fontSize: 14, color: colors.text, lineHeight: 20 },
   empty: {
     padding: 24,
     alignItems: "center",

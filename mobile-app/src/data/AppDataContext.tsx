@@ -23,6 +23,7 @@ import type {
   ChatRow,
   ChatType,
   ContactInfo,
+  CustomerDetail,
   FerraUser,
   SendActivity,
   TeamUser,
@@ -38,6 +39,7 @@ interface AppDataValue {
   habitUsers: Record<string, FerraUser> | FerraUser[] | null;
   cancelledUsers: Record<string, FerraUser> | FerraUser[] | null;
   sharedSubsByPhone: Record<string, string> | null;
+  sharedCustomerDetails: Record<string, CustomerDetail> | null;
   ferraIndex: FerraIndex;
   myLastSeen: Record<string, number>;
   markChatSeen: (chatKey: string) => void;
@@ -70,6 +72,9 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
   >(null);
   const [sharedSubsByPhone, setSharedSubsByPhone] = useState<
     Record<string, string> | null
+  >(null);
+  const [sharedCustomerDetails, setSharedCustomerDetails] = useState<
+    Record<string, CustomerDetail> | null
   >(null);
   const [myLastSeen, setMyLastSeen] = useState<Record<string, number>>({});
   const [myFavorites, setMyFavorites] = useState<Record<string, boolean>>({});
@@ -104,8 +109,12 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     );
     unsubs.push(
       onValue(ref(db, "ferraSubscriptions/v1"), (s) => {
-        const v = s.val() as { byPhone?: Record<string, string> } | null;
+        const v = s.val() as {
+          byPhone?: Record<string, string>;
+          customerDetails?: Record<string, CustomerDetail>;
+        } | null;
         setSharedSubsByPhone(v?.byPhone ?? null);
+        setSharedCustomerDetails(v?.customerDetails ?? null);
       }),
     );
     unsubs.push(
@@ -220,6 +229,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       habitUsers,
       cancelledUsers,
       sharedSubsByPhone,
+      sharedCustomerDetails,
       ferraIndex,
       myLastSeen,
       markChatSeen,
@@ -237,6 +247,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       habitUsers,
       cancelledUsers,
       sharedSubsByPhone,
+      sharedCustomerDetails,
       ferraIndex,
       myLastSeen,
       myFavorites,
