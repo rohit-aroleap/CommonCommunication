@@ -37,29 +37,136 @@ import type { DmRow, TeamMember, TeamUser } from "@/types";
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
+// Unified row shape used by the list — existing DMs and "not yet started"
+// teammates both render through the same code path.
+interface UnifiedRow {
+  kind: "existing" | "new-active" | "new-inactive";
+  otherUid: string | null;
+  chatKey: string | null;
+  name: string;
+  email: string;
+  lastMsgAt: number;
+  preview: string;
+  lastMsgFromUid: string | null;
+  lastMsgFromName: string | null;
+  unread: boolean;
+}
+
 export function TeamScreen() {
   const navigation = useNavigation<Nav>();
   const { user } = useAuth();
   const { dmRows, teamUsers, teamMembers } = useAppData();
-  const [pickerOpen, setPickerOpen] = useState(false);
   const [search, setSearch] = useState("");
+
+  // Three-source merge — every teammate gets a row, whether or not we have
+  // an existing DM thread for them. Same pattern as the desktop v1.110
+  // Team-tab simplification: no "pick a teammate" step, tap any row to
+  // open/create the DM.
+  const rows = useMemo<UnifiedRow[]>(() => {
+    const me = user?.uid;
+    const myEmail = (user?.email || "").toLowerCase();
+    const seenUids = new Set<string>();
+    const seenEmails = new Set<string>();
+    const out: UnifiedRow[] = [];
+
+    // A: existing DM threads
+    for (const r of dmRows) {
+      seenUids.add(r.otherUid);
+      const u = teamUsers[r.otherUid];
+      if (u?.email) seenEmails.add(u.email.toLowerCase());
+      out.push({
+        kind: "existing",
+        otherUid: r.otherUid,
+        chatKey: r.chatKey,
+        name: r.name,
+        email: r.email,
+        lastMsgAt: r.lastMsgAt,
+        preview: r.preview,
+        lastMsgFromUid: r.lastMsgFromUid,
+        lastMsgFromName: r.lastMsgFromName,
+        unread: r.unread,
+      });
+    }
+
+    // B: signed-in teammates without a DM thread yet
+    for (const [uid, u] of Object.entries(teamUsers)) {
+      if (uid === me || seenUids.has(uid)) continue;
+      const emailLower = String(u?.email || "").toLowerCase();
+      if (emailLower) seenEmails.add(emailLower);
+      out.push({
+        kind: "new-active",
+        otherUid: uid,
+        chatKey: null,
+        name: u?.name || u?.email || "(unknown)",
+        email: u?.email || "",
+        lastMsgAt: 0,
+        preview: "",
+        lastMsgFromUid: null,
+        lastMsgFromName: null,
+        unread: false,
+      });
+    }
+
+    // C: configured-but-not-signed-in teammates
+    for (const m of Object.values(teamMembers || {})) {
+      if (!m?.email) continue;
+      const emailLower = m.email.toLowerCase();
+      if (emailLower === myEmail) continue;
+      if (seenEmails.has(emailLower)) continue;
+      out.push({
+        kind: "new-inactive",
+        otherUid: null,
+        chatKey: null,
+        name: m.name || m.email,
+        email: m.email,
+        lastMsgAt: 0,
+        preview: "",
+        lastMsgFromUid: null,
+        lastMsgFromName: null,
+        unread: false,
+      });
+      seenEmails.add(emailLower);
+    }
+
+    out.sort((a, b) => {
+      const w = (k: UnifiedRow["kind"]) =>
+        k === "existing" ? 0 : k === "new-active" ? 1 : 2;
+      if (w(a.kind) !== w(b.kind)) return w(a.kind) - w(b.kind);
+      if (a.kind === "existing") return (b.lastMsgAt || 0) - (a.lastMsgAt || 0);
+      return a.name.localeCompare(b.name);
+    });
+    return out;
+  }, [dmRows, teamUsers, teamMembers, user]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return dmRows;
-    return dmRows.filter(
+    if (!q) return rows;
+    return rows.filter(
       (r) =>
         r.name.toLowerCase().includes(q) ||
-        r.email.toLowerCase().includes(q),
+        (r.email || "").toLowerCase().includes(q),
     );
-  }, [dmRows, search]);
+  }, [rows, search]);
 
-  const openDm = async (otherUid: string, displayName: string) => {
+  const openDm = async (row: UnifiedRow) => {
     if (!user) return;
+    if (row.kind === "new-inactive") {
+      Alert.alert(
+        `${row.name} hasn't signed in yet`,
+        "Ask them to sign in to the dashboard or mobile app once with their email, and they'll be DM-able.",
+      );
+      return;
+    }
+    if (row.kind === "existing" && row.chatKey) {
+      navigation.navigate("Thread", {
+        chatKey: row.chatKey,
+        initialTitle: row.name,
+      });
+      return;
+    }
+    // new-active: create the DM idempotently then navigate
+    const otherUid = row.otherUid!;
     const pairKey = getPairKey(user.uid, otherUid);
-    // Idempotent create. The DM exists if its meta does — we only need to
-    // write participants once. Doing it on every open is fine since we
-    // overwrite with the same value.
     const metaPath = `${ROOT}/dms/${pairKey}/meta`;
     const snap = await get(ref(db, metaPath));
     if (!snap.exists()) {
@@ -70,10 +177,9 @@ export function TeamScreen() {
         lastMsgPreview: "",
       });
     }
-    setPickerOpen(false);
     navigation.navigate("Thread", {
       chatKey: chatKeyFromPairKey(pairKey),
-      initialTitle: displayName,
+      initialTitle: row.name,
     });
   };
 
@@ -90,88 +196,83 @@ export function TeamScreen() {
       </View>
       <FlatList
         data={filtered}
-        keyExtractor={(r) => r.chatKey}
-        ListHeaderComponent={
-          <TouchableOpacity
-            style={styles.newRow}
-            onPress={() => setPickerOpen(true)}
-            activeOpacity={0.6}
-          >
-            <View style={styles.newIcon}>
-              <Text style={styles.newIconTxt}>+</Text>
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.newTitle}>Start a new internal chat</Text>
-              <Text style={styles.newSub}>
-                Pick a teammate — stays inside the dashboard
-              </Text>
-            </View>
-          </TouchableOpacity>
-        }
+        keyExtractor={(r) => r.chatKey || `uid:${r.otherUid}` || `email:${r.email}`}
         renderItem={({ item }) => (
-          <DmRowItem
+          <UnifiedRowItem
             row={item}
             isMe={item.lastMsgFromUid === user?.uid}
-            onPress={() =>
-              navigation.navigate("Thread", {
-                chatKey: item.chatKey,
-                initialTitle: item.name,
-              })
-            }
+            onPress={() => openDm(item)}
           />
         )}
         ListEmptyComponent={
-          search ? (
-            <View style={styles.empty}>
-              <Text style={styles.emptyTxt}>No teammates match.</Text>
-            </View>
-          ) : null
+          <View style={styles.empty}>
+            <Text style={styles.emptyTxt}>
+              {search
+                ? "No teammates match."
+                : "No teammates configured yet. Ask an admin to add them on the desktop dashboard."}
+            </Text>
+          </View>
         }
-      />
-      <PickerModal
-        visible={pickerOpen}
-        teamUsers={teamUsers}
-        teamMembers={teamMembers}
-        meUid={user?.uid ?? ""}
-        meEmail={user?.email ?? ""}
-        onPick={openDm}
-        onClose={() => setPickerOpen(false)}
       />
     </SafeAreaView>
   );
 }
 
-function DmRowItem({
+function UnifiedRowItem({
   row,
   isMe,
   onPress,
 }: {
-  row: DmRow;
+  row: UnifiedRow;
   isMe: boolean;
   onPress: () => void;
 }) {
   const initial = (row.name?.[0] || "?").toUpperCase();
+  const isInactive = row.kind === "new-inactive";
+  const placeholder =
+    row.kind === "new-active"
+      ? "No messages yet — tap to start"
+      : row.kind === "new-inactive"
+        ? "Not signed in yet"
+        : "";
   return (
-    <TouchableOpacity onPress={onPress} style={styles.row} activeOpacity={0.6}>
+    <TouchableOpacity
+      onPress={onPress}
+      style={[styles.row, isInactive && styles.rowInactive]}
+      activeOpacity={0.6}
+    >
       <View style={styles.avatar}>
         <Text style={styles.avatarTxt}>{initial}</Text>
       </View>
       <View style={styles.col}>
         <View style={styles.topLine}>
-          <Text style={styles.name} numberOfLines={1}>
-            {row.name}
-          </Text>
-          <Text style={styles.time}>{formatTime(row.lastMsgAt)}</Text>
+          <View style={styles.nameWrap}>
+            <Text style={styles.name} numberOfLines={1}>
+              {row.name}
+            </Text>
+            {isInactive && (
+              <View style={styles.notSignedInBadge}>
+                <Text style={styles.notSignedInTxt}>NOT SIGNED IN</Text>
+              </View>
+            )}
+          </View>
+          {row.lastMsgAt > 0 && (
+            <Text style={styles.time}>{formatTime(row.lastMsgAt)}</Text>
+          )}
         </View>
         <View style={styles.bottomLine}>
           <Text
-            style={[styles.preview, row.unread && styles.previewUnread]}
+            style={[
+              styles.preview,
+              row.unread && styles.previewUnread,
+              !row.preview && styles.previewEmpty,
+            ]}
             numberOfLines={1}
           >
             {isMe && row.lastMsgFromName ? (
               <Text style={styles.previewWho}>{row.lastMsgFromName}: </Text>
             ) : null}
-            {row.preview || "No messages yet"}
+            {row.preview || placeholder}
           </Text>
           {row.unread && <View style={styles.unreadDot} />}
         </View>
@@ -180,6 +281,12 @@ function DmRowItem({
   );
 }
 
+// NOTE: Kept the PickerModal definition (and its styles) in this file but
+// it's no longer used by TeamScreen — v1.111 listed every teammate as a
+// direct row instead of behind a "pick a teammate" modal step. Leaving the
+// dead code in place so we can resurrect it if we ever need an explicit
+// "Invite teammate" flow for admins.
+
 interface PickerCandidate {
   uid: string | null;
   name: string;
@@ -187,6 +294,7 @@ interface PickerCandidate {
   active: boolean;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function PickerModal({
   visible,
   teamUsers,
@@ -404,6 +512,9 @@ const styles = StyleSheet.create({
   preview: { flex: 1, fontSize: 13, color: colors.muted },
   previewUnread: { color: colors.text, fontWeight: "500" },
   previewWho: { color: DM_BLUE, fontWeight: "500" },
+  previewEmpty: { fontStyle: "italic", opacity: 0.85 },
+  rowInactive: { opacity: 0.55 },
+  nameWrap: { flexDirection: "row", alignItems: "center", flex: 1, gap: 6 },
   unreadDot: {
     width: 8,
     height: 8,
