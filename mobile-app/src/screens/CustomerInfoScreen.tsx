@@ -18,7 +18,7 @@ import * as Clipboard from "expo-clipboard";
 import { onValue, push, ref, set } from "firebase/database";
 import { db } from "@/firebase";
 import { ROOT } from "@/config";
-import { colors, space } from "@/theme";
+import { space, useStyles, useTheme, type Colors } from "@/theme";
 import { useAppData, openTicketsForChat } from "@/data/AppDataContext";
 import { useAuth } from "@/auth/AuthContext";
 import { resolveDisplayName } from "@/lib/displayName";
@@ -167,6 +167,8 @@ export function CustomerInfoScreen({ route, navigation }: Props) {
   const [draft, setDraft] = useState("");
   const [transcribing, setTranscribing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const { colors } = useTheme();
+  const styles = useStyles(makeStyles);
 
   async function saveNote() {
     const txt = draft.trim();
@@ -611,6 +613,7 @@ function MicButton({
   transcribing: boolean;
   disabled: boolean;
 }) {
+  const styles = useStyles(makeStyles);
   // Whisper-tuned options: 16 kHz mono AAC @ 32 kbps. ~8× smaller upload
   // than HIGH_QUALITY with no transcription accuracy loss.
   const recorder = audioMod.useAudioRecorder(
@@ -674,6 +677,7 @@ function MicButton({
 }
 
 function Chip({ label, accent }: { label: string; accent?: boolean }) {
+  const styles = useStyles(makeStyles);
   return (
     <View style={[styles.chip, accent && styles.chipAccent]}>
       <Text style={[styles.chipTxt, accent && styles.chipTxtAccent]}>
@@ -684,6 +688,7 @@ function Chip({ label, accent }: { label: string; accent?: boolean }) {
 }
 
 function Row({ k, v }: { k: string; v: string }) {
+  const styles = useStyles(makeStyles);
   return (
     <View style={styles.row}>
       <Text style={styles.rowK}>{k}</Text>
@@ -692,10 +697,11 @@ function Row({ k, v }: { k: string; v: string }) {
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles(colors: Colors) {
+  return StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   section: {
-    backgroundColor: "white",
+    backgroundColor: colors.panel,
     padding: space.md,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
@@ -767,7 +773,7 @@ const styles = StyleSheet.create({
   rowK: { width: 100, fontSize: 13, color: colors.muted },
   rowV: { flex: 1, fontSize: 13, color: colors.text, flexWrap: "wrap" },
   ticketCard: {
-    backgroundColor: "#f9fafb",
+    backgroundColor: colors.bg,
     borderRadius: 6,
     padding: 10,
     marginBottom: 8,
@@ -799,9 +805,9 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontStyle: "italic",
   },
-  notesSection: { backgroundColor: "#fff8e7" },
+  notesSection: { backgroundColor: colors.panel },
   noteCard: {
-    backgroundColor: "white",
+    backgroundColor: colors.bg,
     borderRadius: 6,
     padding: 10,
     marginBottom: 6,
@@ -820,7 +826,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 12,
-    backgroundColor: colors.greenDark,
+    backgroundColor: colors.green,
   },
   addNoteBtnTxt: { color: "white", fontSize: 11, fontWeight: "600" },
   notesEmpty: {
@@ -830,12 +836,12 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   composer: {
-    backgroundColor: "white",
+    backgroundColor: colors.bg,
     borderRadius: 8,
     padding: 8,
     marginBottom: 10,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#f0e3a0",
+    borderColor: colors.border,
   },
   composerInput: {
     minHeight: 60,
@@ -857,7 +863,7 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: colors.greenDark,
+    backgroundColor: colors.green,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -880,7 +886,7 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     paddingHorizontal: 8,
     borderRadius: 4,
-    backgroundColor: "#f3f4f6",
+    backgroundColor: colors.bg,
   },
   copyBtnTxt: { fontSize: 12, color: colors.muted },
   empty: {
@@ -889,4 +895,5 @@ const styles = StyleSheet.create({
   },
   emptyTxt: { color: colors.muted, fontSize: 13, textAlign: "center" },
   bottomPad: { height: 40 },
-});
+  });
+}

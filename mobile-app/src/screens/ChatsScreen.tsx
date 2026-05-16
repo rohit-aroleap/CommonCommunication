@@ -5,7 +5,7 @@
 import React, { useLayoutEffect, useMemo, useState } from "react";
 import { FlatList, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { colors, space } from "@/theme";
+import { space, useStyles, type Colors } from "@/theme";
 import { useAppData, isDailyGroup } from "@/data/AppDataContext";
 import { useAuth } from "@/auth/AuthContext";
 import { resolveDisplayName } from "@/lib/displayName";
@@ -49,6 +49,7 @@ export function ChatsScreen() {
   const [stageFilter, setStageFilter] = useState("");
   const [search, setSearch] = useState("");
   const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const styles = useStyles(makeStyles);
 
   // Render "Chats" with the version chip beside it in the green topbar.
   // Tab navigator headers default to plain text from the tab name;
@@ -63,7 +64,7 @@ export function ChatsScreen() {
         </View>
       ),
     });
-  }, [navigation]);
+  }, [navigation, styles]);
 
   const myUid = user?.uid;
 
@@ -279,8 +280,9 @@ export function ChatsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.panel },
+function makeStyles(colors: Colors) {
+  return StyleSheet.create({
+  root: { flex: 1, backgroundColor: colors.bg },
   empty: { padding: 60, alignItems: "center" },
   emptyTxt: { color: colors.muted, fontSize: 14 },
   versionFooter: { paddingVertical: 16, alignItems: "center" },
@@ -291,7 +293,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   headerTitleTxt: {
-    color: "white",
+    color: colors.headerText,
     fontSize: 17,
     fontWeight: "600",
   },
@@ -305,7 +307,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: space.md,
     paddingVertical: 6,
-    backgroundColor: "#f6f7f8",
+    backgroundColor: colors.rowHover,
     gap: space.sm,
   },
   dividerLine: {
@@ -319,4 +321,5 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     letterSpacing: 0.5,
   },
-});
+  });
+}

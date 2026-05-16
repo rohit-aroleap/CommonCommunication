@@ -7,7 +7,6 @@
 
 import React from "react";
 import { Alert, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { colors } from "@/theme";
 import type { Ticket } from "@/types";
 import { ref, update } from "firebase/database";
 import { db } from "@/firebase";

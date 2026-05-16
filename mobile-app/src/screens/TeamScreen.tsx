@@ -23,7 +23,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { ref, set, update, get } from "firebase/database";
 import { db } from "@/firebase";
 import { ROOT } from "@/config";
-import { colors, space } from "@/theme";
+import { space, useStyles, useTheme, type Colors } from "@/theme";
 import {
   useAppData,
   getPairKey,
@@ -57,6 +57,8 @@ export function TeamScreen() {
   const { user } = useAuth();
   const { dmRows, teamUsers, teamMembers } = useAppData();
   const [search, setSearch] = useState("");
+  const { colors } = useTheme();
+  const styles = useStyles(makeStyles);
 
   // Three-source merge — every teammate gets a row, whether or not we have
   // an existing DM thread for them. Same pattern as the desktop v1.110
@@ -242,6 +244,7 @@ function UnifiedRowItem({
   isMe: boolean;
   onPress: () => void;
 }) {
+  const styles = useStyles(makeStyles);
   const initial = (row.name?.[0] || "?").toUpperCase();
   const isInactive = row.kind === "new-inactive";
   const placeholder =
@@ -327,6 +330,7 @@ function PickerModal({
   onPick: (uid: string, name: string) => void;
   onClose: () => void;
 }) {
+  const styles = useStyles(makeStyles);
   // Two-source merge so configured-but-not-yet-signed-in teammates also
   // appear (greyed out). Source A = teamUsers (signed-in, has uid →
   // DM works). Source B = config/teamMembers (admin-curated roster).
@@ -458,159 +462,153 @@ function formatTime(ts: number): string {
 
 const DM_BLUE = "#3b82f6";
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.panel },
-  searchRow: {
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    backgroundColor: colors.panel,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-  },
-  searchWrap: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#f0f2f5",
-    borderRadius: 22,
-    paddingHorizontal: 12,
-  },
-  searchIcn: { color: colors.muted, fontSize: 13, marginRight: 8 },
-  searchInput: {
-    flex: 1,
-    paddingVertical: 10,
-    fontSize: 15,
-    color: colors.text,
-  },
-  searchClear: {
-    fontSize: 22,
-    color: colors.muted,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-  },
-  newRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: space.md + 2,
-    paddingVertical: space.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-    backgroundColor: "#f8fafc",
-    gap: space.md,
-  },
-  newIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    borderWidth: 2,
-    borderColor: DM_BLUE,
-    borderStyle: "dashed",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  newIconTxt: { color: DM_BLUE, fontSize: 24, fontWeight: "300" },
-  newTitle: { fontSize: 15, fontWeight: "500", color: "#1e40af" },
-  newSub: { fontSize: 12, color: colors.muted, marginTop: 2 },
+function makeStyles(colors: Colors) {
+  return StyleSheet.create({
+    root: { flex: 1, backgroundColor: colors.bg },
+    searchRow: {
+      paddingHorizontal: space.md,
+      paddingVertical: space.sm,
+      backgroundColor: colors.panel,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+    },
+    searchWrap: {
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: colors.bg,
+      borderRadius: 22,
+      paddingHorizontal: 12,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    searchIcn: { color: colors.muted, fontSize: 13, marginRight: 8 },
+    searchInput: { flex: 1, paddingVertical: 10, fontSize: 15, color: colors.text },
+    searchClear: { fontSize: 22, color: colors.muted, paddingHorizontal: 6, paddingVertical: 2 },
+    newRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingHorizontal: space.md + 2,
+      paddingVertical: space.md,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+      backgroundColor: colors.rowHover,
+      gap: space.md,
+    },
+    newIcon: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      borderWidth: 2,
+      borderColor: DM_BLUE,
+      borderStyle: "dashed",
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    newIconTxt: { color: DM_BLUE, fontSize: 24, fontWeight: "300" },
+    newTitle: { fontSize: 15, fontWeight: "500", color: DM_BLUE },
+    newSub: { fontSize: 12, color: colors.muted, marginTop: 2 },
 
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: space.md + 2,
-    paddingVertical: space.sm + 2,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-    minHeight: 64,
-    gap: space.md,
-    backgroundColor: colors.panel,
-  },
-  avatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: DM_BLUE,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  avatarTxt: { color: "white", fontSize: 18, fontWeight: "500" },
-  col: { flex: 1, minWidth: 0, gap: 2 },
-  topLine: { flexDirection: "row", alignItems: "baseline" },
-  name: { flex: 1, fontSize: 15, fontWeight: "500", color: colors.text },
-  time: { fontSize: 11, color: colors.muted, marginLeft: space.sm },
-  bottomLine: { flexDirection: "row", alignItems: "center" },
-  preview: { flex: 1, fontSize: 13, color: colors.muted },
-  previewUnread: { color: colors.text, fontWeight: "500" },
-  previewWho: { color: DM_BLUE, fontWeight: "500" },
-  previewEmpty: { fontStyle: "italic", opacity: 0.85 },
-  rowInactive: { opacity: 0.55 },
-  nameWrap: { flexDirection: "row", alignItems: "center", flex: 1, gap: 6 },
-  unreadDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: DM_BLUE,
-    marginLeft: 6,
-  },
+    row: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingHorizontal: space.md + 2,
+      paddingVertical: space.sm + 2,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+      minHeight: 64,
+      gap: space.md,
+      backgroundColor: colors.panel,
+    },
+    avatar: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor: DM_BLUE,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    avatarTxt: { color: "white", fontSize: 18, fontWeight: "500" },
+    col: { flex: 1, minWidth: 0, gap: 2 },
+    topLine: { flexDirection: "row", alignItems: "baseline" },
+    name: { flex: 1, fontSize: 15, fontWeight: "500", color: colors.text },
+    time: { fontSize: 11, color: colors.muted, marginLeft: space.sm },
+    bottomLine: { flexDirection: "row", alignItems: "center" },
+    preview: { flex: 1, fontSize: 13, color: colors.muted },
+    previewUnread: { color: colors.text, fontWeight: "500" },
+    previewWho: { color: DM_BLUE, fontWeight: "500" },
+    previewEmpty: { fontStyle: "italic", opacity: 0.85 },
+    rowInactive: { opacity: 0.55 },
+    nameWrap: { flexDirection: "row", alignItems: "center", flex: 1, gap: 6 },
+    unreadDot: {
+      width: 8,
+      height: 8,
+      borderRadius: 4,
+      backgroundColor: DM_BLUE,
+      marginLeft: 6,
+    },
 
-  empty: { padding: 60, alignItems: "center" },
-  emptyTxt: { color: colors.muted, fontSize: 14, textAlign: "center" },
+    empty: { padding: 60, alignItems: "center" },
+    emptyTxt: { color: colors.muted, fontSize: 14, textAlign: "center" },
 
-  modalBack: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.45)",
-    justifyContent: "flex-start",
-    paddingTop: 80,
-    paddingHorizontal: 18,
-  },
-  modalCard: {
-    backgroundColor: "white",
-    borderRadius: 12,
-    maxHeight: "75%",
-    overflow: "hidden",
-  },
-  modalHead: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-  },
-  modalTitle: { fontSize: 15, fontWeight: "600", color: colors.text },
-  modalClose: { fontSize: 22, color: colors.muted, paddingHorizontal: 6 },
-  pickerItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-  },
-  pickerAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: DM_BLUE,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  pickerAvatarTxt: { color: "white", fontSize: 15, fontWeight: "600" },
-  pickerNameRow: { flexDirection: "row", alignItems: "center", gap: 6 },
-  pickerName: { fontSize: 14, fontWeight: "500", color: colors.text },
-  pickerEmail: { fontSize: 11, color: colors.muted, marginTop: 1 },
-  pickerItemInactive: { opacity: 0.55 },
-  notSignedInBadge: {
-    backgroundColor: "#f3f4f6",
-    borderRadius: 3,
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-  },
-  notSignedInTxt: {
-    fontSize: 8,
-    fontWeight: "600",
-    color: colors.muted,
-    letterSpacing: 0.3,
-  },
-});
+    modalBack: {
+      flex: 1,
+      backgroundColor: "rgba(0,0,0,0.55)",
+      justifyContent: "flex-start",
+      paddingTop: 80,
+      paddingHorizontal: 18,
+    },
+    modalCard: {
+      backgroundColor: colors.panel,
+      borderRadius: 12,
+      maxHeight: "75%",
+      overflow: "hidden",
+    },
+    modalHead: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+    },
+    modalTitle: { fontSize: 15, fontWeight: "600", color: colors.text },
+    modalClose: { fontSize: 22, color: colors.muted, paddingHorizontal: 6 },
+    pickerItem: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 12,
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+    },
+    pickerAvatar: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: DM_BLUE,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    pickerAvatarTxt: { color: "white", fontSize: 15, fontWeight: "600" },
+    pickerNameRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+    pickerName: { fontSize: 14, fontWeight: "500", color: colors.text },
+    pickerEmail: { fontSize: 11, color: colors.muted, marginTop: 1 },
+    pickerItemInactive: { opacity: 0.55 },
+    notSignedInBadge: {
+      backgroundColor: colors.rowHover,
+      borderRadius: 3,
+      paddingHorizontal: 5,
+      paddingVertical: 1,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+    },
+    notSignedInTxt: {
+      fontSize: 8,
+      fontWeight: "600",
+      color: colors.muted,
+      letterSpacing: 0.3,
+    },
+  });
+}

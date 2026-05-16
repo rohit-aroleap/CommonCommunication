@@ -14,7 +14,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { colors, space } from "@/theme";
+import { space, useStyles, useTheme, type Colors } from "@/theme";
 import { mediaProxyUrl } from "@/lib/worker";
 import type { Message } from "@/types";
 
@@ -33,6 +33,7 @@ export function MessageBubble({
   onPress,
   onLongPress,
 }: Props) {
+  const styles = useStyles(makeStyles);
   const out = m.direction === "out";
   const senderTag = out
     ? m.sentByName
@@ -73,6 +74,8 @@ export function MessageBubble({
 }
 
 function Status({ status }: { status: Message["status"] }) {
+  const { colors } = useTheme();
+  const styles = useStyles(makeStyles);
   let txt = "✓";
   let color: string = colors.muted;
   if (status === "sending") {
@@ -87,6 +90,7 @@ function Status({ status }: { status: Message["status"] }) {
 }
 
 function MediaBlock({ media }: { media?: Message["media"] | null }) {
+  const styles = useStyles(makeStyles);
   if (!media) return null;
   if (!media.url) {
     if (media.fileName) {
@@ -149,59 +153,66 @@ function formatClock(ts: number): string {
   });
 }
 
-const styles = StyleSheet.create({
-  row: { paddingVertical: 2 },
-  rowOut: { alignItems: "flex-end" },
-  rowIn: { alignItems: "flex-start" },
-  bubble: {
-    maxWidth: "82%",
-    paddingHorizontal: 9,
-    paddingTop: 5,
-    paddingBottom: 4,
-    borderRadius: 7,
-    shadowColor: "#0b141a",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.13,
-    shadowRadius: 0.5,
-    elevation: 1,
-  },
-  bubbleIn: {
-    backgroundColor: colors.bubbleIn,
-    borderTopLeftRadius: 0,
-  },
-  bubbleOut: {
-    backgroundColor: colors.bubbleOut,
-    borderTopRightRadius: 0,
-  },
-  senderTag: {
-    fontSize: 11.5,
-    fontWeight: "500",
-    color: colors.greenDark,
-    marginBottom: 2,
-  },
-  text: { fontSize: 14.5, color: colors.text, lineHeight: 19 },
-  footer: {
-    flexDirection: "row",
-    alignSelf: "flex-end",
-    alignItems: "center",
-    gap: 4,
-    marginTop: 2,
-  },
-  clock: { fontSize: 10.5, color: colors.muted },
-  status: { fontSize: 11 },
-  image: {
-    width: 220,
-    height: 220,
-    borderRadius: 4,
-    marginBottom: 4,
-    backgroundColor: "rgba(0,0,0,0.04)",
-  },
-  docBlock: {
-    backgroundColor: "rgba(0,0,0,0.04)",
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 6,
-    marginBottom: 4,
-  },
-  docTxt: { fontSize: 13, color: colors.text },
-});
+function makeStyles(colors: Colors) {
+  // Sender tag color — purple in dark mode (like the screenshot), dark
+  // green in light mode for brand consistency with the existing palette.
+  // Detected from the body bg fingerprint so we don't have to thread mode
+  // through every call site.
+  const senderTagColor = colors.bg === "#0a0e16" ? "#a78bfa" : "#008069";
+  return StyleSheet.create({
+    row: { paddingVertical: 2 },
+    rowOut: { alignItems: "flex-end" },
+    rowIn: { alignItems: "flex-start" },
+    bubble: {
+      maxWidth: "82%",
+      paddingHorizontal: 9,
+      paddingTop: 5,
+      paddingBottom: 4,
+      borderRadius: 7,
+      shadowColor: "#0b141a",
+      shadowOffset: { width: 0, height: 1 },
+      shadowOpacity: 0.13,
+      shadowRadius: 0.5,
+      elevation: 1,
+    },
+    bubbleIn: {
+      backgroundColor: colors.bubbleIn,
+      borderTopLeftRadius: 0,
+    },
+    bubbleOut: {
+      backgroundColor: colors.bubbleOut,
+      borderTopRightRadius: 0,
+    },
+    senderTag: {
+      fontSize: 11.5,
+      fontWeight: "500",
+      color: senderTagColor,
+      marginBottom: 2,
+    },
+    text: { fontSize: 14.5, color: colors.text, lineHeight: 19 },
+    footer: {
+      flexDirection: "row",
+      alignSelf: "flex-end",
+      alignItems: "center",
+      gap: 4,
+      marginTop: 2,
+    },
+    clock: { fontSize: 10.5, color: colors.muted },
+    status: { fontSize: 11 },
+    image: {
+      width: 220,
+      height: 220,
+      borderRadius: 4,
+      marginBottom: 4,
+      backgroundColor: "rgba(0,0,0,0.04)",
+    },
+    docBlock: {
+      backgroundColor: "rgba(0,0,0,0.04)",
+      paddingHorizontal: 10,
+      paddingVertical: 8,
+      borderRadius: 6,
+      marginBottom: 4,
+    },
+    docTxt: { fontSize: 13, color: colors.text },
+  });
+}

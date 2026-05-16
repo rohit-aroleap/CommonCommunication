@@ -44,7 +44,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { db } from "@/firebase";
 import { ROOT, MAX_MEDIA_BYTES } from "@/config";
-import { colors, space } from "@/theme";
+import { space, useStyles, useTheme, type Colors } from "@/theme";
 import {
   useAppData,
   openTicketsForChat,
@@ -278,6 +278,8 @@ export function ThreadScreen({ route, navigation }: Props) {
   >(null);
   const [notePreview, setNotePreview] = useState<string | null>(null);
   const [savingNote, setSavingNote] = useState(false);
+  const { colors } = useTheme();
+  const styles = useStyles(makeStyles);
   const listRef = useRef<FlatList<Message>>(null);
 
   // Android edge-to-edge keyboard fix (v1.127). KeyboardAvoidingView's
@@ -1235,6 +1237,7 @@ function VoiceMicButton({
   disabled: boolean;
   onRecordingChange: (recording: boolean) => void;
 }) {
+  const styles = useStyles(makeStyles);
   // Whisper-tuned options: 16 kHz mono AAC @ 32 kbps. ~8× smaller upload
   // than HIGH_QUALITY with no transcription accuracy loss (Whisper resamples
   // to 16 kHz mono internally anyway).
@@ -1341,6 +1344,8 @@ function NotePreviewModal({
   saving: boolean;
 }) {
   const [draft, setDraft] = useState("");
+  const { colors } = useTheme();
+  const styles = useStyles(makeStyles);
   useEffect(() => {
     if (text !== null) setDraft(text);
   }, [text]);
@@ -1411,6 +1416,7 @@ function ActionSheet({
   onTicket: () => void;
   onCopy: () => void;
 }) {
+  const styles = useStyles(makeStyles);
   const visible = !!message;
   const quote = message
     ? message.text ||
@@ -1455,7 +1461,8 @@ function ActionSheet({
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles(colors: Colors) {
+  return StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   list: { flex: 1, backgroundColor: colors.bg },
   listContent: { paddingHorizontal: 8, paddingVertical: 12 },
@@ -1584,7 +1591,7 @@ const styles = StyleSheet.create({
   attachTxt: { color: "white", fontSize: 18 },
   input: {
     flex: 1,
-    backgroundColor: "white",
+    backgroundColor: colors.panel,
     borderRadius: 22,
     paddingHorizontal: 14,
     paddingVertical: 10,
@@ -1740,4 +1747,5 @@ const styles = StyleSheet.create({
   },
   sheetItemGlyph: { fontSize: 18, width: 24, textAlign: "center" },
   sheetItemTxt: { fontSize: 15, color: colors.text },
-});
+  });
+}

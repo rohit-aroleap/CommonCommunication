@@ -23,7 +23,7 @@ import * as Google from "expo-auth-session/providers/google";
 import * as WebBrowser from "expo-web-browser";
 import { useAuth } from "./AuthContext";
 import { GOOGLE_OAUTH } from "@/config";
-import { colors } from "@/theme";
+import { useStyles, useTheme, type Colors } from "@/theme";
 import { getDisplayVersion } from "@/lib/version";
 
 WebBrowser.maybeCompleteAuthSession();
@@ -35,6 +35,8 @@ export function LoginScreen() {
     status,
     unauthorizedEmail,
   } = useAuth();
+  const { colors } = useTheme();
+  const styles = useStyles(makeStyles);
   const [error, setError] = useState<string | null>(null);
   const [signingIn, setSigningIn] = useState(false);
   const [email, setEmail] = useState("");
@@ -145,7 +147,7 @@ export function LoginScreen() {
           value={email}
           onChangeText={setEmail}
           placeholder="email@example.com"
-          placeholderTextColor="#99a5ad"
+          placeholderTextColor={colors.muted}
           autoCapitalize="none"
           autoCorrect={false}
           keyboardType="email-address"
@@ -157,7 +159,7 @@ export function LoginScreen() {
           value={password}
           onChangeText={setPassword}
           placeholder="password"
-          placeholderTextColor="#99a5ad"
+          placeholderTextColor={colors.muted}
           secureTextEntry
           autoCapitalize="none"
           autoCorrect={false}
@@ -190,72 +192,75 @@ export function LoginScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: colors.greenDark,
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 24,
-  },
-  card: {
-    backgroundColor: "white",
-    borderRadius: 16,
-    padding: 28,
-    width: "100%",
-    maxWidth: 360,
-    alignItems: "center",
-  },
-  title: { fontSize: 20, fontWeight: "600", color: colors.text, marginBottom: 4 },
-  sub: { fontSize: 13, color: colors.muted, marginBottom: 24 },
-  btnGoogle: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    backgroundColor: "white",
-    borderColor: "#dadce0",
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    justifyContent: "center",
-    width: "100%",
-    minHeight: 48,
-  },
-  btnDisabled: { opacity: 0.6 },
-  btnGoogleText: { fontSize: 14, fontWeight: "500", color: colors.text },
-  googleIcon: { width: 18, height: 18 },
-  divider: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    width: "100%",
-    marginVertical: 16,
-  },
-  dividerLine: { flex: 1, height: 1, backgroundColor: "#dadce0" },
-  dividerText: { fontSize: 11, color: "#99a5ad" },
-  input: {
-    width: "100%",
-    borderColor: "#dadce0",
-    borderWidth: 1,
-    borderRadius: 6,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    fontSize: 13,
-    color: colors.text,
-    marginBottom: 8,
-  },
-  btnEmail: {
-    width: "100%",
-    backgroundColor: colors.green,
-    borderRadius: 6,
-    paddingVertical: 11,
-    alignItems: "center",
-    marginTop: 4,
-    minHeight: 44,
-    justifyContent: "center",
-  },
-  btnEmailText: { color: "white", fontWeight: "600", fontSize: 14 },
-  error: { color: colors.redDark, fontSize: 12, marginTop: 12, textAlign: "center" },
-  version: { color: "#99a5ad", fontSize: 11, marginTop: 18 },
-});
+function makeStyles(colors: Colors) {
+  return StyleSheet.create({
+    root: {
+      flex: 1,
+      backgroundColor: colors.header,
+      alignItems: "center",
+      justifyContent: "center",
+      padding: 24,
+    },
+    card: {
+      backgroundColor: colors.panel,
+      borderRadius: 16,
+      padding: 28,
+      width: "100%",
+      maxWidth: 360,
+      alignItems: "center",
+    },
+    title: { fontSize: 20, fontWeight: "600", color: colors.text, marginBottom: 4 },
+    sub: { fontSize: 13, color: colors.muted, marginBottom: 24 },
+    btnGoogle: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 10,
+      backgroundColor: colors.panel,
+      borderColor: colors.border,
+      borderWidth: 1,
+      borderRadius: 8,
+      paddingVertical: 12,
+      paddingHorizontal: 20,
+      justifyContent: "center",
+      width: "100%",
+      minHeight: 48,
+    },
+    btnDisabled: { opacity: 0.6 },
+    btnGoogleText: { fontSize: 14, fontWeight: "500", color: colors.text },
+    googleIcon: { width: 18, height: 18 },
+    divider: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 10,
+      width: "100%",
+      marginVertical: 16,
+    },
+    dividerLine: { flex: 1, height: 1, backgroundColor: colors.border },
+    dividerText: { fontSize: 11, color: colors.muted },
+    input: {
+      width: "100%",
+      borderColor: colors.border,
+      borderWidth: 1,
+      borderRadius: 6,
+      paddingVertical: 10,
+      paddingHorizontal: 12,
+      fontSize: 13,
+      color: colors.text,
+      marginBottom: 8,
+      backgroundColor: colors.panel,
+    },
+    btnEmail: {
+      width: "100%",
+      backgroundColor: colors.green,
+      borderRadius: 6,
+      paddingVertical: 11,
+      alignItems: "center",
+      marginTop: 4,
+      minHeight: 44,
+      justifyContent: "center",
+    },
+    btnEmailText: { color: "white", fontWeight: "600", fontSize: 14 },
+    error: { color: colors.redDark, fontSize: 12, marginTop: 12, textAlign: "center" },
+    version: { color: colors.muted, fontSize: 11, marginTop: 18 },
+  });
+}

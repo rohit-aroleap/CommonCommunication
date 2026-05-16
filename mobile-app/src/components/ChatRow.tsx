@@ -11,7 +11,7 @@ import {
   View,
   type ViewStyle,
 } from "react-native";
-import { colors, space } from "@/theme";
+import { space, useStyles, useTheme, type Colors } from "@/theme";
 import type { ChatRow as ChatRowT } from "@/types";
 
 interface Props {
@@ -41,13 +41,15 @@ export function ChatRowItem({
   onPress,
   onToggleFavorite,
 }: Props) {
+  const { colors } = useTheme();
+  const styles = useStyles(makeStyles);
   const isGroup = row.chatType === "group";
   const avatarBg: ViewStyle = {
     backgroundColor: hasOpenTicket
       ? colors.red
       : isGroup
       ? "#6b7280"
-      : colors.greenDark,
+      : colors.green,
   };
   const avatarChar = isGroup ? "👥" : initial(name);
 
@@ -93,27 +95,28 @@ export function ChatRowItem({
               </View>
             )}
             {subscriptionStatus === "ACTIVE" && (
-              <Pill bg={colors.pillActiveBg} fg={colors.pillActiveFg}>
+              <Pill bg={colors.pillActiveBg} fg={colors.pillActiveFg} styles={styles}>
                 Active
               </Pill>
             )}
             {subscriptionStatus === "CANCELLED" && (
-              <Pill bg={colors.pillCancelledBg} fg={colors.pillCancelledFg}>
+              <Pill bg={colors.pillCancelledBg} fg={colors.pillCancelledFg} styles={styles}>
                 Cancelled
               </Pill>
             )}
             {subscriptionStatus === "PAUSED" && (
-              <Pill bg={colors.pillPausedBg} fg={colors.pillPausedFg}>
+              <Pill bg={colors.pillPausedBg} fg={colors.pillPausedFg} styles={styles}>
                 Paused
               </Pill>
             )}
             {stage && stage !== "active" && (
-              <StagePill stage={stage} />
+              <StagePill stage={stage} colors={colors} styles={styles} />
             )}
             <StarButton
               isFavorite={isFavorite}
               suggestPin={!isFavorite && suggestPin}
               onPress={onStarPress}
+              styles={styles}
             />
           </View>
         </View>
@@ -122,14 +125,18 @@ export function ChatRowItem({
   );
 }
 
+type ChatRowStyles = ReturnType<typeof makeStyles>;
+
 function StarButton({
   isFavorite,
   suggestPin,
   onPress,
+  styles,
 }: {
   isFavorite: boolean;
   suggestPin: boolean;
   onPress: (e: { stopPropagation?: () => void }) => void;
+  styles: ChatRowStyles;
 }) {
   if (suggestPin) {
     return (
@@ -167,10 +174,12 @@ function StarButton({
 function Pill({
   bg,
   fg,
+  styles,
   children,
 }: {
   bg: string;
   fg: string;
+  styles: ChatRowStyles;
   children: React.ReactNode;
 }) {
   return (
@@ -180,7 +189,15 @@ function Pill({
   );
 }
 
-function StagePill({ stage }: { stage: string }) {
+function StagePill({
+  stage,
+  colors,
+  styles,
+}: {
+  stage: string;
+  colors: Colors;
+  styles: ChatRowStyles;
+}) {
   const map: Record<string, { bg: string; fg: string }> = {
     setup: { bg: colors.pillStageSetupBg, fg: colors.pillStageSetupFg },
     onboarding: {
@@ -195,7 +212,7 @@ function StagePill({ stage }: { stage: string }) {
   };
   const c = map[stage] ?? { bg: colors.border, fg: colors.muted };
   const label = stage[0].toUpperCase() + stage.slice(1);
-  return <Pill bg={c.bg} fg={c.fg}>{label}</Pill>;
+  return <Pill bg={c.bg} fg={c.fg} styles={styles}>{label}</Pill>;
 }
 
 function initial(name: string): string {
@@ -226,66 +243,62 @@ function formatTime(ts: number): string {
   });
 }
 
-const styles = StyleSheet.create({
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: space.md + 2,
-    paddingVertical: space.sm + 2,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-    minHeight: 64,
-    gap: space.md,
-    backgroundColor: colors.panel,
-  },
-  avatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  avatarTxt: { color: "white", fontSize: 18, fontWeight: "500" },
-  col: { flex: 1, minWidth: 0, gap: 2 },
-  topLine: { flexDirection: "row", alignItems: "baseline" },
-  name: { flex: 1, fontSize: 15, fontWeight: "500", color: colors.text },
-  time: { fontSize: 11, color: colors.muted, marginLeft: space.sm },
-  bottomLine: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  preview: { flex: 1, fontSize: 13, color: colors.muted },
-  previewUnread: { color: colors.text, fontWeight: "500" },
-  previewWho: { color: colors.greenDark, fontWeight: "500" },
-  badges: {
-    flexDirection: "row",
-    gap: 4,
-    alignItems: "center",
-    marginLeft: space.sm,
-  },
-  pill: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 10 },
-  pillTxt: { fontSize: 10, fontWeight: "500" },
-  ticketDot: {
-    backgroundColor: colors.red,
-    borderRadius: 10,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-  },
-  ticketDotTxt: { color: "white", fontSize: 11, fontWeight: "600" },
-  starBtn: {
-    paddingHorizontal: 4,
-    paddingVertical: 2,
-  },
-  starTxt: { fontSize: 18, lineHeight: 20 },
-  starTxtOn: { color: "#f5b50a" },
-  starTxtOff: { color: "#c2c8cc" },
-  suggestPill: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 10,
-    backgroundColor: "#fff7e0",
-    borderWidth: 1,
-    borderColor: "#f5b50a",
-  },
-  suggestTxt: { color: "#8a6500", fontSize: 11, fontWeight: "600" },
-});
+function makeStyles(colors: Colors) {
+  return StyleSheet.create({
+    row: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingHorizontal: space.md + 2,
+      paddingVertical: space.sm + 2,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+      minHeight: 64,
+      gap: space.md,
+      backgroundColor: colors.panel,
+    },
+    avatar: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    avatarTxt: { color: "white", fontSize: 18, fontWeight: "500" },
+    col: { flex: 1, minWidth: 0, gap: 2 },
+    topLine: { flexDirection: "row", alignItems: "baseline" },
+    name: { flex: 1, fontSize: 15, fontWeight: "500", color: colors.text },
+    time: { fontSize: 11, color: colors.muted, marginLeft: space.sm },
+    bottomLine: { flexDirection: "row", alignItems: "center" },
+    preview: { flex: 1, fontSize: 13, color: colors.muted },
+    previewUnread: { color: colors.text, fontWeight: "500" },
+    previewWho: { color: colors.green, fontWeight: "500" },
+    badges: {
+      flexDirection: "row",
+      gap: 4,
+      alignItems: "center",
+      marginLeft: space.sm,
+    },
+    pill: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 10 },
+    pillTxt: { fontSize: 10, fontWeight: "500" },
+    ticketDot: {
+      backgroundColor: colors.red,
+      borderRadius: 10,
+      paddingHorizontal: 7,
+      paddingVertical: 2,
+    },
+    ticketDotTxt: { color: "white", fontSize: 11, fontWeight: "600" },
+    starBtn: { paddingHorizontal: 4, paddingVertical: 2 },
+    starTxt: { fontSize: 18, lineHeight: 20 },
+    starTxtOn: { color: "#f5b50a" },
+    starTxtOff: { color: colors.muted },
+    suggestPill: {
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      borderRadius: 10,
+      backgroundColor: "#fff7e0",
+      borderWidth: 1,
+      borderColor: "#f5b50a",
+    },
+    suggestTxt: { color: "#8a6500", fontSize: 11, fontWeight: "600" },
+  });
+}

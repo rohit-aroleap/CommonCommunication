@@ -1,12 +1,10 @@
-// Settings screen (v1.133). Currently exposes the per-user Groq API key for
-// fast voice-note transcription. When a key is set, the mobile app uploads
-// audio directly to Groq's whisper-large-v3-turbo and only hits the Worker
-// for the Claude cleanup pass — meaningfully faster than the legacy
-// Workers-AI-Whisper path, and each teammate uses their own free quota.
+// Settings screen. Holds:
+//   • Appearance toggle (light / dark, default dark — v1.136)
+//   • Per-user Groq API key for fast voice-note transcription (v1.133)
 //
-// The Test & save button verifies the key against Groq's /models endpoint
-// before persisting, so typos / wrong-provider keys surface here instead of
-// at the next voice-note tap.
+// The appearance toggle drives the ThemeProvider hooked up in App.tsx; the
+// preference is persisted under "cc.appearance" so it survives reloads /
+// OTA updates / app restarts.
 
 import React, { useEffect, useState } from "react";
 import {
@@ -21,7 +19,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { colors, space } from "@/theme";
+import { space, useStyles, useTheme, type Colors } from "@/theme";
 import { getGroqKey, setGroqKey, testGroqKey } from "@/lib/groqKey";
 
 export function SettingsScreen() {
@@ -32,6 +30,8 @@ export function SettingsScreen() {
   const [status, setStatus] = useState<
     { kind: "idle" | "ok" | "error"; msg: string }
   >({ kind: "idle", msg: "" });
+  const { colors, mode, setMode } = useTheme();
+  const styles = useStyles(makeStyles);
 
   useEffect(() => {
     getGroqKey().then((k) => {
@@ -100,6 +100,55 @@ export function SettingsScreen() {
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
       >
+        {/* v1.136: appearance toggle. Default is dark; switch flips to
+            light. Each option is a half-pill that visually shows which
+            mode is active. Theme changes apply instantly app-wide. */}
+        <Text style={styles.section}>APPEARANCE</Text>
+        <View style={styles.themeToggle}>
+          <TouchableOpacity
+            style={[
+              styles.themeOpt,
+              mode === "light" && styles.themeOptActive,
+            ]}
+            onPress={() => setMode("light")}
+            accessibilityLabel="Use light appearance"
+          >
+            <Text style={styles.themeOptGlyph}>☀</Text>
+            <Text
+              style={[
+                styles.themeOptTxt,
+                mode === "light" && styles.themeOptTxtActive,
+              ]}
+            >
+              Light
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.themeOpt,
+              mode === "dark" && styles.themeOptActive,
+            ]}
+            onPress={() => setMode("dark")}
+            accessibilityLabel="Use dark appearance"
+          >
+            <Text style={styles.themeOptGlyph}>🌙</Text>
+            <Text
+              style={[
+                styles.themeOptTxt,
+                mode === "dark" && styles.themeOptTxtActive,
+              ]}
+            >
+              Dark
+            </Text>
+          </TouchableOpacity>
+        </View>
+        <Text style={styles.helpFoot}>
+          Dark is the default. Pick whichever your eyes prefer — saved on
+          this device.
+        </Text>
+
+        <View style={styles.divider} />
+
         <Text style={styles.section}>VOICE NOTES</Text>
         <Text style={styles.blurb}>
           Add your own Groq API key for fast voice-note transcription. Each
@@ -124,6 +173,7 @@ export function SettingsScreen() {
                 setStatus({ kind: "idle", msg: "" });
             }}
             placeholder="gsk_..."
+            placeholderTextColor={colors.muted}
             autoCapitalize="none"
             autoCorrect={false}
             spellCheck={false}
@@ -199,100 +249,127 @@ export function SettingsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.bg },
-  scroll: { flex: 1 },
-  content: { padding: space.lg, paddingBottom: space.xl * 2 },
-  section: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: colors.muted,
-    letterSpacing: 0.6,
-    marginBottom: space.sm,
-  },
-  blurb: {
-    fontSize: 13,
-    color: colors.muted,
-    lineHeight: 18,
-    marginBottom: space.lg,
-  },
-  row: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: space.xs,
-  },
-  label: { fontSize: 13, fontWeight: "600", color: colors.text },
-  linkRight: { fontSize: 12, color: colors.green },
-  inputRow: { flexDirection: "row", alignItems: "center", marginBottom: space.sm },
-  input: {
-    flex: 1,
-    backgroundColor: colors.panel,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 14,
-    fontFamily: "Courier",
-    color: colors.text,
-  },
-  eyeBtn: {
-    width: 44,
-    height: 44,
-    marginLeft: 8,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.panel,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 8,
-  },
-  eyeTxt: { fontSize: 18 },
-  statusBox: { minHeight: 24, marginBottom: space.md },
-  statusInline: { flexDirection: "row", alignItems: "center" },
-  statusOk: { color: "#2e7d32", fontSize: 13 },
-  statusErr: { color: "#d9534f", fontSize: 13 },
-  statusMuted: { color: colors.muted, fontSize: 13 },
-  actions: {
-    flexDirection: "row",
-    justifyContent: "flex-end",
-    gap: 10,
-    marginBottom: space.xl,
-  },
-  btn: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 8,
-    minWidth: 110,
-    alignItems: "center",
-  },
-  btnPrimary: { backgroundColor: colors.greenDark },
-  btnSecondary: {
-    backgroundColor: colors.panel,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  btnDisabled: { opacity: 0.5 },
-  btnTxt: { fontSize: 14, fontWeight: "600", color: colors.text },
-  btnTxtPrimary: { color: "white" },
-  btnTxtDisabled: { color: colors.muted },
-  helpHead: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: colors.text,
-    marginBottom: space.sm,
-  },
-  helpStep: {
-    fontSize: 13,
-    color: colors.muted,
-    lineHeight: 22,
-  },
-  helpFoot: {
-    fontSize: 12,
-    color: colors.muted,
-    lineHeight: 18,
-    marginTop: space.md,
-    fontStyle: "italic",
-  },
-});
+function makeStyles(colors: Colors) {
+  return StyleSheet.create({
+    safe: { flex: 1, backgroundColor: colors.bg },
+    scroll: { flex: 1 },
+    content: { padding: space.lg, paddingBottom: space.xl * 2 },
+    section: {
+      fontSize: 11,
+      fontWeight: "700",
+      color: colors.muted,
+      letterSpacing: 0.6,
+      marginBottom: space.sm,
+    },
+    blurb: {
+      fontSize: 13,
+      color: colors.muted,
+      lineHeight: 18,
+      marginBottom: space.lg,
+    },
+    themeToggle: {
+      flexDirection: "row",
+      gap: 8,
+      marginBottom: space.sm,
+    },
+    themeOpt: {
+      flex: 1,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 8,
+      paddingVertical: 12,
+      borderRadius: 8,
+      backgroundColor: colors.panel,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    themeOptActive: {
+      backgroundColor: colors.pillActiveBg,
+      borderColor: colors.green,
+    },
+    themeOptGlyph: { fontSize: 18 },
+    themeOptTxt: { fontSize: 14, fontWeight: "500", color: colors.text },
+    themeOptTxtActive: { color: colors.pillActiveFg, fontWeight: "600" },
+    divider: {
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: colors.border,
+      marginVertical: space.lg,
+    },
+    row: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: space.xs,
+    },
+    label: { fontSize: 13, fontWeight: "600", color: colors.text },
+    linkRight: { fontSize: 12, color: colors.green },
+    inputRow: { flexDirection: "row", alignItems: "center", marginBottom: space.sm },
+    input: {
+      flex: 1,
+      backgroundColor: colors.panel,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 8,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      fontSize: 14,
+      fontFamily: "Courier",
+      color: colors.text,
+    },
+    eyeBtn: {
+      width: 44,
+      height: 44,
+      marginLeft: 8,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: colors.panel,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 8,
+    },
+    eyeTxt: { fontSize: 18 },
+    statusBox: { minHeight: 24, marginBottom: space.md },
+    statusInline: { flexDirection: "row", alignItems: "center" },
+    statusOk: { color: "#34d399", fontSize: 13 },
+    statusErr: { color: "#f87171", fontSize: 13 },
+    statusMuted: { color: colors.muted, fontSize: 13 },
+    actions: {
+      flexDirection: "row",
+      justifyContent: "flex-end",
+      gap: 10,
+      marginBottom: space.xl,
+    },
+    btn: {
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+      borderRadius: 8,
+      minWidth: 110,
+      alignItems: "center",
+    },
+    btnPrimary: { backgroundColor: colors.green },
+    btnSecondary: {
+      backgroundColor: colors.panel,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    btnDisabled: { opacity: 0.5 },
+    btnTxt: { fontSize: 14, fontWeight: "600", color: colors.text },
+    btnTxtPrimary: { color: "white" },
+    btnTxtDisabled: { color: colors.muted },
+    helpHead: {
+      fontSize: 13,
+      fontWeight: "600",
+      color: colors.text,
+      marginBottom: space.sm,
+    },
+    helpStep: { fontSize: 13, color: colors.muted, lineHeight: 22 },
+    helpFoot: {
+      fontSize: 12,
+      color: colors.muted,
+      lineHeight: 18,
+      marginTop: space.md,
+      fontStyle: "italic",
+    },
+  });
+}

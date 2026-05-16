@@ -32,7 +32,7 @@ import { ThreadScreen } from "@/screens/ThreadScreen";
 import { CustomerInfoScreen } from "@/screens/CustomerInfoScreen";
 import { SettingsScreen } from "@/screens/SettingsScreen";
 import { registerForPushAsync } from "@/notifications/registerForPush";
-import { colors } from "@/theme";
+import { ThemeProvider, useTheme } from "@/theme";
 import type { RootStackParamList } from "@/screens/types";
 
 const Tabs = createBottomTabNavigator();
@@ -95,6 +95,7 @@ function TabsNav() {
   // re-evaluates options on every render of this component, so the badge
   // number stays in sync with the listeners.
   const { chatsUnreadCount, teamUnreadCount, ticketsCount } = useAppData();
+  const { colors } = useTheme();
   // Same safe-area pattern the composer uses (v1.117). Setting an explicit
   // tabBarStyle.height overrides React Navigation's default safe-area
   // handling, so we add insets.bottom back in manually. Without this, the
@@ -113,22 +114,26 @@ function TabsNav() {
   return (
     <Tabs.Navigator
       screenOptions={{
-        tabBarActiveTintColor: colors.greenDark,
+        // v1.136: in dark mode greenDark is near-black slate — tabs in the
+        // bottom bar would disappear into the bg. Use `green` (the brand
+        // accent: emerald in light, blue in dark) for the active tab tint
+        // and bg, falling back to muted for inactive.
+        tabBarActiveTintColor: colors.green,
         tabBarInactiveTintColor: colors.muted,
-        headerStyle: { backgroundColor: colors.greenDark },
-        headerTintColor: "white",
+        tabBarStyle: {
+          height: 64 + insets.bottom,
+          paddingTop: 6,
+          paddingBottom: 8 + insets.bottom,
+          backgroundColor: colors.panel,
+          borderTopColor: colors.border,
+        },
+        headerStyle: { backgroundColor: colors.header },
+        headerTintColor: colors.headerText,
         headerTitleStyle: { fontWeight: "600" },
         headerRight: () => <HeaderRight />,
         tabBarBadgeStyle: { fontSize: 10, fontWeight: "600" },
         // Bold active label so the active tab also reads strongly via text.
         tabBarLabelStyle: { fontSize: 11, fontWeight: "600" },
-        // Slightly taller tab bar to fit the pill background comfortably,
-        // plus safe-area inset so it clears the gesture bar.
-        tabBarStyle: {
-          height: 64 + insets.bottom,
-          paddingTop: 6,
-          paddingBottom: 8 + insets.bottom,
-        },
       }}
     >
       <Tabs.Screen
@@ -168,8 +173,14 @@ function TabsNav() {
 // we can't rely on tint to show active vs inactive. The pill + scale-up +
 // label color difference together give a strong visual signal.
 function TabIcon({ glyph, focused }: { glyph: string; focused: boolean }) {
+  const { colors } = useTheme();
   return (
-    <View style={[styles.tabIconWrap, focused && styles.tabIconWrapActive]}>
+    <View
+      style={[
+        styles.tabIconWrap,
+        focused && { backgroundColor: colors.pillActiveBg },
+      ]}
+    >
       <Text
         style={[styles.tabIconTxt, focused && styles.tabIconTxtActive]}
         accessibilityElementsHidden
@@ -182,6 +193,7 @@ function TabIcon({ glyph, focused }: { glyph: string; focused: boolean }) {
 
 function PostAuth() {
   const { user } = useAuth();
+  const { colors } = useTheme();
   useEffect(() => {
     if (!user) return;
     registerForPushAsync(user.uid).catch((e) =>
@@ -193,8 +205,8 @@ function PostAuth() {
       <NavigationContainer>
         <Stack.Navigator
           screenOptions={{
-            headerStyle: { backgroundColor: colors.greenDark },
-            headerTintColor: "white",
+            headerStyle: { backgroundColor: colors.header },
+            headerTintColor: colors.headerText,
           }}
         >
           <Stack.Screen
@@ -225,10 +237,11 @@ function PostAuth() {
 
 function Gate() {
   const { status } = useAuth();
+  const { colors } = useTheme();
   if (status === "loading") {
     return (
-      <View style={styles.loading}>
-        <ActivityIndicator color={colors.greenDark} />
+      <View style={[styles.loading, { backgroundColor: colors.header }]}>
+        <ActivityIndicator color={colors.green} />
       </View>
     );
   }
@@ -265,11 +278,25 @@ export default function App() {
   useOtaUpdates();
   return (
     <SafeAreaProvider>
-      <StatusBar style="light" backgroundColor={colors.greenDark} />
+      <ThemeProvider>
+        <ThemedApp />
+      </ThemeProvider>
+    </SafeAreaProvider>
+  );
+}
+
+// Inside ThemeProvider so it can read the current header color for the
+// status bar tint. The status bar is "light" content (icons + clock white)
+// in both themes since the header is always darker than the chrome behind.
+function ThemedApp() {
+  const { colors } = useTheme();
+  return (
+    <>
+      <StatusBar style="light" backgroundColor={colors.header} />
       <AuthProvider>
         <Gate />
       </AuthProvider>
-    </SafeAreaProvider>
+    </>
   );
 }
 
@@ -278,7 +305,7 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: colors.greenDark,
+    // backgroundColor injected by Gate() via inline style — depends on theme.
   },
   logoutBtn: {
     width: 36,
@@ -314,17 +341,14 @@ const styles = StyleSheet.create({
     color: "white",
     fontSize: 18,
   },
-  // Active-tab pill behind the icon. Light green wash against the bottom
-  // tab bar's white so it reads at a glance without being loud.
+  // Active-tab pill behind the icon. Background color is themed via inline
+  // style (TabIcon reads colors.pillActiveBg from useTheme).
   tabIconWrap: {
     width: 56,
     height: 30,
     borderRadius: 15,
     alignItems: "center",
     justifyContent: "center",
-  },
-  tabIconWrapActive: {
-    backgroundColor: "#d1fae5",
   },
   tabIconTxt: { fontSize: 18 },
   tabIconTxtActive: { fontSize: 20 },
