@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.129</title>
+<title>CommonCommunication v1.130</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -257,7 +257,7 @@
     color: var(--muted); font-size: 16px; padding: 0 4px;
   }
   .team-member-row .rm:hover { color: #d9534f; }
-  /* v1.129: inline display-name editor. Feeds the @mention picker
+  /* v1.130: inline display-name editor. Feeds the @mention picker
      and other UIs that show "who said this" so we don't have to
      stare at full emails. Optional — falls back to email when blank. */
   .team-member-row .name-row {
@@ -1320,7 +1320,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.129</div>
+    <div class="login-version">v1.130</div>
   </div>
 </div>
 
@@ -1328,7 +1328,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.129</span>
+    <span class="ver">v1.130</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -1655,7 +1655,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.129";
+const APP_VERSION = "v1.130";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -2081,7 +2081,7 @@ function renderAllowedList() {
       await set(ref(db, `${ROOT}/config/teamMembers/${b.dataset.key}/phones/${b.dataset.phone}`), null);
     };
   });
-  // v1.129: save the inline display name on blur. Empty string deletes
+  // v1.130: save the inline display name on blur. Empty string deletes
   // the name field (falls back to email everywhere via `name || email`).
   allowedListEl.querySelectorAll(".name-input").forEach((inp) => {
     inp.onblur = async () => {
@@ -5642,6 +5642,173 @@ function insertTemplateById(id) {
   closeTplPicker();
 }
 
+// ====== @-mention picker (composer) — v1.130 ======
+// Type "@" (at start, or after a space) and a popover appears with
+// teammate candidates. Pick one, the "@<query>" is replaced with the
+// teammate's name and their uid is stashed in _mentions so doSend can
+// ping them via the worker's mention-push override.
+let _mentionPicker = null;
+let _mentionFocusIdx = 0;
+let _mentionMatch = null;       // { atIndex, query, length } for current trigger
+let _mentions = new Map();      // uid -> { name } — alive until next send
+
+composerInput.addEventListener("input", () => {
+  const val = composerInput.value;
+  if (val.startsWith("/")) {
+    closeMentionPicker();
+    return;
+  }
+  const caret = composerInput.selectionStart ?? val.length;
+  const before = val.slice(0, caret);
+  // Last "@" that's at start or after whitespace, followed by word chars
+  // (which is what the user is currently typing). Regex matches at the
+  // tail of `before` only.
+  const m = before.match(/(^|\s)@([\w.-]*)$/);
+  if (!m) {
+    closeMentionPicker();
+    return;
+  }
+  const atIndex = caret - m[2].length - 1; // position of '@'
+  _mentionMatch = { atIndex, query: m[2].toLowerCase(), length: 1 + m[2].length };
+  openMentionPicker(_mentionMatch.query);
+});
+
+composerInput.addEventListener("keydown", (e) => {
+  if (!_mentionPicker) return;
+  const items = _mentionPicker.querySelectorAll(".tpl-item");
+  if (!items.length) {
+    if (e.key === "Escape") closeMentionPicker();
+    return;
+  }
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    _mentionFocusIdx = (_mentionFocusIdx + 1) % items.length;
+    updateMentionFocus(items);
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    _mentionFocusIdx = (_mentionFocusIdx - 1 + items.length) % items.length;
+    updateMentionFocus(items);
+  } else if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    items[_mentionFocusIdx]?.click();
+  } else if (e.key === "Escape") {
+    closeMentionPicker();
+  }
+});
+
+function updateMentionFocus(items) {
+  items.forEach((it, i) => it.classList.toggle("focused", i === _mentionFocusIdx));
+  items[_mentionFocusIdx]?.scrollIntoView({ block: "nearest" });
+}
+
+function getMentionCandidates(query) {
+  // Union of signed-in teammates (teamUsersCache, keyed by uid) and
+  // configured-but-not-signed-in roster (teamMembersCache, keyed by
+  // emailKey). De-dupe by email. Signed-in ones are pushable; pending
+  // ones are display-only.
+  const me = currentUser?.uid;
+  const out = [];
+  const seenEmails = new Set();
+  for (const [uid, u] of Object.entries(teamUsers || {})) {
+    if (!u || uid === me) continue;
+    const email = (u.email || "").toLowerCase();
+    seenEmails.add(email);
+    out.push({ uid, name: u.name || u.email || uid, active: true });
+  }
+  for (const [emailKey, m] of Object.entries(teamMembersCache || {})) {
+    if (!m?.email) continue;
+    if (seenEmails.has(m.email.toLowerCase())) continue;
+    out.push({
+      uid: `pending:${emailKey}`,
+      name: m.name || m.email,
+      active: false,
+    });
+  }
+  const q = (query || "").toLowerCase();
+  const filtered = q ? out.filter(x => x.name.toLowerCase().includes(q)) : out;
+  filtered.sort((a, b) => {
+    if (a.active !== b.active) return a.active ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+  return filtered;
+}
+
+function openMentionPicker(query) {
+  closeMentionPicker();
+  const candidates = getMentionCandidates(query);
+  const pop = document.createElement("div");
+  pop.className = "tpl-popover";
+  if (!candidates.length) {
+    pop.innerHTML = `<div class="tpl-empty">No teammates match "@${escapeHtml(query)}"</div>` +
+                    `<div class="tpl-hint">Add team members or display names in the 👥 Team modal</div>`;
+  } else {
+    pop.innerHTML = candidates.slice(0, 8).map((c, idx) => `
+      <div class="tpl-item ${idx === 0 ? "focused" : ""}"
+           data-uid="${escapeHtml(c.uid)}"
+           data-name="${escapeHtml(c.name)}"
+           data-active="${c.active ? "1" : "0"}">
+        <div class="tpl-name">@${escapeHtml(c.name)}</div>
+        ${c.active ? "" : `<div class="tpl-preview">Pending — name inserted, but no push (they haven't signed in).</div>`}
+      </div>
+    `).join("") +
+    `<div class="tpl-hint">↑↓ to navigate · Enter to insert · Esc to dismiss</div>`;
+  }
+  document.body.appendChild(pop);
+  const rect = composerInput.getBoundingClientRect();
+  const popH = pop.offsetHeight;
+  let top = rect.top - popH - 6;
+  if (top < 8) top = rect.bottom + 6;
+  let left = rect.left;
+  if (left + pop.offsetWidth > window.innerWidth - 8) left = window.innerWidth - pop.offsetWidth - 8;
+  pop.style.top = top + "px";
+  pop.style.left = left + "px";
+  pop.addEventListener("mousedown", (ev) => {
+    const item = ev.target.closest(".tpl-item");
+    if (!item) return;
+    ev.preventDefault();
+    insertMentionFromItem(item);
+  });
+  _mentionPicker = pop;
+  _mentionFocusIdx = 0;
+}
+
+function closeMentionPicker() {
+  if (_mentionPicker) { _mentionPicker.remove(); _mentionPicker = null; }
+  _mentionFocusIdx = 0;
+  _mentionMatch = null;
+}
+
+function insertMentionFromItem(itemEl) {
+  if (!_mentionMatch) { closeMentionPicker(); return; }
+  const uid = itemEl.dataset.uid;
+  const name = itemEl.dataset.name;
+  const active = itemEl.dataset.active === "1";
+  const val = composerInput.value;
+  const before = val.slice(0, _mentionMatch.atIndex);
+  const after = val.slice(_mentionMatch.atIndex + _mentionMatch.length);
+  const insert = `@${name} `;
+  composerInput.value = before + insert + after;
+  composerInput.style.height = "auto";
+  composerInput.style.height = Math.min(composerInput.scrollHeight, 160) + "px";
+  const newCaret = before.length + insert.length;
+  composerInput.focus();
+  composerInput.setSelectionRange(newCaret, newCaret);
+  if (active && uid && !uid.startsWith("pending:")) {
+    _mentions.set(uid, { name });
+  }
+  closeMentionPicker();
+}
+
+// Snapshot mentions whose names still appear in the outgoing text. If
+// the user @-picked someone and then erased the name, drop them.
+function snapshotMentions(text) {
+  const out = [];
+  for (const [uid, info] of _mentions) {
+    if (text.includes(`@${info.name}`)) out.push(uid);
+  }
+  return out;
+}
+
 // ====== EMOJI PICKER ======
 // Curated set of emojis useful for fitness coaching / customer support context.
 const COMMON_EMOJIS = [
@@ -5986,18 +6153,24 @@ async function doSend() {
   const chatId = meta.chatId || currentChatId;
   const phone = meta.phone || currentChatId.split("_")[0];
 
+  // v1.130: snapshot mentions before we clear the composer. snapshotMentions
+  // filters out anyone whose name was erased between picking and sending.
+  const mentionUids = snapshotMentions(text);
+
   // Optimistic write
   const msgRef = push(ref(db, `${ROOT}/chats/${currentChatId}/messages`));
   const localMsgId = msgRef.key;
   const ts = Date.now();
-  await set(msgRef, {
+  const optimisticRec = {
     direction: "out",
     text,
     ts,
     sentByUid: currentUser.uid,
     sentByName: currentUser.displayName || currentUser.email,
     status: "sending",
-  });
+  };
+  if (mentionUids.length > 0) optimisticRec.mentions = mentionUids;
+  await set(msgRef, optimisticRec);
   await update(ref(db, `${ROOT}/chats/${currentChatId}/meta`), {
     chatId, phone,
     lastMsgAt: ts, lastMsgPreview: text.slice(0,120),
@@ -6007,6 +6180,8 @@ async function doSend() {
 
   composerInput.value = "";
   composerInput.style.height = "auto";
+  _mentions.clear();
+  closeMentionPicker();
 
   try {
     const res = await fetch(`${WORKER_URL}/send`, {
@@ -6017,6 +6192,7 @@ async function doSend() {
         sentByUid: currentUser.uid,
         sentByName: currentUser.displayName || currentUser.email,
         localMsgId,
+        ...(mentionUids.length > 0 ? { mentions: mentionUids } : {}),
       }),
     });
     if (!res.ok) {

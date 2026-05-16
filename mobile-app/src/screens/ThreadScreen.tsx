@@ -98,6 +98,7 @@ export function ThreadScreen({ route, navigation }: Props) {
     chatMetaByKey,
     tickets,
     teamUsers,
+    teamMembers,
     dmRows,
     habitUsers,
     cancelledUsers,
@@ -154,6 +155,13 @@ export function ThreadScreen({ route, navigation }: Props) {
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [composer, setComposer] = useState("");
+  // v1.130: structured mentions parallel to the composer text. When the
+  // user picks "@Ashima" from the autocomplete, we add Ashima's uid here
+  // so the worker can ping her even if she isn't on the ticket. Kept as
+  // a Map so the same uid can't be added twice but order is preserved.
+  const [mentions, setMentions] = useState<Map<string, { name: string }>>(
+    new Map(),
+  );
   // Slash-command template picker (v1.126). When the composer starts with
   // "/", we show a floating list above the composer. Same UX as the
   // desktop's openTplPicker, scoped to first-character "/" rather than
@@ -168,6 +176,77 @@ export function ThreadScreen({ route, navigation }: Props) {
     () => (slashQuery === null ? [] : filterTemplates(templates, slashQuery)),
     [slashQuery, templates],
   );
+
+  // v1.130: @-mention picker. We look for the LAST `@` in the composer
+  // that's at the start or right after whitespace, with only word chars
+  // following. That match defines both the trigger and what to filter by.
+  // If the picker is hidden (no @ being typed) mentionMatch is null.
+  const mentionMatch = useMemo(() => {
+    // Skip when slash picker is showing — they'd visually overlap, and
+    // a slash command takes priority over any embedded @ inside it.
+    if (composer.startsWith("/")) return null;
+    const re = /(^|\s)@([\w.-]*)$/;
+    const m = composer.match(re);
+    if (!m) return null;
+    const queryStart = composer.length - m[2].length;
+    return {
+      query: m[2].toLowerCase(),
+      // Index of the "@" character — used to splice in the picked name.
+      atIndex: queryStart - 1,
+    };
+  }, [composer]);
+
+  // Candidate teammates: union of teamUsers (signed in) and teamMembers
+  // config (allow-listed but maybe never signed in). Filter out yourself
+  // and apply the query filter. Sort: signed-in first (so they're the
+  // top hits), then alphabetical.
+  const mentionCandidates = useMemo(() => {
+    if (!mentionMatch) return [] as Array<{ uid: string; name: string; active: boolean }>;
+    const me = user?.uid;
+    const byUid = new Map<
+      string,
+      { uid: string; name: string; active: boolean }
+    >();
+    for (const [uid, u] of Object.entries(teamUsers || {})) {
+      if (!u || uid === me) continue;
+      byUid.set(uid, {
+        uid,
+        name: u.name || u.email || uid,
+        active: true,
+      });
+    }
+    // teamMembers is keyed by emailKey; we'd love to know the matching uid
+    // but config/teamMembers doesn't store one. For users who never signed
+    // in we synthesize a "pending" entry — we can't push them anyway (no
+    // token), so this is just for display continuity.
+    for (const [emailKey, m] of Object.entries(teamMembers || {})) {
+      const email = m?.email;
+      if (!email) continue;
+      // Skip if already covered by teamUsers (same email landing under a
+      // uid). Emails are unique per allow-list entry.
+      const emailLower = email.toLowerCase();
+      const dup = Array.from(byUid.values()).some(
+        (entry) =>
+          (teamUsers[entry.uid]?.email || "").toLowerCase() === emailLower,
+      );
+      if (dup) continue;
+      byUid.set(`pending:${emailKey}`, {
+        uid: `pending:${emailKey}`,
+        name: m?.name || email,
+        active: false,
+      });
+    }
+    const all = Array.from(byUid.values());
+    const q = mentionMatch.query;
+    const filtered = q
+      ? all.filter((x) => x.name.toLowerCase().includes(q))
+      : all;
+    filtered.sort((a, b) => {
+      if (a.active !== b.active) return a.active ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    return filtered;
+  }, [mentionMatch, teamUsers, teamMembers, user]);
   // sheetMsg removed in v1.118 — long-press now copies directly and single
   // tap opens the ticket-create modal, so the bottom action sheet became
   // dead UI. Kept the ActionSheet component definition in this file for
@@ -356,7 +435,16 @@ export function ThreadScreen({ route, navigation }: Props) {
       lastMsgSentByName: user.displayName || user.email,
     });
     bumpSendActivity(chatKey);
+    // v1.130: snapshot mentions whose names still appear in the outgoing
+    // text. If the user @-picked someone then erased the name, we want
+    // that uid OUT of the mentions list (don't ping someone whose name
+    // was deleted). Compare by name substring — close enough for v1.
+    const mentionUids: string[] = [];
+    for (const [uid, info] of mentions) {
+      if (text.includes(`@${info.name}`)) mentionUids.push(uid);
+    }
     setComposer("");
+    setMentions(new Map());
     try {
       const res = await sendMessage({
         chatId,
@@ -365,6 +453,7 @@ export function ThreadScreen({ route, navigation }: Props) {
         sentByUid: user.uid,
         sentByName: user.displayName || user.email || "",
         localMsgId,
+        ...(mentionUids.length > 0 ? { mentions: mentionUids } : {}),
       });
       if (!res.ok) {
         const t = await res.text();
@@ -373,7 +462,7 @@ export function ThreadScreen({ route, navigation }: Props) {
     } catch (e: any) {
       await update(msgRef, { status: "failed", error: String(e) });
     }
-  }, [isDm, sendDm, composer, user, chatKey, chatId, phone]);
+  }, [isDm, sendDm, composer, user, chatKey, chatId, phone, mentions]);
 
   // Voice note flow — called by MicButton after recording stops with the
   // captured audio file URI. Uploads to /transcribe, opens the preview
@@ -459,6 +548,29 @@ export function ThreadScreen({ route, navigation }: Props) {
       setNewTemplateModal((m) => (m ? { ...m, saving: false } : m));
     }
   }, [newTemplateModal, user]);
+
+  // v1.130: insert a mention. Replaces the "@<query>" in the composer
+  // with "@<Name> " and records the uid so /send can push to them.
+  // "pending:" uids are skipped from the mentions list (can't push someone
+  // who never signed in / never registered a push token) but their name
+  // still goes into the text — useful as a written-out @-callout.
+  const insertMention = useCallback(
+    (candidate: { uid: string; name: string }) => {
+      if (!mentionMatch) return;
+      const before = composer.slice(0, mentionMatch.atIndex);
+      const after = composer.slice(mentionMatch.atIndex + 1 + mentionMatch.query.length);
+      const newComposer = `${before}@${candidate.name} ${after}`;
+      setComposer(newComposer);
+      if (!candidate.uid.startsWith("pending:")) {
+        setMentions((prev) => {
+          const next = new Map(prev);
+          next.set(candidate.uid, { name: candidate.name });
+          return next;
+        });
+      }
+    },
+    [mentionMatch, composer],
+  );
 
   // Insert a template into the composer (v1.126). Resolves {name},
   // {firstName}, {phone}, {trainerName} from the chat meta + signed-in
@@ -780,6 +892,46 @@ export function ThreadScreen({ route, navigation }: Props) {
           >
             <Text style={styles.tplNewBtnTxt}>+ New template</Text>
           </TouchableOpacity>
+        </View>
+      )}
+      {/* @-mention picker (v1.130). Same chrome as the slash picker so the
+          two feel like a pair. Shows up to 6 candidate teammates. Tapping
+          inserts "@Name " into the composer and registers the uid so the
+          worker pushes them on send, bypassing strict targeting. */}
+      {mentionMatch && (
+        <View style={styles.tplPicker}>
+          {mentionCandidates.length === 0 ? (
+            <View style={styles.tplEmptyWrap}>
+              <Text style={styles.tplEmptyTxt}>
+                {`No teammates match "@${mentionMatch.query}"`}
+              </Text>
+            </View>
+          ) : (
+            <>
+              {mentionCandidates.slice(0, 6).map((c) => (
+                <TouchableOpacity
+                  key={c.uid}
+                  style={styles.tplItem}
+                  onPress={() => insertMention(c)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.tplName} numberOfLines={1}>
+                    @{c.name}
+                  </Text>
+                  {!c.active && (
+                    <Text style={styles.tplPreview} numberOfLines={1}>
+                      Hasn't signed in yet — name will go in the message
+                      but no push will reach them.
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              ))}
+              <Text style={styles.tplHint}>
+                Tap to insert — they'll get a push even if it's not their
+                ticket
+              </Text>
+            </>
+          )}
         </View>
       )}
       <View

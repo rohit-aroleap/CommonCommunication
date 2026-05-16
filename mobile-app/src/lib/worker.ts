@@ -11,6 +11,10 @@ export interface SendBody {
   sentByUid: string;
   sentByName: string;
   localMsgId: string;
+  // v1.130: UIDs of teammates mentioned in the message body. The worker
+  // pings them regardless of ticket/favorite status — @ is an explicit
+  // "look at this" signal that overrides the strict targeting rules.
+  mentions?: string[];
   media?: {
     type: "image" | "video" | "audio" | "document";
     filename: string;

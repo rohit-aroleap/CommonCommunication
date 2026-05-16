@@ -98,6 +98,13 @@ export default {
 async function handleSend(request, env) {
   const body = await request.json();
   const { chatId, phone, message, sentByUid, sentByName, localMsgId } = body || {};
+  // v1.130: optional list of mentioned teammate UIDs. When present, fire a
+  // push to those UIDs after Periskope accepts the message, regardless of
+  // ticket/favorite rules. Mentions are also stored on the message record
+  // so the dashboard can highlight them later.
+  const mentions = Array.isArray(body?.mentions)
+    ? body.mentions.filter((u) => typeof u === "string" && u.length > 0)
+    : [];
 
   if (!chatId && !phone) {
     return json({ error: "missing chatId/phone" }, 400);
@@ -161,6 +168,9 @@ async function handleSend(request, env) {
     };
     msgRecord.messageType = body.media.type || "media";
   }
+  if (mentions.length > 0) {
+    msgRecord.mentions = mentions;
+  }
 
   let msgKey = localMsgId;
   if (localMsgId) {
@@ -194,6 +204,29 @@ async function handleSend(request, env) {
       chatId: resolvedChatId,
       msgKey,
     });
+  }
+
+  // v1.130: mention push override. If the send succeeded AND we have a
+  // mentions list, ping those teammates regardless of ticket/favorite
+  // status. Don't ping the sender even if they accidentally @-mentioned
+  // themselves. Fire-and-forget — the trainer's send shouldn't block on
+  // notification delivery.
+  if (ok && mentions.length > 0) {
+    const uidSet = new Set(mentions.filter((u) => u !== sentByUid));
+    if (uidSet.size > 0 && typeof globalThis.queueMicrotask === "function") {
+      const previewBody = (message || preview || "").slice(0, 160);
+      globalThis.queueMicrotask(() => {
+        sendPushToUids(env, uidSet, {
+          title: `${sentByName} mentioned you`,
+          body: previewBody,
+          data: {
+            chatKey: encodeKey(resolvedChatId),
+            chatId: resolvedChatId,
+            mention: true,
+          },
+        }).catch((e) => console.warn("[mention push] failed:", e));
+      });
+    }
   }
 
   return json({ ok, periskope: periskopeJson }, ok ? 200 : 502);
@@ -432,18 +465,28 @@ async function handleRegisterPushToken(request, env) {
 // every trainer's phone buzzed on every inbound, trained people to mute
 // the app entirely.
 async function fanoutPush(env, { title, body, data, chatId }) {
-  const all = await fbGet(env, `${ROOT}/pushTokens`);
-  if (!all || typeof all !== "object") return;
-
   const targetUids = await resolvePushTargetUids(env, chatId);
   // v1.120: targetUids is always a Set. If empty (no tickets, no stars),
   // nobody is pinged. No broadcast fallback — silence by design.
   if (targetUids.size === 0) return;
+  return sendPushToUids(env, targetUids, { title, body, data });
+}
+
+// Push to an explicit set of UIDs. Bypasses the strict ticket/favorite
+// targeting rules. Used by:
+//   - fanoutPush (after it resolves targets via the strict rules)
+//   - /send when a mention list is present (v1.130) — the mentioned UIDs
+//     get pinged regardless of ticket or star, because @ is an explicit
+//     "hey, you, look at this" signal that shouldn't be silenced.
+async function sendPushToUids(env, uidSet, { title, body, data }) {
+  if (!uidSet || uidSet.size === 0) return;
+  const all = await fbGet(env, `${ROOT}/pushTokens`);
+  if (!all || typeof all !== "object") return;
 
   const messages = [];
   for (const [uid, userMap] of Object.entries(all)) {
     if (!userMap || typeof userMap !== "object") continue;
-    if (!targetUids.has(uid)) continue;
+    if (!uidSet.has(uid)) continue;
     for (const entry of Object.values(userMap)) {
       if (!entry || !entry.token) continue;
       // Expo tokens look like "ExponentPushToken[...]" — skip anything that
@@ -464,7 +507,6 @@ async function fanoutPush(env, { title, body, data, chatId }) {
   for (let i = 0; i < messages.length; i += 100) {
     const batch = messages.slice(i, i + 100);
     const headers = { "Content-Type": "application/json", "Accept": "application/json" };
-    // EXPO_ACCESS_TOKEN is optional but recommended for higher rate limits.
     if (env.EXPO_ACCESS_TOKEN) headers["Authorization"] = `Bearer ${env.EXPO_ACCESS_TOKEN}`;
     try {
       await fetch("https://exp.host/--/api/v2/push/send", {
