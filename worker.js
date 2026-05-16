@@ -312,10 +312,65 @@ async function handleWebhook(request, env) {
     } catch { /* swallow — webhook should still succeed even if name lookup fails */ }
   }
 
+  // AUTO-ROUTE for first-touch unowned chats (v1.125). When a brand-new
+  // customer messages in and no chat-level meta existed before this webhook
+  // (i.e., truly first contact), auto-create a ticket assigned to the
+  // catch-all admin so somebody is on the hook. Without this, the strict
+  // push rules from v1.120 would let first messages sit silent forever
+  // (no tickets and no favorites yet, so nobody gets pinged).
+  // Strictly first-touch — existing chats with prior activity skip this;
+  // adding/removing tickets on those is a manual decision.
+  if (!isFromMe && !isGroup) {
+    try {
+      // We read existingMeta ONLY in the group-name lookup below today;
+      // duplicate the read here so the order is clear and we can branch
+      // before the meta update overwrites lastMsgAt.
+      const priorMeta = await fbGet(env, `${ROOT}/chats/${encodeKey(chatId)}/meta`);
+      const isFirstTouch = !priorMeta || !priorMeta.lastMsgAt;
+      if (isFirstTouch) {
+        const users = await fbGet(env, `${ROOT}/users`);
+        let adminUid = null, adminName = "Admin";
+        if (users && typeof users === "object") {
+          for (const [uid, u] of Object.entries(users)) {
+            if (String(u?.email || "").toLowerCase() === "rohit@aroleap.com") {
+              adminUid = uid;
+              adminName = u?.name || u?.email || "Admin";
+              break;
+            }
+          }
+        }
+        if (adminUid) {
+          const ticketId = generatePushKey(Date.now());
+          const customerLabel = senderName || chatIdToPhone(chatId);
+          await fbPut(env, `${ROOT}/tickets/${ticketId}`, {
+            id: ticketId,
+            title: `New customer — ${customerLabel} — needs triage`,
+            anchorChatId: chatId,
+            anchorMsgKey: pushed?.name || null,
+            anchorText: (text || "").slice(0, 200),
+            assignee: adminUid,
+            assigneeName: adminName,
+            status: "open",
+            createdBy: "auto",
+            createdByName: "Auto-route",
+            createdAt: ts || Date.now(),
+          });
+          await fbPut(env, `${ROOT}/chats/${encodeKey(chatId)}/tickets/${ticketId}`, true);
+        }
+      }
+    } catch (e) {
+      // Swallow — auto-route is best-effort. Don't let a bad day for /users
+      // or /tickets break webhook ACK.
+      console.warn("[auto-route] failed:", e);
+    }
+  }
+
   // Push notification fan-out. Only ping mobile devices for INBOUND messages
   // (not for our own outbound echoes). Fire-and-forget so we don't slow the
-  // webhook ACK that Periskope is waiting on. Targeting: ticket assignees +
-  // admins when the chat has open tickets, broadcast otherwise.
+  // webhook ACK that Periskope is waiting on. Targeting follows v1.120
+  // strict rules: ticket assignees + favorites only. Auto-route above
+  // ensures first-touch chats now have a ticket assigned to the admin
+  // before this fanout fires.
   if (!isFromMe) {
     const senderLabel = (!isGroup && senderName) ? senderName :
                         (isGroup ? `Group ${chatIdToPhone(chatId)}` : chatIdToPhone(chatId));
