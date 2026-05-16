@@ -80,13 +80,17 @@ function TabsNav() {
         headerTitleStyle: { fontWeight: "600" },
         headerRight: () => <LogoutButton />,
         tabBarBadgeStyle: { fontSize: 10, fontWeight: "600" },
+        // Bold active label so the active tab also reads strongly via text.
+        tabBarLabelStyle: { fontSize: 11, fontWeight: "600" },
+        // Slightly taller tab bar to fit the pill background comfortably.
+        tabBarStyle: { height: 64, paddingTop: 6, paddingBottom: 8 },
       }}
     >
       <Tabs.Screen
         name="Chats"
         component={ChatsScreen}
         options={{
-          tabBarIcon: ({ color }) => <TabIcon glyph="💬" color={color} />,
+          tabBarIcon: ({ focused }) => <TabIcon glyph="💬" focused={focused} />,
           tabBarBadge: chatsUnreadCount > 0 ? chatsUnreadCount : undefined,
         }}
       />
@@ -96,7 +100,7 @@ function TabsNav() {
         options={{
           title: "My tickets",
           tabBarLabel: "My tickets",
-          tabBarIcon: ({ color }) => <TabIcon glyph="🎫" color={color} />,
+          tabBarIcon: ({ focused }) => <TabIcon glyph="🎫" focused={focused} />,
           tabBarBadge: ticketsCount > 0 ? ticketsCount : undefined,
         }}
       />
@@ -106,7 +110,7 @@ function TabsNav() {
         options={{
           title: "Team",
           tabBarLabel: "Team",
-          tabBarIcon: ({ color }) => <TabIcon glyph="👥" color={color} />,
+          tabBarIcon: ({ focused }) => <TabIcon glyph="👥" focused={focused} />,
           tabBarBadge: teamUnreadCount > 0 ? teamUnreadCount : undefined,
         }}
       />
@@ -114,11 +118,20 @@ function TabsNav() {
   );
 }
 
-function TabIcon({ glyph, color }: { glyph: string; color: string }) {
+// TabIcon — wraps the emoji in a pill background when the tab is focused.
+// Emojis ignore the `color` prop (they render in their native colors), so
+// we can't rely on tint to show active vs inactive. The pill + scale-up +
+// label color difference together give a strong visual signal.
+function TabIcon({ glyph, focused }: { glyph: string; focused: boolean }) {
   return (
-    <Text style={{ fontSize: 18, color }} accessibilityElementsHidden>
-      {glyph}
-    </Text>
+    <View style={[styles.tabIconWrap, focused && styles.tabIconWrapActive]}>
+      <Text
+        style={[styles.tabIconTxt, focused && styles.tabIconTxtActive]}
+        accessibilityElementsHidden
+      >
+        {glyph}
+      </Text>
+    </View>
   );
 }
 
@@ -232,4 +245,18 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     transform: [{ rotate: "90deg" }],
   },
+  // Active-tab pill behind the icon. Light green wash against the bottom
+  // tab bar's white so it reads at a glance without being loud.
+  tabIconWrap: {
+    width: 56,
+    height: 30,
+    borderRadius: 15,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  tabIconWrapActive: {
+    backgroundColor: "#d1fae5",
+  },
+  tabIconTxt: { fontSize: 18 },
+  tabIconTxtActive: { fontSize: 20 },
 });
