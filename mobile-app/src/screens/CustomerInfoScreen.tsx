@@ -31,20 +31,20 @@ import type { Ticket } from "@/types";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "./types";
 
-// Lazy require for expo-av so an older native build (one that doesn't yet
-// have the audio module bundled) doesn't crash on import. Mic button shows
-// only when this resolves and the runtime call succeeds — otherwise we
-// surface a "needs rebuild" message and the trainer can still type the note.
-// Typed as `any` because TypeScript can't resolve expo-av types until the
-// package is installed (added in v1.109 but the dep isn't bundled yet by
-// older native builds — and we tolerate that gracefully at runtime).
+// Lazy require for expo-audio so an older native build (one that doesn't
+// yet have the audio module bundled) doesn't crash on import. Mic button
+// is rendered as a separate sub-component only when this module loads —
+// hooks always run unconditionally inside that sub-component, so React's
+// rules-of-hooks stay happy.
+// Typed as `any` because TypeScript can't resolve expo-audio types until
+// the package is installed (the v1.115 swap from expo-av → expo-audio).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-let AvAudio: any = null;
+let audioMod: any = null;
 try {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
-  AvAudio = require("expo-av").Audio;
+  audioMod = require("expo-audio");
 } catch {
-  AvAudio = null;
+  audioMod = null;
 }
 
 // Internal note (yellow panel on desktop). Auto-mirrored to here when a
@@ -157,82 +157,16 @@ export function CustomerInfoScreen({ route }: Props) {
     return unsub;
   }, [chatKey]);
 
-  // Add-note state machine. Three flags so the UI can show the right buttons:
-  //   composing   — input box is open (otherwise just the "+ Add note" trigger)
-  //   recording   — actively capturing audio via expo-av
+  // Add-note state machine.
+  //   composing    — input box is open (otherwise just the "+ Add note" trigger)
   //   transcribing — uploading the recorded audio to /transcribe
-  //   saving      — writing the final note to Firebase
+  //   saving       — writing the final note to Firebase
+  // The "recording" flag lives inside the MicButton sub-component since it's
+  // tied to the expo-audio hook lifecycle.
   const [composing, setComposing] = useState(false);
   const [draft, setDraft] = useState("");
-  const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [saving, setSaving] = useState(false);
-  // Hold the active Recording instance across renders without re-creating it.
-  // Typed as any since expo-av types aren't resolved at compile time (see
-  // the AvAudio lazy require comment).
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const recordingRef = React.useRef<any>(null);
-
-  async function startRecording() {
-    if (!AvAudio) {
-      Alert.alert(
-        "Voice notes need a rebuild",
-        "This build of the app was made before voice recording was added. Ask the admin to rebuild and reinstall.",
-      );
-      return;
-    }
-    try {
-      const perm = await AvAudio.requestPermissionsAsync();
-      if (!perm.granted) {
-        Alert.alert(
-          "Microphone access denied",
-          "Enable microphone permission in your phone's Settings for CommonCommunication.",
-        );
-        return;
-      }
-      await AvAudio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-      });
-      const rec = new AvAudio.Recording();
-      // Use HIGH_QUALITY preset — Whisper is robust to compression, this just
-      // makes file sizes manageable for the base64 upload.
-      await rec.prepareToRecordAsync(
-        AvAudio.RecordingOptionsPresets.HIGH_QUALITY,
-      );
-      await rec.startAsync();
-      recordingRef.current = rec;
-      setRecording(true);
-    } catch (e) {
-      Alert.alert("Couldn't start recording", String((e as Error)?.message || e));
-    }
-  }
-
-  async function stopRecordingAndTranscribe() {
-    const rec = recordingRef.current;
-    if (!rec) return;
-    setRecording(false);
-    setTranscribing(true);
-    try {
-      await rec.stopAndUnloadAsync();
-      const uri = rec.getURI();
-      recordingRef.current = null;
-      if (!uri) throw new Error("recording produced no file");
-      // Read the raw audio bytes as base64 and POST to /transcribe. The worker
-      // runs Whisper + a Claude cleanup pass and returns the cleaned text.
-      const b64 = await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      const text = await transcribeAudio(b64);
-      // Append (don't overwrite) so a trainer can keep typing then dictate
-      // more, or vice versa.
-      setDraft((prev) => (prev ? prev + " " + text : text).trim());
-    } catch (e) {
-      Alert.alert("Transcription failed", String((e as Error)?.message || e));
-    } finally {
-      setTranscribing(false);
-    }
-  }
 
   async function saveNote() {
     const txt = draft.trim();
@@ -257,15 +191,26 @@ export function CustomerInfoScreen({ route }: Props) {
   }
 
   function cancelCompose() {
-    if (recording) {
-      // Abort an in-flight recording cleanly.
-      const rec = recordingRef.current;
-      recordingRef.current = null;
-      rec?.stopAndUnloadAsync().catch(() => {});
-      setRecording(false);
-    }
     setDraft("");
     setComposing(false);
+  }
+
+  // Called by the MicButton sub-component once recording stops + a URI is
+  // ready. Reads the file as base64 and POSTs to /transcribe. Appends to
+  // draft so the trainer can type + dictate together (no overwrite).
+  async function onTranscribe(uri: string) {
+    setTranscribing(true);
+    try {
+      const b64 = await FileSystem.readAsStringAsync(uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      const text = await transcribeAudio(b64);
+      setDraft((prev) => (prev ? prev + " " + text : text).trim());
+    } catch (e) {
+      Alert.alert("Transcription failed", String((e as Error)?.message || e));
+    } finally {
+      setTranscribing(false);
+    }
   }
 
   if (isGroup) {
@@ -427,13 +372,11 @@ export function CustomerInfoScreen({ route }: Props) {
               placeholder={
                 transcribing
                   ? "Transcribing…"
-                  : recording
-                    ? "Recording — tap stop to transcribe"
-                    : "Type a note, or tap 🎤 to dictate"
+                  : "Type a note, or tap 🎤 to dictate"
               }
               placeholderTextColor={colors.muted}
               multiline
-              editable={!recording && !transcribing && !saving}
+              editable={!transcribing && !saving}
             />
             <View style={styles.composerActions}>
               <TouchableOpacity
@@ -444,27 +387,12 @@ export function CustomerInfoScreen({ route }: Props) {
                 <Text style={styles.composerBtnTxt}>Cancel</Text>
               </TouchableOpacity>
               <View style={{ flex: 1 }} />
-              {/* Mic button — only when expo-av loaded. Tap to start, tap
-                  again to stop + transcribe. Hidden entirely on old builds
-                  that don't have the native module. */}
-              {AvAudio && (
-                <TouchableOpacity
-                  onPress={recording ? stopRecordingAndTranscribe : startRecording}
-                  style={[
-                    styles.micBtn,
-                    recording && styles.micBtnRecording,
-                  ]}
-                  disabled={transcribing || saving}
-                  accessibilityLabel={recording ? "Stop recording" : "Record voice note"}
-                >
-                  {transcribing ? (
-                    <ActivityIndicator color="white" size="small" />
-                  ) : (
-                    <Text style={styles.micBtnTxt}>
-                      {recording ? "⏹" : "🎤"}
-                    </Text>
-                  )}
-                </TouchableOpacity>
+              {audioMod && (
+                <MicButton
+                  onTranscribe={onTranscribe}
+                  transcribing={transcribing}
+                  disabled={saving}
+                />
               )}
               <TouchableOpacity
                 onPress={saveNote}
@@ -472,7 +400,7 @@ export function CustomerInfoScreen({ route }: Props) {
                   styles.sendBtn,
                   (!draft.trim() || saving) && styles.sendBtnDisabled,
                 ]}
-                disabled={!draft.trim() || saving || recording || transcribing}
+                disabled={!draft.trim() || saving || transcribing}
                 accessibilityLabel="Save note"
               >
                 {saving ? (
@@ -656,6 +584,81 @@ export function CustomerInfoScreen({ route }: Props) {
 
       <View style={styles.bottomPad} />
     </ScrollView>
+  );
+}
+
+// MicButton — only mounted when expo-audio loaded at module init. Because
+// it's only rendered conditionally at the call site (audioMod && <MicButton/>),
+// React's rules-of-hooks is satisfied: when MicButton renders, its hooks
+// always run; when audioMod is null, the component never mounts at all.
+// Tap once → start recording (button turns red, becomes ⏹).
+// Tap again → stop + invoke onTranscribe(uri) with the captured audio file.
+function MicButton({
+  onTranscribe,
+  transcribing,
+  disabled,
+}: {
+  onTranscribe: (uri: string) => Promise<void>;
+  transcribing: boolean;
+  disabled: boolean;
+}) {
+  const recorder = audioMod.useAudioRecorder(
+    audioMod.RecordingPresets.HIGH_QUALITY,
+  );
+  const recorderState = audioMod.useAudioRecorderState(recorder);
+  const isRecording = !!recorderState?.isRecording;
+
+  async function toggle() {
+    if (transcribing || disabled) return;
+    if (isRecording) {
+      try {
+        await recorder.stop();
+        const uri = recorder.uri as string | undefined;
+        if (uri) await onTranscribe(uri);
+      } catch (e) {
+        Alert.alert(
+          "Couldn't stop recording",
+          String((e as Error)?.message || e),
+        );
+      }
+      return;
+    }
+    try {
+      const perm = await audioMod.requestRecordingPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert(
+          "Microphone access denied",
+          "Enable microphone permission in your phone's Settings for CommonCommunication.",
+        );
+        return;
+      }
+      await audioMod.setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+      });
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+    } catch (e) {
+      Alert.alert(
+        "Couldn't start recording",
+        String((e as Error)?.message || e),
+      );
+    }
+  }
+
+  return (
+    <TouchableOpacity
+      onPress={toggle}
+      style={[styles.micBtn, isRecording && styles.micBtnRecording]}
+      disabled={transcribing || disabled}
+      accessibilityLabel={isRecording ? "Stop recording" : "Record voice note"}
+    >
+      {transcribing ? (
+        <ActivityIndicator color="white" size="small" />
+      ) : (
+        <Text style={styles.micBtnTxt}>{isRecording ? "⏹" : "🎤"}</Text>
+      )}
+    </TouchableOpacity>
   );
 }
 
