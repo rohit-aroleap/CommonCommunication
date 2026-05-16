@@ -13,6 +13,7 @@ import React, {
 import {
   Alert,
   FlatList,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -182,6 +183,36 @@ export function ThreadScreen({ route, navigation }: Props) {
   const [notePreview, setNotePreview] = useState<string | null>(null);
   const [savingNote, setSavingNote] = useState(false);
   const listRef = useRef<FlatList<Message>>(null);
+
+  // Android edge-to-edge keyboard fix (v1.127). KeyboardAvoidingView's
+  // "height" / "padding" behaviors are unreliable on SDK 55 Android because
+  // edge-to-edge means the window keeps its full size when the keyboard
+  // opens; the bottom of the composer ends up UNDER the keyboard. The
+  // earlier v1.124 attempt (behavior="height") didn't actually move the
+  // composer on real devices — see the Pavitra Shetty thread screenshot.
+  //
+  // Fix: subscribe to native keyboard events, measure the actual keyboard
+  // pixel height, and pad the KAV root by that much. Drives the layout to
+  // shrink so the flex-end composer sits exactly above the keyboard. iOS
+  // keeps its KeyboardAvoidingView path because "padding" works there.
+  const [androidKbHeight, setAndroidKbHeight] = useState(0);
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    // Android only emits *Did* events. *Will* events are iOS-only — they
+    // would let us animate in sync with the keyboard but we don't have
+    // access to them here. The visible reflow is fast enough that the
+    // ~50ms delay between keyboardDidShow and our re-render isn't noticed.
+    const show = Keyboard.addListener("keyboardDidShow", (e) => {
+      setAndroidKbHeight(e.endCoordinates?.height ?? 0);
+    });
+    const hide = Keyboard.addListener("keyboardDidHide", () => {
+      setAndroidKbHeight(0);
+    });
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -608,12 +639,21 @@ export function ThreadScreen({ route, navigation }: Props) {
 
   return (
     <KeyboardAvoidingView
-      style={styles.root}
-      // Expo SDK 55 switched Android to edge-to-edge; the previous
-      // `behavior: undefined` on Android meant the keyboard could cover the
-      // composer. "height" tells RN to resize the container above the
-      // keyboard. iOS keeps padding (works better when there's a tabbar).
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      style={[
+        styles.root,
+        // Android edge-to-edge fix (v1.127): KAV's behaviors don't reliably
+        // shrink the layout when the keyboard opens, so we pad the root
+        // bottom by the actual measured keyboard height. Flex-end children
+        // (composer + slash picker) then sit exactly above the keyboard.
+        Platform.OS === "android" && androidKbHeight > 0
+          ? { paddingBottom: androidKbHeight }
+          : null,
+      ]}
+      // iOS keeps "padding" (works well with the bottom tab safe area).
+      // Android: undefined — we handle it manually via the paddingBottom
+      // above. Setting "height" actually made things WORSE on edge-to-edge
+      // because it measures the layout incorrectly.
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
       keyboardVerticalOffset={Platform.OS === "ios" ? 80 : 0}
     >
       {!isDm && (
@@ -683,7 +723,18 @@ export function ThreadScreen({ route, navigation }: Props) {
           // reports as the bottom inset (gesture-nav pill / home indicator).
           // Phones without a gesture bar report 0 and we end up with 8px,
           // same as before.
-          { paddingBottom: insets.bottom + 8 },
+          //
+          // When the Android keyboard is up (v1.127), the keyboard already
+          // covers the gesture-nav area — adding insets.bottom on top of
+          // that wastes vertical space and leaves a big gap between the
+          // text input and the keyboard. Drop to just 4px in that case so
+          // the composer hugs the keyboard like every other chat app.
+          {
+            paddingBottom:
+              Platform.OS === "android" && androidKbHeight > 0
+                ? 4
+                : insets.bottom + 8,
+          },
         ]}
       >
         <TouchableOpacity
