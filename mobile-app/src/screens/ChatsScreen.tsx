@@ -2,7 +2,7 @@
 // list. The filter rules (daily-groups hidden by default, status/stage
 // exclusions) match mobile.html exactly.
 
-import React, { useMemo, useState } from "react";
+import React, { useLayoutEffect, useMemo, useState } from "react";
 import { FlatList, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { colors, space } from "@/theme";
@@ -47,6 +47,21 @@ export function ChatsScreen() {
   const [stageFilter, setStageFilter] = useState("");
   const [search, setSearch] = useState("");
   const [favoritesOnly, setFavoritesOnly] = useState(false);
+
+  // Render "Chats" with the version chip beside it in the green topbar.
+  // Tab navigator headers default to plain text from the tab name;
+  // overriding headerTitle with a component lets us add the version next
+  // to it so trainers can read it back without scrolling to the footer.
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      headerTitle: () => (
+        <View style={styles.headerTitleRow}>
+          <Text style={styles.headerTitleTxt}>Chats</Text>
+          <Text style={styles.headerTitleVer}>{getDisplayVersion()}</Text>
+        </View>
+      ),
+    });
+  }, [navigation]);
 
   const myUid = user?.uid;
 
@@ -259,6 +274,21 @@ const styles = StyleSheet.create({
   emptyTxt: { color: colors.muted, fontSize: 14 },
   versionFooter: { paddingVertical: 16, alignItems: "center" },
   versionTxt: { color: colors.muted, fontSize: 10 },
+  headerTitleRow: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    gap: 8,
+  },
+  headerTitleTxt: {
+    color: "white",
+    fontSize: 17,
+    fontWeight: "600",
+  },
+  headerTitleVer: {
+    color: "rgba(255,255,255,0.6)",
+    fontSize: 11,
+    fontWeight: "400",
+  },
   divider: {
     flexDirection: "row",
     alignItems: "center",
