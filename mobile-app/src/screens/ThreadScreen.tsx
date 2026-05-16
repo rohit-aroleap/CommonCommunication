@@ -53,16 +53,30 @@ import { useAuth } from "@/auth/AuthContext";
 import { resolveDisplayName } from "@/lib/displayName";
 import { dayLabel } from "@/lib/format";
 import { chatKeyToChatId } from "@/lib/encodeKey";
-import { fetchChatInfo, sendMessage, notifyDm } from "@/lib/worker";
+import { fetchChatInfo, sendMessage, notifyDm, transcribeAudio } from "@/lib/worker";
 import { dedupMessages } from "@/lib/messageDedup";
 import { MessageBubble } from "@/components/MessageBubble";
 import { TicketBanner } from "@/components/TicketBanner";
 import { CreateTicketModal } from "@/components/CreateTicketModal";
 import { ReassignModal } from "@/components/ReassignModal";
 import { SummaryModal } from "@/components/SummaryModal";
+import { ActivityIndicator } from "react-native";
 import type { Message, Ticket } from "@/types";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "./types";
+
+// Lazy require for expo-audio so older native builds (pre v1.115) don't
+// crash on import. Mic button is conditionally rendered only when this
+// resolves — hooks inside MicButton always run unconditionally, so
+// rules-of-hooks stays clean.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let audioMod: any = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  audioMod = require("expo-audio");
+} catch {
+  audioMod = null;
+}
 
 type Props = NativeStackScreenProps<RootStackParamList, "Thread">;
 
@@ -133,6 +147,12 @@ export function ThreadScreen({ route, navigation }: Props) {
   const [reassignTicket, setReassignTicket] = useState<Ticket | null>(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [attachBusy, setAttachBusy] = useState(false);
+  // Voice-note flow state. When transcribing is true, the mic button shows
+  // a spinner. When notePreview is non-null, an editable preview modal is
+  // open with the transcript pre-filled — trainer reviews then saves.
+  const [transcribing, setTranscribing] = useState(false);
+  const [notePreview, setNotePreview] = useState<string | null>(null);
+  const [savingNote, setSavingNote] = useState(false);
   const listRef = useRef<FlatList<Message>>(null);
 
   useLayoutEffect(() => {
@@ -288,6 +308,55 @@ export function ThreadScreen({ route, navigation }: Props) {
       await update(msgRef, { status: "failed", error: String(e) });
     }
   }, [isDm, sendDm, composer, user, chatKey, chatId, phone]);
+
+  // Voice note flow — called by MicButton after recording stops with the
+  // captured audio file URI. Uploads to /transcribe, opens the preview
+  // modal with the cleaned text. Trainer can edit before saving.
+  const onTranscribed = useCallback(
+    async (uri: string) => {
+      setTranscribing(true);
+      try {
+        const b64 = await FileSystem.readAsStringAsync(uri, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        const text = await transcribeAudio(b64);
+        if (!text) {
+          Alert.alert("No speech detected", "Try recording again, closer to the mic.");
+          return;
+        }
+        setNotePreview(text);
+      } catch (e) {
+        Alert.alert(
+          "Transcription failed",
+          String((e as Error)?.message || e),
+        );
+      } finally {
+        setTranscribing(false);
+      }
+    },
+    [],
+  );
+
+  async function saveVoiceNote(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed || !user) return;
+    setSavingNote(true);
+    try {
+      const noteRef = push(ref(db, `${ROOT}/chats/${chatKey}/notes`));
+      await set(noteRef, {
+        text: trimmed,
+        authorUid: user.uid,
+        authorName: user.displayName || user.email || "(me)",
+        createdAt: Date.now(),
+        source: "mobile-voice",
+      });
+      setNotePreview(null);
+    } catch (e) {
+      Alert.alert("Couldn't save note", String((e as Error)?.message || e));
+    } finally {
+      setSavingNote(false);
+    }
+  }
 
   const onAttach = useCallback(async () => {
     if (!user || attachBusy) return;
@@ -518,6 +587,18 @@ export function ThreadScreen({ route, navigation }: Props) {
           placeholderTextColor={colors.muted}
           multiline
         />
+        {/* 🎤 voice-to-note button. Only shown on customer chats (DMs skip
+            it — no use case for private notes on internal chats). Hidden if
+            expo-audio isn't loaded (older native builds). Records → /transcribe
+            → opens a preview modal where the trainer reviews and saves as a
+            private note (not sent to the customer). Same flow as the
+            webapp's composer mic. */}
+        {!isDm && audioMod && (
+          <VoiceNoteMic
+            onTranscribed={onTranscribed}
+            transcribing={transcribing}
+          />
+        )}
         <TouchableOpacity
           style={[styles.send, !composer.trim() && styles.sendDisabled]}
           disabled={!composer.trim()}
@@ -526,6 +607,13 @@ export function ThreadScreen({ route, navigation }: Props) {
           <Text style={styles.sendTxt}>➤</Text>
         </TouchableOpacity>
       </View>
+
+      <NotePreviewModal
+        text={notePreview}
+        onCancel={() => setNotePreview(null)}
+        onSave={saveVoiceNote}
+        saving={savingNote}
+      />
 
       <ActionSheet
         message={sheetMsg}
@@ -573,6 +661,150 @@ export function ThreadScreen({ route, navigation }: Props) {
 
 // Lightweight bottom sheet for long-press actions (Create ticket / Copy).
 // Could be a separate file, but it's tightly coupled to the thread screen.
+// 🎤 voice-note mic for the thread composer. Only mounted when expo-audio
+// loaded at module init, so React's rules-of-hooks stays clean (the hook
+// is always called from inside this component, never skipped).
+// Tap once → request mic permission → start recording (button turns red ⏹).
+// Tap again → stop recording → parent transcribes the URI.
+function VoiceNoteMic({
+  onTranscribed,
+  transcribing,
+}: {
+  onTranscribed: (uri: string) => Promise<void>;
+  transcribing: boolean;
+}) {
+  const recorder = audioMod.useAudioRecorder(
+    audioMod.RecordingPresets.HIGH_QUALITY,
+  );
+  const recorderState = audioMod.useAudioRecorderState(recorder);
+  const isRecording = !!recorderState?.isRecording;
+
+  async function toggle() {
+    if (transcribing) return;
+    if (isRecording) {
+      try {
+        await recorder.stop();
+        const uri = recorder.uri as string | undefined;
+        if (uri) await onTranscribed(uri);
+      } catch (e) {
+        Alert.alert(
+          "Couldn't stop recording",
+          String((e as Error)?.message || e),
+        );
+      }
+      return;
+    }
+    try {
+      const perm = await audioMod.requestRecordingPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert(
+          "Microphone access denied",
+          "Enable microphone permission in your phone's Settings for CommonCommunication.",
+        );
+        return;
+      }
+      await audioMod.setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+      });
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+    } catch (e) {
+      Alert.alert(
+        "Couldn't start recording",
+        String((e as Error)?.message || e),
+      );
+    }
+  }
+
+  return (
+    <TouchableOpacity
+      onPress={toggle}
+      style={[styles.mic, isRecording && styles.micRecording]}
+      disabled={transcribing}
+      accessibilityLabel={isRecording ? "Stop recording" : "Record a voice note"}
+    >
+      {transcribing ? (
+        <ActivityIndicator color="white" size="small" />
+      ) : (
+        <Text style={styles.micTxt}>{isRecording ? "⏹" : "🎤"}</Text>
+      )}
+    </TouchableOpacity>
+  );
+}
+
+// Editable preview modal — shown after the mic transcribes audio. Trainer
+// reviews the transcript, edits if needed, taps Save to write to the
+// chat's /notes feed. Save is disabled while the request is in flight.
+function NotePreviewModal({
+  text,
+  onCancel,
+  onSave,
+  saving,
+}: {
+  text: string | null;
+  onCancel: () => void;
+  onSave: (text: string) => void;
+  saving: boolean;
+}) {
+  const [draft, setDraft] = useState("");
+  useEffect(() => {
+    if (text !== null) setDraft(text);
+  }, [text]);
+  return (
+    <Modal
+      transparent
+      visible={text !== null}
+      animationType="fade"
+      onRequestClose={onCancel}
+    >
+      <Pressable style={styles.previewBack} onPress={onCancel}>
+        <Pressable style={styles.previewCard} onPress={(e) => e.stopPropagation()}>
+          <View style={styles.previewHead}>
+            <Text style={styles.previewTitle}>📝 Save as note?</Text>
+            <Text style={styles.previewSub}>
+              Private to your team. The customer never sees this.
+            </Text>
+          </View>
+          <TextInput
+            style={styles.previewInput}
+            value={draft}
+            onChangeText={setDraft}
+            multiline
+            autoFocus
+            placeholderTextColor={colors.muted}
+            editable={!saving}
+          />
+          <View style={styles.previewActions}>
+            <TouchableOpacity
+              onPress={onCancel}
+              style={styles.previewBtn}
+              disabled={saving}
+            >
+              <Text style={styles.previewBtnTxt}>Cancel</Text>
+            </TouchableOpacity>
+            <View style={{ flex: 1 }} />
+            <TouchableOpacity
+              onPress={() => onSave(draft)}
+              style={[
+                styles.previewSave,
+                (!draft.trim() || saving) && styles.previewSaveDisabled,
+              ]}
+              disabled={!draft.trim() || saving}
+            >
+              {saving ? (
+                <ActivityIndicator color="white" size="small" />
+              ) : (
+                <Text style={styles.previewSaveTxt}>Save note</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
 function ActionSheet({
   message,
   showTicket,
@@ -683,6 +915,55 @@ const styles = StyleSheet.create({
   },
   sendDisabled: { backgroundColor: "#8fb3a8" },
   sendTxt: { color: "white", fontSize: 20 },
+  mic: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "rgba(255,255,255,0.18)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  micRecording: { backgroundColor: "#dc2626" },
+  micTxt: { color: "white", fontSize: 18 },
+  previewBack: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "center",
+    padding: 20,
+  },
+  previewCard: {
+    backgroundColor: "white",
+    borderRadius: 12,
+    padding: 16,
+    maxHeight: "80%",
+  },
+  previewHead: { marginBottom: 8 },
+  previewTitle: { fontSize: 16, fontWeight: "600", color: colors.text },
+  previewSub: { fontSize: 12, color: colors.muted, marginTop: 2 },
+  previewInput: {
+    minHeight: 80,
+    maxHeight: 240,
+    fontSize: 14,
+    color: colors.text,
+    padding: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    borderRadius: 8,
+    textAlignVertical: "top",
+    backgroundColor: "#fff8e7",
+    marginVertical: 8,
+  },
+  previewActions: { flexDirection: "row", alignItems: "center" },
+  previewBtn: { paddingVertical: 8, paddingHorizontal: 12 },
+  previewBtnTxt: { color: colors.muted, fontSize: 14 },
+  previewSave: {
+    backgroundColor: colors.greenDark,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 22,
+  },
+  previewSaveDisabled: { backgroundColor: "#8fb3a8" },
+  previewSaveTxt: { color: "white", fontWeight: "600", fontSize: 14 },
   headerBtn: {
     width: 36,
     height: 36,

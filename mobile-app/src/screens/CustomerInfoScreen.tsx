@@ -387,13 +387,10 @@ export function CustomerInfoScreen({ route }: Props) {
                 <Text style={styles.composerBtnTxt}>Cancel</Text>
               </TouchableOpacity>
               <View style={{ flex: 1 }} />
-              {audioMod && (
-                <MicButton
-                  onTranscribe={onTranscribe}
-                  transcribing={transcribing}
-                  disabled={saving}
-                />
-              )}
+              {/* Mic moved to the thread composer in v1.116 — single
+                  affordance for voice notes, used from inside any chat.
+                  Customer Info keeps a text-only add-note flow for when
+                  trainers prefer to type a longer note in one go. */}
               <TouchableOpacity
                 onPress={saveNote}
                 style={[
