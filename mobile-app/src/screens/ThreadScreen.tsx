@@ -1020,7 +1020,7 @@ export function ThreadScreen({ route, navigation }: Props) {
       )}
       <View
         style={[
-          styles.composerRow,
+          styles.composerWrap,
           // Stack our base 8px composer padding on top of whatever the OS
           // reports as the bottom inset (gesture-nav pill / home indicator).
           // Phones without a gesture bar report 0 and we end up with 8px,
@@ -1039,62 +1039,64 @@ export function ThreadScreen({ route, navigation }: Props) {
           },
         ]}
       >
-        <TouchableOpacity
-          style={[styles.attach, attachBusy && styles.attachBusy]}
-          onPress={onAttach}
-          disabled={attachBusy}
-        >
-          <Text style={styles.attachTxt}>📎</Text>
-        </TouchableOpacity>
-        {/* v1.134: 📝 notes mic (left of input). Records → cleaned transcript
-            opens the note-preview modal where trainer saves as a private note
-            (NOT sent to the customer). Customer chats only — DMs have no
-            notes feature. */}
-        {!isDm && audioMod && (
-          <VoiceMicButton
-            idleGlyph="📝"
-            accessibilityLabelIdle="Record a private note"
-            onTranscribed={onTranscribed}
-            transcribing={transcribing}
-            disabled={voiceRecordingMic === "composer"}
-            onRecordingChange={(rec) => {
-              if (rec) setVoiceRecordingMic("note");
-              else setVoiceRecordingMic((cur) => (cur === "note" ? null : cur));
-            }}
-          />
-        )}
-        <TextInput
-          style={styles.input}
-          value={composer}
-          onChangeText={setComposer}
-          placeholder="Type a message"
-          placeholderTextColor={colors.muted}
-          multiline
-        />
-        {/* v1.134: 🎤 composer mic (right of input). Records → cleaned
-            transcript appends to whatever's in the reply box. Trainer edits
-            and taps Send. Visible on both customer chats and internal DMs —
-            voice-to-text is useful in both. */}
+        {/* v1.136: voice pills row. Stacked above the text input so the
+            input gets full width — previously the two icon mics squeezed
+            the typing area on narrow phones. 📝 hidden on DMs (no notes
+            feature there), in which case 🎤 expands to fill the row. */}
         {audioMod && (
-          <VoiceMicButton
-            idleGlyph="🎤"
-            accessibilityLabelIdle="Record a voice reply"
-            onTranscribed={onComposerTranscribed}
-            transcribing={composerTranscribing}
-            disabled={voiceRecordingMic === "note"}
-            onRecordingChange={(rec) => {
-              if (rec) setVoiceRecordingMic("composer");
-              else setVoiceRecordingMic((cur) => (cur === "composer" ? null : cur));
-            }}
-          />
+          <View style={styles.voiceRow}>
+            {!isDm && (
+              <VoiceMicButton
+                idleGlyph="📝"
+                label="Note"
+                accessibilityLabelIdle="Record a private note"
+                onTranscribed={onTranscribed}
+                transcribing={transcribing}
+                disabled={voiceRecordingMic === "composer"}
+                onRecordingChange={(rec) => {
+                  if (rec) setVoiceRecordingMic("note");
+                  else setVoiceRecordingMic((cur) => (cur === "note" ? null : cur));
+                }}
+              />
+            )}
+            <VoiceMicButton
+              idleGlyph="🎤"
+              label="Voice"
+              accessibilityLabelIdle="Record a voice reply"
+              onTranscribed={onComposerTranscribed}
+              transcribing={composerTranscribing}
+              disabled={voiceRecordingMic === "note"}
+              onRecordingChange={(rec) => {
+                if (rec) setVoiceRecordingMic("composer");
+                else setVoiceRecordingMic((cur) => (cur === "composer" ? null : cur));
+              }}
+            />
+          </View>
         )}
-        <TouchableOpacity
-          style={[styles.send, !composer.trim() && styles.sendDisabled]}
-          disabled={!composer.trim()}
-          onPress={send}
-        >
-          <Text style={styles.sendTxt}>➤</Text>
-        </TouchableOpacity>
+        <View style={styles.composerRow}>
+          <TextInput
+            style={styles.input}
+            value={composer}
+            onChangeText={setComposer}
+            placeholder="Type a message"
+            placeholderTextColor={colors.muted}
+            multiline
+          />
+          <TouchableOpacity
+            style={[styles.attach, attachBusy && styles.attachBusy]}
+            onPress={onAttach}
+            disabled={attachBusy}
+          >
+            <Text style={styles.attachTxt}>📎</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.send, !composer.trim() && styles.sendDisabled]}
+            disabled={!composer.trim()}
+            onPress={send}
+          >
+            <Text style={styles.sendTxt}>➤</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <NotePreviewModal
@@ -1213,6 +1215,7 @@ export function ThreadScreen({ route, navigation }: Props) {
 // never skipped).
 function VoiceMicButton({
   idleGlyph,
+  label,
   accessibilityLabelIdle,
   onTranscribed,
   transcribing,
@@ -1220,6 +1223,12 @@ function VoiceMicButton({
   onRecordingChange,
 }: {
   idleGlyph: string;
+  // v1.136: when present, renders as a pill (icon + label, flex:1). When
+  // omitted, renders as the smaller circular icon-only button used inline
+  // with the text input. Today every caller passes a label — the original
+  // icon-only variant is kept available for future cases (e.g. a third
+  // mic in CustomerInfoScreen's compact notes panel).
+  label?: string;
   accessibilityLabelIdle: string;
   onTranscribed: (uri: string) => Promise<void>;
   transcribing: boolean;
@@ -1284,12 +1293,13 @@ function VoiceMicButton({
   }
 
   const effectivelyDisabled = transcribing || (disabled && !isRecording);
+  const isPill = !!label;
 
   return (
     <TouchableOpacity
       onPress={toggle}
       style={[
-        styles.mic,
+        isPill ? styles.micPill : styles.mic,
         isRecording && styles.micRecording,
         effectivelyDisabled && styles.micDimmed,
       ]}
@@ -1298,6 +1308,17 @@ function VoiceMicButton({
     >
       {transcribing ? (
         <ActivityIndicator color="white" size="small" />
+      ) : isPill ? (
+        // Pill variant: glyph and label side-by-side. While recording, the
+        // label flips to "Stop" so the affordance is unambiguous.
+        <View style={styles.micPillContent}>
+          <Text style={styles.micPillIcon}>
+            {isRecording ? "⏹" : idleGlyph}
+          </Text>
+          <Text style={styles.micPillTxt}>
+            {isRecording ? "Stop" : label}
+          </Text>
+        </View>
       ) : (
         <Text style={styles.micTxt}>{isRecording ? "⏹" : idleGlyph}</Text>
       )}
@@ -1451,12 +1472,23 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     overflow: "hidden",
   },
+  // v1.136: composer is now a 2-row column. composerWrap holds the column
+  // padding + background; composerRow is just the inner text+attach+send row.
+  composerWrap: {
+    paddingHorizontal: 6,
+    paddingTop: 6,
+    paddingBottom: 8,
+    backgroundColor: colors.greenDark,
+    gap: 6,
+  },
   composerRow: {
     flexDirection: "row",
     alignItems: "flex-end",
-    padding: 6,
-    paddingBottom: 8,
-    backgroundColor: colors.greenDark,
+    gap: 6,
+  },
+  voiceRow: {
+    flexDirection: "row",
+    alignItems: "center",
     gap: 6,
   },
   // Slash-command template picker (v1.126). Anchored above the composer,
@@ -1592,6 +1624,26 @@ const styles = StyleSheet.create({
   // the user understands they can't tap it until the active recording stops.
   micDimmed: { opacity: 0.35 },
   micTxt: { color: "white", fontSize: 18 },
+  // v1.136: pill variant — used for the stacked voice row above the input.
+  // flex:1 so two pills split the row 50/50 (or one fills it when 📝 is
+  // hidden in DMs). Slightly translucent on the green composer bg.
+  micPill: {
+    flex: 1,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "rgba(255,255,255,0.16)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.32)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  micPillContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  micPillIcon: { fontSize: 16 },
+  micPillTxt: { color: "white", fontSize: 14, fontWeight: "600" },
   previewBack: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.5)",
