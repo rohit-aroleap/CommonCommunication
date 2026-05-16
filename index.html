@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.131</title>
+<title>CommonCommunication v1.132</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -257,7 +257,7 @@
     color: var(--muted); font-size: 16px; padding: 0 4px;
   }
   .team-member-row .rm:hover { color: #d9534f; }
-  /* v1.131: inline display-name editor. Feeds the @mention picker
+  /* v1.132: inline display-name editor. Feeds the @mention picker
      and other UIs that show "who said this" so we don't have to
      stare at full emails. Optional — falls back to email when blank. */
   .team-member-row .name-row {
@@ -1320,7 +1320,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.131</div>
+    <div class="login-version">v1.132</div>
   </div>
 </div>
 
@@ -1328,7 +1328,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.131</span>
+    <span class="ver">v1.132</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -1655,7 +1655,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.131";
+const APP_VERSION = "v1.132";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -2081,7 +2081,7 @@ function renderAllowedList() {
       await set(ref(db, `${ROOT}/config/teamMembers/${b.dataset.key}/phones/${b.dataset.phone}`), null);
     };
   });
-  // v1.131: save the inline display name on blur. Empty string deletes
+  // v1.132: save the inline display name on blur. Empty string deletes
   // the name field (falls back to email everywhere via `name || email`).
   allowedListEl.querySelectorAll(".name-input").forEach((inp) => {
     inp.onblur = async () => {
@@ -5642,7 +5642,7 @@ function insertTemplateById(id) {
   closeTplPicker();
 }
 
-// ====== @-mention picker (composer) — v1.131 ======
+// ====== @-mention picker (composer) — v1.132 ======
 // Type "@" (at start, or after a space) and a popover appears with
 // teammate candidates. Pick one, the "@<query>" is replaced with the
 // teammate's name and their uid is stashed in _mentions so doSend can
@@ -5707,7 +5707,7 @@ function getMentionCandidates(query) {
   // emailKey). De-dupe by email. Signed-in ones are pushable; pending
   // ones are display-only.
   //
-  // v1.131: name resolution order is teamMembers.name (admin-set in the
+  // v1.132: name resolution order is teamMembers.name (admin-set in the
   // Team modal) → Firebase Auth display name → email. Same order for
   // signed-in AND pending users, so a name set in the Team modal always
   // wins regardless of whether the teammate has signed in yet.
@@ -6167,7 +6167,7 @@ async function doSend() {
   const chatId = meta.chatId || currentChatId;
   const phone = meta.phone || currentChatId.split("_")[0];
 
-  // v1.131: snapshot mentions before we clear the composer. snapshotMentions
+  // v1.132: snapshot mentions before we clear the composer. snapshotMentions
   // filters out anyone whose name was erased between picking and sending.
   const mentionUids = snapshotMentions(text);
 

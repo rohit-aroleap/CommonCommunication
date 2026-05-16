@@ -367,13 +367,15 @@ export function ThreadScreen({ route, navigation }: Props) {
         }
         return { ...m, id: k } as Message;
       });
-      list.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+      // v1.132: descending sort (newest first). Pairs with inverted FlatList
+      // below — data[0] renders at the BOTTOM of the screen, so the thread
+      // opens at the most recent message with no scroll animation. Previously
+      // we ascending-sorted + scrollToEnd'd, which made the user watch the
+      // list visibly scroll top → bottom on every open (especially bad on
+      // groups with lots of messages or images).
+      list.sort((a, b) => (b.ts || 0) - (a.ts || 0));
       setMessages(list);
       markChatSeen(chatKey);
-      // Auto-scroll to bottom after the snapshot lands.
-      requestAnimationFrame(() => {
-        listRef.current?.scrollToEnd({ animated: false });
-      });
     });
     // Fetch group name lazily if missing.
     if (!isDm && isGroup && !meta.groupName) {
@@ -759,11 +761,19 @@ export function ThreadScreen({ route, navigation }: Props) {
     [habitUsers, cancelledUsers, ferraIndex, contacts],
   );
 
-  // Day-divider rendering: walk the deduped list and remember the prior day.
+  // Day-divider rendering. With the v1.132 inverted FlatList, data is sorted
+  // newest → oldest. The "chronologically earlier" neighbor of any item is
+  // therefore at index + 1 (one position toward the older end of the array,
+  // which in inverted rendering sits visually ABOVE this item). We show a
+  // day divider when the earlier neighbor is in a different day (or doesn't
+  // exist — meaning this is the oldest message). The divider's JSX sits
+  // above the bubble, so visually it lands between this message and the
+  // older one — same effect as before, just computed against the other
+  // neighbor because the array order is reversed.
   const renderItem = useCallback(
     ({ item, index }: { item: Message; index: number }) => {
-      const prev = visible[index - 1];
-      const showDay = !prev || dayLabel(prev.ts) !== dayLabel(item.ts);
+      const earlier = visible[index + 1];
+      const showDay = !earlier || dayLabel(earlier.ts) !== dayLabel(item.ts);
       return (
         <View>
           {showDay && (
@@ -844,9 +854,13 @@ export function ThreadScreen({ route, navigation }: Props) {
         renderItem={renderItem}
         style={styles.list}
         contentContainerStyle={styles.listContent}
-        onContentSizeChange={() =>
-          listRef.current?.scrollToEnd({ animated: false })
-        }
+        // v1.132: inverted renders data[0] at the bottom of the screen, so
+        // the thread opens at the newest message without any scrolling.
+        // Pairs with the descending sort in the listener above. New messages
+        // arrive as data[0] and naturally appear at the bottom, scroll
+        // position is preserved when the user has scrolled up to read
+        // older messages — no manual scrollToEnd needed anywhere.
+        inverted
       />
       {/* Slash-command template picker (v1.126). Visible whenever composer
           starts with "/". Sits BETWEEN the message list and the composer so
