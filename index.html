@@ -137,6 +137,149 @@
   .my-tickets-btn.active .ct {
     background: rgba(255,255,255,.25); padding: 0 6px; border-radius: 8px;
   }
+  /* Team button — internal DMs filter. Mirrors my-tickets visual states with
+     blue instead of red so internal chats are unmistakably distinct from
+     customer tickets. */
+  .team-btn {
+    background: var(--header); color: var(--text);
+    border: 1px solid var(--border); border-radius: 14px;
+    padding: 4px 10px; font-size: 12px;
+    cursor: pointer; font-family: inherit;
+    display: inline-flex; align-items: center; gap: 4px;
+    white-space: nowrap; font-weight: 500;
+    transition: background .15s, color .15s, box-shadow .15s, border-color .15s;
+  }
+  .team-btn:hover { background: var(--hover); }
+  .team-btn.has-unread:not(.active) {
+    background: #eff6ff; color: #1e40af; border-color: #bfdbfe;
+  }
+  .team-btn.has-unread:not(.active):hover {
+    background: #dbeafe;
+  }
+  .team-btn.active {
+    background: #3b82f6; color: white; border-color: #2563eb;
+    box-shadow: 0 0 0 3px rgba(59,130,246,.25);
+    font-weight: 600;
+  }
+  .team-btn.active:hover { background: #2563eb; }
+  .team-btn.active::before { content: "✓ "; font-weight: 700; }
+  .team-btn .ct { font-weight: 700; }
+  .team-btn.active .ct {
+    background: rgba(255,255,255,.25); padding: 0 6px; border-radius: 8px;
+  }
+  /* DM avatar: blue background with person glyph. Shape + color so colorblind
+     users can still distinguish internal from customer avatars. */
+  .chat-row .avatar.is-dm {
+    background: #3b82f6;
+  }
+  /* "Start new DM" row at the top of the Team view. */
+  .new-dm-row {
+    display: flex; align-items: center; padding: 12px 16px;
+    cursor: pointer; gap: 12px;
+    border-bottom: 1px solid var(--border);
+    background: #f8fafc;
+    color: #1e40af;
+    font-weight: 500;
+  }
+  .new-dm-row:hover { background: #eff6ff; }
+  .new-dm-row .icn {
+    width: 49px; height: 49px; border-radius: 50%;
+    background: white; border: 2px dashed #3b82f6;
+    display: flex; align-items: center; justify-content: center;
+    color: #3b82f6; font-size: 22px; flex-shrink: 0;
+  }
+  /* Team picker popover (click 👥 Team → choose a teammate to DM) */
+  .dm-picker-modal {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+    display: none; align-items: flex-start; justify-content: center;
+    z-index: 9000; padding: 60px 20px;
+  }
+  .dm-picker-modal.visible { display: flex; }
+  .dm-picker-panel {
+    background: white; border-radius: 10px;
+    width: 100%; max-width: 480px; max-height: 70vh;
+    display: flex; flex-direction: column;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.2);
+  }
+  .dm-picker-head {
+    padding: 14px 18px; border-bottom: 1px solid var(--border);
+    display: flex; gap: 10px; align-items: center; justify-content: space-between;
+  }
+  .dm-picker-head h3 { margin: 0; font-size: 15px; font-weight: 600; }
+  .dm-picker-head .close-btn {
+    background: transparent; border: none; cursor: pointer;
+    font-size: 18px; color: var(--muted); padding: 4px 8px;
+  }
+  .dm-picker-list { flex: 1; overflow-y: auto; padding: 6px 0; }
+  .dm-picker-item {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 18px; cursor: pointer;
+    border-bottom: 1px solid var(--border);
+  }
+  .dm-picker-item:hover { background: var(--hover); }
+  .dm-picker-item .av {
+    width: 40px; height: 40px; border-radius: 50%;
+    background: #3b82f6; color: white;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 600; font-size: 15px;
+    flex-shrink: 0;
+  }
+  .dm-picker-item .nm { font-size: 14px; font-weight: 500; color: var(--text); }
+  .dm-picker-item .em { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .dm-picker-empty { padding: 24px; text-align: center; color: var(--muted); font-size: 13px; }
+  /* Team-member phone editor inside the existing Team modal */
+  .team-member-row {
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 10px; margin-bottom: 6px;
+    background: #fafafa;
+  }
+  .team-member-row .top {
+    display: flex; align-items: center; gap: 8px;
+  }
+  .team-member-row .em { flex: 1; font-size: 13px; }
+  .team-member-row .rm {
+    background: transparent; border: none; cursor: pointer;
+    color: var(--muted); font-size: 16px; padding: 0 4px;
+  }
+  .team-member-row .rm:hover { color: #d9534f; }
+  .team-member-row .phones {
+    margin-top: 6px; display: flex; gap: 4px; flex-wrap: wrap;
+  }
+  .team-member-row .phone-pill {
+    background: white; border: 1px solid var(--border);
+    border-radius: 12px; padding: 2px 4px 2px 8px;
+    font-size: 11px; display: inline-flex; align-items: center; gap: 2px;
+    font-family: monospace;
+  }
+  .team-member-row .phone-pill button {
+    background: transparent; border: none; cursor: pointer;
+    color: var(--muted); font-size: 13px; padding: 0 2px;
+    line-height: 1;
+  }
+  .team-member-row .phone-pill button:hover { color: #d9534f; }
+  .team-member-row .add-phone {
+    display: flex; gap: 4px; margin-top: 6px;
+  }
+  .team-member-row .add-phone input {
+    flex: 1; font-size: 12px; padding: 4px 8px;
+    border: 1px solid var(--border); border-radius: 4px;
+    font-family: monospace;
+  }
+  .team-member-row .add-phone button {
+    background: var(--green); color: white; border: none; border-radius: 4px;
+    padding: 4px 10px; font-size: 11px; cursor: pointer;
+    font-weight: 600;
+  }
+  /* DM thread header: small "Internal" badge so it's obvious this won't
+     leave the dashboard. */
+  .dm-badge {
+    display: inline-block;
+    background: #dbeafe; color: #1e40af;
+    border-radius: 8px; padding: 1px 6px;
+    font-size: 10px; font-weight: 700;
+    margin-left: 6px;
+    letter-spacing: .3px;
+  }
   .icon-btn {
     background: none; border: none; cursor: pointer;
     width: 36px; height: 36px; border-radius: 50%;
@@ -1173,6 +1316,7 @@
         <h2>Chats</h2>
         <div class="actions">
           <button class="my-tickets-btn" id="myTicketsBtn" title="My open tickets — click to filter">🎫 My tickets <span class="ct" id="myTicketsCount">0</span></button>
+          <button class="team-btn" id="teamViewBtn" title="Internal team chats (direct messages, not sent through Periskope)">👥 Team <span class="ct" id="teamUnreadCount">0</span></button>
           <button class="icon-btn" id="newChatBtn" title="New chat by phone">+</button>
         </div>
       </div>
@@ -1248,10 +1392,10 @@
 
 <!-- ============== TEAM MODAL ============== -->
 <div class="modal-back" id="teamModal">
-  <div class="modal" style="width:460px;">
+  <div class="modal" style="width:520px;">
     <h3>Team — Allowed emails</h3>
     <div style="font-size:12px; color:var(--muted); margin-bottom:14px;">
-      Only signed-in users with an allowed email can use this dashboard. Bootstrap admins (hardcoded) are always allowed.
+      Only signed-in users with an allowed email can use this dashboard. Bootstrap admins (hardcoded) are always allowed. Add each teammate's WhatsApp number so customer-inbox rows for that number get redirected to a direct internal chat instead of routing through Periskope.
     </div>
     <label style="margin-bottom:6px;">Bootstrap admins</label>
     <div id="bootstrapList" style="margin-bottom:14px;"></div>
@@ -1264,6 +1408,19 @@
     </div>
     <div class="actions" style="margin-top:18px;">
       <button class="btn btn-secondary" id="teamClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============== TEAM DM PICKER ============== -->
+<div class="dm-picker-modal" id="dmPickerModal">
+  <div class="dm-picker-panel">
+    <div class="dm-picker-head">
+      <h3>Start an internal chat</h3>
+      <button class="close-btn" id="dmPickerClose" title="Close">×</button>
+    </div>
+    <div class="dm-picker-list" id="dmPickerList">
+      <div class="dm-picker-empty">No teammates yet.</div>
     </div>
   </div>
 </div>
@@ -1491,6 +1648,14 @@ const SEND_SUGGEST_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const SEND_SUGGEST_MIN_COUNT = 3;
 let _baseTabTitle = "CommonCommunication";
 let contactsCache = {};   // phone (digits) -> { name, source, seenAt } from commonComm/contacts
+// Internal team-DM state. teamMembers is the email-keyed config with phones,
+// dmsCache holds every DM the current user is a participant in, and
+// currentView toggles the sidebar between customer chats and team DMs.
+let teamMembersCache = {};        // emailKey -> { email, name, phones: { "+919...": true } }
+let teamPhones = new Set();       // derived: every phone listed in teamMembersCache
+let dmsCache = {};                // pairKey -> { meta: {participants, lastMsgAt, ...} }
+let dmRows = [];                  // last computed list for re-render
+let currentView = "chats";        // "chats" | "team" — sidebar toggle
 
 // ====== ELEMENTS ======
 const $ = (id) => document.getElementById(id);
@@ -1580,6 +1745,11 @@ const bootstrapList = $("bootstrapList");
 const allowedListEl = $("allowedList");
 const newAllowEmail = $("newAllowEmail");
 const addAllowBtn = $("addAllowBtn");
+const teamViewBtn = $("teamViewBtn");
+const teamUnreadCount = $("teamUnreadCount");
+const dmPickerModal = $("dmPickerModal");
+const dmPickerList = $("dmPickerList");
+const dmPickerClose = $("dmPickerClose");
 const backfillBtn = $("backfillBtn");
 const triageBackfillBtn = $("triageBackfillBtn");
 const notifBtn = $("notifBtn");
@@ -1692,6 +1862,8 @@ onAuthStateChanged(auth, async (user) => {
     listenChats();
     listenContacts();
     listenTeamUsers();
+    listenTeamMembers();
+    listenDms();
     listenTickets();
     listenMyLastSeen();
     listenMyFavorites();
@@ -1823,18 +1995,59 @@ function renderAllowedList() {
     allowedListEl.innerHTML = "<i style='color:var(--muted); font-size:12px;'>None yet. Add team emails below.</i>";
     return;
   }
+  // Each row shows the email + its mapped phone numbers (from teamMembers).
+  // Phones are how we suppress teammates from the customer inbox; adding the
+  // teammate's WhatsApp number here is what closes the "Shobhit shows up
+  // twice" loophole.
   allowedListEl.innerHTML = entries.map(([key, val]) => {
-    // Value is the original email string (legacy entries may be boolean true → fall back to key)
     const display = (typeof val === "string") ? val : key;
-    return `<div class="allow-row">
-      <span>${escapeHtml(display)}</span>
-      <button class="rm" data-key="${escapeHtml(key)}" title="Remove">×</button>
+    const member = teamMembersCache[key] || {};
+    const phones = member.phones || {};
+    const phonePills = Object.keys(phones)
+      .filter(p => phones[p])
+      .map(p => `<span class="phone-pill">${escapeHtml(p)}<button class="rm-phone" data-key="${escapeHtml(key)}" data-phone="${escapeHtml(p)}" title="Unlink this number">×</button></span>`)
+      .join("");
+    return `<div class="team-member-row">
+      <div class="top">
+        <span class="em">${escapeHtml(display)}</span>
+        <button class="rm" data-key="${escapeHtml(key)}" title="Remove from team">×</button>
+      </div>
+      <div class="phones">${phonePills || `<i style="color:var(--muted); font-size:11px;">No phones mapped — customer-inbox rows for this teammate's number will still show as customers.</i>`}</div>
+      <div class="add-phone">
+        <input class="add-phone-input" data-key="${escapeHtml(key)}" placeholder="e.g. +91 98765 43210" />
+        <button class="add-phone-btn" data-key="${escapeHtml(key)}">Add phone</button>
+      </div>
     </div>`;
   }).join("");
   allowedListEl.querySelectorAll(".rm").forEach(b => {
     b.onclick = async () => {
-      if (!confirm("Remove this email from the allowlist?")) return;
-      await set(ref(db, `${ROOT}/config/allowedEmails/${b.dataset.key}`), null);
+      if (!confirm("Remove this teammate from the allowlist? Their DMs stay on disk but they won't be able to sign in.")) return;
+      await Promise.all([
+        set(ref(db, `${ROOT}/config/allowedEmails/${b.dataset.key}`), null),
+        set(ref(db, `${ROOT}/config/teamMembers/${b.dataset.key}`), null),
+      ]);
+    };
+  });
+  allowedListEl.querySelectorAll(".rm-phone").forEach(b => {
+    b.onclick = async () => {
+      await set(ref(db, `${ROOT}/config/teamMembers/${b.dataset.key}/phones/${b.dataset.phone}`), null);
+    };
+  });
+  allowedListEl.querySelectorAll(".add-phone-btn").forEach(btn => {
+    btn.onclick = async () => {
+      const input = allowedListEl.querySelector(`.add-phone-input[data-key="${btn.dataset.key}"]`);
+      const raw = (input?.value || "").trim();
+      const digits = normalizePhone(raw);
+      if (digits.length < 8) { alert("Enter a valid phone number with country code (digits only or with +/spaces)."); return; }
+      const phoneKey = "+" + digits;
+      // Also stash email + name into teamMembers so the picker has rich data.
+      const emailKey_ = btn.dataset.key;
+      const emailDisplay = (typeof allowedEmailsCache[emailKey_] === "string") ? allowedEmailsCache[emailKey_] : emailKey_;
+      await update(ref(db, `${ROOT}/config/teamMembers/${emailKey_}`), {
+        email: emailDisplay,
+        [`phones/${phoneKey}`]: true,
+      });
+      if (input) input.value = "";
     };
   });
 }
@@ -1842,8 +2055,13 @@ async function addAllowedEmail() {
   const raw = newAllowEmail.value.trim().toLowerCase();
   if (!raw || !raw.includes("@") || raw.length < 5) { alert("Enter a valid email."); return; }
   const k = emailKey(raw);
-  // Store the original email AS the value — both serves as gate (truthy) and display
-  await set(ref(db, `${ROOT}/config/allowedEmails/${k}`), raw);
+  // Mirror writes: allowedEmails is the auth gate, teamMembers is the rich
+  // profile (phones, future per-user settings). Keeping them in sync means
+  // either alone is enough to identify a teammate.
+  await Promise.all([
+    set(ref(db, `${ROOT}/config/allowedEmails/${k}`), raw),
+    update(ref(db, `${ROOT}/config/teamMembers/${k}`), { email: raw }),
+  ]);
   newAllowEmail.value = "";
 }
 
@@ -2494,7 +2712,11 @@ function listenMyLastSeen() {
   const r = ref(db, `${ROOT}/userState/${currentUser.uid}/lastSeen`);
   onValue(r, (snap) => {
     myLastSeen = snap.val() || {};
+    // DM unread state derives from myLastSeen, so any change has to ripple
+    // through rebuildDmRows or the Team-button badge goes stale.
+    rebuildDmRows();
     renderChatList(lastChatRows);
+    updateTeamUnreadBadge();
     updateTabTitle();
   });
 }
@@ -2504,6 +2726,12 @@ function markChatSeen(chatKey) {
   // Optimistic local update — listener will fire shortly with the persisted value
   myLastSeen[chatKey] = ts;
   set(ref(db, `${ROOT}/userState/${currentUser.uid}/lastSeen/${chatKey}`), ts).catch(() => {});
+  // Repaint the Team badge immediately — the listener round-trip would
+  // otherwise leave a stale unread dot visible for a beat.
+  if (isDmKey(chatKey)) {
+    rebuildDmRows();
+    updateTeamUnreadBadge();
+  }
 }
 
 // ====== PER-USER FAVORITES (pin to top of chat list) ======
@@ -2599,7 +2827,100 @@ function isChatNeedsTriage(chatKey, direction) {
 function listenTeamUsers() {
   onValue(ref(db, `${ROOT}/users`), (snap) => {
     teamUsers = snap.val() || {};
+    // Picker / DM list rely on this for names + photos. Re-render whatever's
+    // currently visible so a freshly-signed-in teammate appears immediately.
+    if (currentView === "team") renderChatList(lastChatRows);
   });
+}
+
+// ====== INTERNAL TEAM DMS ======
+// teamMembers extends allowedEmails with optional phones[]. The phones list
+// powers customer-inbox suppression: any chat row whose phone matches a
+// teammate's number is hidden, because Periscope-routed conversations with
+// teammates aren't customer support — they're internal chatter that should
+// flow through /dms/ instead.
+function listenTeamMembers() {
+  onValue(ref(db, `${ROOT}/config/teamMembers`), (snap) => {
+    teamMembersCache = snap.val() || {};
+    teamPhones = new Set();
+    for (const m of Object.values(teamMembersCache)) {
+      if (!m || !m.phones) continue;
+      for (const ph of Object.keys(m.phones)) {
+        if (m.phones[ph]) teamPhones.add(normalizePhone(ph));
+      }
+    }
+    // Customer list filtering and the team picker both depend on this.
+    renderChatList(lastChatRows);
+    // Live-refresh the open Team modal so newly-added phones appear immediately.
+    if (teamModal.classList.contains("visible")) renderAllowedList();
+  });
+}
+
+// pairKey = sorted UIDs joined by "_". Same key regardless of who initiated.
+function getPairKey(uidA, uidB) {
+  return [String(uidA), String(uidB)].sort().join("_");
+}
+function isDmKey(chatKey) {
+  return typeof chatKey === "string" && chatKey.startsWith("dm:");
+}
+function pairKeyFromChatKey(chatKey) {
+  return isDmKey(chatKey) ? chatKey.slice(3) : null;
+}
+function chatKeyFromPairKey(pairKey) {
+  return "dm:" + pairKey;
+}
+// Normalize a phone to digits-only so "+91 98765 43210", "919876543210",
+// and "91-9876543210" all compare equal.
+function normalizePhone(p) {
+  return String(p || "").replace(/\D/g, "");
+}
+
+// Live listener on /dms/. RTDB rules make sure we only get back DMs the
+// current user participates in, so no client-side filtering needed.
+function listenDms() {
+  onValue(ref(db, `${ROOT}/dms`), (snap) => {
+    dmsCache = snap.val() || {};
+    rebuildDmRows();
+    // The team-view sidebar reads from dmRows; the unread counter on the
+    // 👥 Team button also updates whenever a new DM lands.
+    if (currentView === "team") renderChatList(lastChatRows);
+    updateTeamUnreadBadge();
+  });
+}
+
+function rebuildDmRows() {
+  dmRows = [];
+  if (!currentUser) return;
+  for (const [pairKey, pair] of Object.entries(dmsCache)) {
+    const meta = pair?.meta || {};
+    const parts = meta.participants || {};
+    if (parts[currentUser.uid] !== true) continue;
+    // Other participant: the one that ISN'T me. For self-DMs (shouldn't
+    // normally happen) fall back to my own uid.
+    const otherUid = Object.keys(parts).find((u) => u !== currentUser.uid) || currentUser.uid;
+    const otherUser = teamUsers[otherUid] || {};
+    dmRows.push({
+      chatKey: chatKeyFromPairKey(pairKey),
+      pairKey,
+      otherUid,
+      name: otherUser.name || otherUser.email || "(unknown teammate)",
+      email: otherUser.email || "",
+      photoURL: otherUser.photoURL || null,
+      lastMsgAt: meta.lastMsgAt || 0,
+      preview: meta.lastMsgPreview || "",
+      lastMsgFromUid: meta.lastMsgFromUid || null,
+      lastMsgFromName: meta.lastMsgFromName || null,
+      unread: (meta.lastMsgAt || 0) > (myLastSeen[chatKeyFromPairKey(pairKey)] || 0) && meta.lastMsgFromUid !== currentUser.uid,
+    });
+  }
+  dmRows.sort((a, b) => (b.lastMsgAt || 0) - (a.lastMsgAt || 0));
+}
+
+function updateTeamUnreadBadge() {
+  const n = dmRows.filter((r) => r.unread).length;
+  teamUnreadCount.textContent = n;
+  teamViewBtn.classList.toggle("has-unread", n > 0);
+  teamViewBtn.classList.toggle("active", currentView === "team");
 }
 
 // ====== TICKETS ======
@@ -3589,12 +3910,87 @@ function myOpenTicketChatKeysSet() {
   return out;
 }
 
+function renderTeamChatList() {
+  // Hide status / tag pills while we're in team view — they only apply to
+  // customer conversations and would just be confusing here.
+  filterRow.style.display = "none";
+  tagFilterRow.style.display = "none";
+
+  const q = searchInput.value.trim().toLowerCase();
+  const visible = q
+    ? dmRows.filter(r => r.name.toLowerCase().includes(q) || (r.email || "").toLowerCase().includes(q))
+    : dmRows;
+
+  const startNew = `<div class="new-dm-row" id="newDmRow">
+      <div class="icn">+</div>
+      <div class="meta">
+        <div class="top"><span class="name">Start a new internal chat</span></div>
+        <div class="bottom"><span class="preview">Pick a teammate — message stays inside the dashboard</span></div>
+      </div>
+    </div>`;
+
+  if (!visible.length) {
+    chatList.innerHTML = startNew + `<div class="empty">${q ? "No teammates match." : "No internal chats yet. Click above to start one."}</div>`;
+    wireTeamListClicks();
+    return;
+  }
+
+  chatList.innerHTML = startNew + visible.map(r => {
+    const isActive = r.chatKey === currentChatId;
+    const initial = avatarInitial(r.name);
+    const previewWho = r.lastMsgFromUid === currentUser?.uid && r.lastMsgFromName
+      ? `<span class="who">${escapeHtml(r.lastMsgFromName)}:</span> `
+      : "";
+    const rowClass = `chat-row${isActive ? " active" : ""}${r.unread ? " unread" : ""}`;
+    const unreadDot = r.unread ? `<span class="unread-dot" title="New message"></span>` : "";
+    return `
+    <div class="${rowClass}" data-key="${escapeHtml(r.chatKey)}">
+      <div class="avatar is-dm" title="Internal teammate">${escapeHtml(initial)}</div>
+      <div class="meta">
+        <div class="top">
+          <span class="name">${escapeHtml(r.name)}<span class="dm-badge">INTERNAL</span></span>
+          <span class="time">${formatTime(r.lastMsgAt)}${unreadDot}</span>
+        </div>
+        <div class="bottom">
+          <span class="preview">${previewWho}${escapeHtml(r.preview)}</span>
+        </div>
+      </div>
+    </div>`;
+  }).join("");
+
+  wireTeamListClicks();
+}
+
+function wireTeamListClicks() {
+  const newDmRow = document.getElementById("newDmRow");
+  if (newDmRow) newDmRow.onclick = openDmPicker;
+  chatList.querySelectorAll(".chat-row").forEach(el => {
+    el.onclick = () => openChat(el.dataset.key);
+  });
+}
+
 function renderChatList(rows) {
+  // Team view is its own sidebar mode — pure list of internal DMs plus a
+  // "Start new DM" entry at the top. Customer filters / search don't apply
+  // here; that's deliberate so the two contexts don't visually bleed.
+  if (currentView === "team") {
+    renderTeamChatList();
+    return;
+  }
+  // Re-show the customer-only filter rows that team view hides.
+  filterRow.style.display = "";
+  tagFilterRow.style.display = "";
   // Resolve display name at render time so it updates live when Ferra data arrives
-  const enriched = (rows || []).map(r => ({
-    ...r,
-    name: resolveDisplayName(r.phone, r.explicitName, { chatType: r.chatType, groupName: r.groupName }),
-  }));
+  // teamPhones suppression: any customer row whose phone is a teammate's
+  // WhatsApp number gets hidden. Once a teammate is registered in
+  // config/teamMembers, their phone is "claimed" — conversations with that
+  // number belong in the internal DM tree, not the customer inbox.
+  const enriched = (rows || [])
+    .filter(r => !teamPhones.has(normalizePhone(r.phone)))
+    .map(r => ({
+      ...r,
+      name: resolveDisplayName(r.phone, r.explicitName, { chatType: r.chatType, groupName: r.groupName }),
+    }));
   const myChatKeys = myOpenTicketChatKeysSet();
   // Debug: log the first time my-tickets count and filter could be inconsistent
   if (currentStatusFilter === "My tickets" && myChatKeys.size > 0) {
@@ -3805,36 +4201,69 @@ async function runMsgSearch() {
   const mySeq = ++_msgSearchSeq;
   msgSearchResults.innerHTML = '<div class="msg-search-empty">Searching…</div>';
   try {
-    const res = await fetch(`${WORKER_URL}/search-messages?q=${encodeURIComponent(q)}&limit=80`);
-    if (mySeq !== _msgSearchSeq) return; // a newer search has been launched
-    const j = await res.json();
-    if (!res.ok || !j?.results) {
-      msgSearchResults.innerHTML = `<div class="msg-search-empty">Search failed: ${escapeHtml(j?.error || res.statusText || "unknown error")}</div>`;
+    // Hit customer search and DM search in parallel. The DM endpoint requires
+    // the caller's uid so the worker can filter to DMs they participate in.
+    const [chatsRes, dmRes] = await Promise.all([
+      fetch(`${WORKER_URL}/search-messages?q=${encodeURIComponent(q)}&limit=80`),
+      currentUser ? fetch(`${WORKER_URL}/dm-search?q=${encodeURIComponent(q)}&uid=${encodeURIComponent(currentUser.uid)}&limit=40`) : Promise.resolve(null),
+    ]);
+    if (mySeq !== _msgSearchSeq) return;
+    const j = await chatsRes.json();
+    if (!chatsRes.ok || !j?.results) {
+      msgSearchResults.innerHTML = `<div class="msg-search-empty">Search failed: ${escapeHtml(j?.error || chatsRes.statusText || "unknown error")}</div>`;
       return;
     }
-    if (j.results.length === 0) {
+    const dmJ = dmRes && dmRes.ok ? await dmRes.json() : null;
+    const dmHits = (dmJ?.results || []).map(d => {
+      const otherUser = teamUsers[d.otherUid] || {};
+      return {
+        _dm: true,
+        chatKey: chatKeyFromPairKey(d.pairKey),
+        pairKey: d.pairKey,
+        otherName: otherUser.name || otherUser.email || "(teammate)",
+        text: d.text,
+        ts: d.ts,
+        fromName: d.fromName,
+        fromUid: d.fromUid,
+      };
+    });
+
+    // Merge + sort by ts desc.
+    const merged = [
+      ...j.results.map(r => ({ _dm: false, ...r })),
+      ...dmHits,
+    ].sort((a, b) => (b.ts || 0) - (a.ts || 0));
+
+    if (merged.length === 0) {
       msgSearchResults.innerHTML = `<div class="msg-search-empty">No matches for "${escapeHtml(q)}".</div>`;
       return;
     }
     const re = new RegExp(escapeRegex(q), "gi");
-    msgSearchResults.innerHTML = j.results.map(r => {
-      // Resolve a friendly display name the same way the sidebar does.
-      const displayName = resolveDisplayName(r.phone, r.chatName, { chatType: r.chatType });
+    msgSearchResults.innerHTML = merged.map(r => {
       const snippet = highlightSnippet(r.text, re);
+      if (r._dm) {
+        const meLabel = r.fromUid === currentUser?.uid ? "You" : escapeHtml(r.fromName || r.otherName);
+        const who = `<span class="dm-badge">INTERNAL</span> ${meLabel} → ${escapeHtml(r.otherName)}`;
+        return `<div class="msg-search-result" data-key="${escapeHtml(r.chatKey)}">
+          <div class="who">${who}<span class="when">${formatTime(r.ts)}</span></div>
+          <div class="snippet">${snippet}</div>
+        </div>`;
+      }
+      const displayName = resolveDisplayName(r.phone, r.chatName, { chatType: r.chatType });
       const whoLabel = r.direction === "out" && r.sentByName ? `${escapeHtml(r.sentByName)} → ${escapeHtml(displayName)}` : escapeHtml(displayName);
       return `<div class="msg-search-result" data-key="${escapeHtml(r.chatKey)}">
         <div class="who">${whoLabel}<span class="when">${formatTime(r.ts)}</span></div>
         <div class="snippet">${snippet}</div>
       </div>`;
     }).join("");
-    const totalNote = j.total > j.results.length ? ` (showing ${j.results.length} of ${j.total})` : "";
-    if (totalNote) {
-      msgSearchResults.insertAdjacentHTML("afterbegin",
-        `<div class="msg-search-empty" style="text-align:left; padding:8px 18px;">${j.results.length} matches${totalNote}</div>`);
-    }
     msgSearchResults.querySelectorAll(".msg-search-result").forEach(el => {
       el.onclick = () => {
         closeMsgSearch();
+        // DM clicks need to flip the sidebar into team view; otherwise the
+        // opened DM thread sits behind a chat list that doesn't show it.
+        if (isDmKey(el.dataset.key)) currentView = "team";
+        renderChatList(lastChatRows);
+        updateTeamUnreadBadge();
         openChat(el.dataset.key);
       };
     });
@@ -3906,10 +4335,93 @@ function renderFilterPills(counts) {
   }
 }
 myTicketsBtn.onclick = () => {
+  // Switching to my-tickets filter pulls you out of team view if you were
+  // in it — otherwise the filter wouldn't be visible to act on.
+  if (currentView === "team") currentView = "chats";
   currentStatusFilter = currentStatusFilter === "My tickets" ? "All" : "My tickets";
   renderChatList(lastChatRows);
+  updateTeamUnreadBadge();
 };
 renderFilterPills();
+
+// ====== TEAM VIEW + DM PICKER ======
+// 👥 Team button toggles the sidebar between customer chats and the
+// internal-DM list. The picker pops on demand to start a new DM with a
+// teammate you haven't messaged before.
+teamViewBtn.onclick = () => {
+  currentView = currentView === "team" ? "chats" : "team";
+  // Switching out of team view should drop the open DM thread (it won't be
+  // in the visible list anymore) so the chat pane doesn't show a stale DM
+  // while the sidebar shows customer chats.
+  if (currentView === "chats" && isDmKey(currentChatId)) {
+    closeThreadForPrivacy();
+  }
+  renderChatList(lastChatRows);
+  updateTeamUnreadBadge();
+};
+dmPickerClose.onclick = () => dmPickerModal.classList.remove("visible");
+dmPickerModal.addEventListener("click", (e) => {
+  if (e.target === dmPickerModal) dmPickerModal.classList.remove("visible");
+});
+
+function openDmPicker() {
+  // Build the list of teammates we can DM. Source of truth is
+  // commonComm/users (every signed-in teammate). Exclude self.
+  const me = currentUser?.uid;
+  const candidates = Object.entries(teamUsers)
+    .filter(([uid]) => uid !== me)
+    .map(([uid, u]) => ({
+      uid,
+      name: u?.name || u?.email || "(unknown)",
+      email: u?.email || "",
+      photoURL: u?.photoURL || null,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  if (!candidates.length) {
+    dmPickerList.innerHTML = `<div class="dm-picker-empty">No other teammates have signed in yet. Ask them to sign in once, then you'll be able to DM them.</div>`;
+  } else {
+    dmPickerList.innerHTML = candidates.map((c) => `
+      <div class="dm-picker-item" data-uid="${escapeHtml(c.uid)}">
+        <div class="av">${escapeHtml(avatarInitial(c.name))}</div>
+        <div>
+          <div class="nm">${escapeHtml(c.name)}</div>
+          <div class="em">${escapeHtml(c.email)}</div>
+        </div>
+      </div>`).join("");
+    dmPickerList.querySelectorAll(".dm-picker-item").forEach((el) => {
+      el.onclick = async () => {
+        const otherUid = el.dataset.uid;
+        dmPickerModal.classList.remove("visible");
+        await ensureDmExists(otherUid);
+        currentView = "team";
+        renderChatList(lastChatRows);
+        updateTeamUnreadBadge();
+        openChat(chatKeyFromPairKey(getPairKey(currentUser.uid, otherUid)));
+      };
+    });
+  }
+  dmPickerModal.classList.add("visible");
+}
+
+// Create the DM's meta node if it doesn't already exist. Idempotent —
+// re-clicking a teammate just no-ops onto the existing thread.
+async function ensureDmExists(otherUid) {
+  if (!currentUser) return;
+  const pairKey = getPairKey(currentUser.uid, otherUid);
+  const metaPath = `${ROOT}/dms/${pairKey}/meta`;
+  const snap = await get(ref(db, metaPath));
+  if (snap.exists()) return;
+  await update(ref(db, metaPath), {
+    participants: {
+      [currentUser.uid]: true,
+      [otherUid]: true,
+    },
+    createdAt: Date.now(),
+    lastMsgAt: 0,
+    lastMsgPreview: "",
+  });
+}
 
 // ====== TAG FILTER PILLS (row 2) ======
 const TAG_FILTERS = [
@@ -4017,12 +4529,70 @@ function openChat(chatKey) {
   document.querySelectorAll(".chat-row").forEach(r => {
     r.classList.toggle("active", r.dataset.key === chatKey);
   });
-  listenMessages(chatKey);
-  listenNotes(chatKey);
-  renderTicketsBanner();
-  maybeFetchGroupInfo(chatKey);
+  if (isDmKey(chatKey)) {
+    // DM thread: no notes, no tickets, no group lookup, no Ferra pills,
+    // no AI summary tools. Just messages + composer routed to /dms/.
+    listenDmMessages(pairKeyFromChatKey(chatKey));
+    if (messagesUnsub) { /* already detached above */ }
+    if (notesUnsub) { notesUnsub(); notesUnsub = null; }
+    currentNotes = {};
+    renderNotes();
+    ticketsBanner.style.display = "none";
+    hideThreadHeaderCustomerTools();
+    rebuildDmRows();
+    if (currentView === "team") renderChatList(lastChatRows);
+    updateTeamUnreadBadge();
+  } else {
+    showThreadHeaderCustomerTools();
+    listenMessages(chatKey);
+    listenNotes(chatKey);
+    renderTicketsBanner();
+    maybeFetchGroupInfo(chatKey);
+  }
   // If the info drawer is open, refresh it for the newly-opened chat
   if (infoDrawer.classList.contains("open")) renderInfoDrawer();
+}
+
+// Hide customer-only thread tools (AI summary, AI query, backfill, edit name,
+// private toggle, notes panel) so the DM thread reads as what it is: a
+// lightweight internal chat without all the support workflow chrome.
+function hideThreadHeaderCustomerTools() {
+  const elsToHide = [editNameBtn, chatBackfillBtn, summarizeBtn, aiQueryBtn, privateToggleBtn, notesPanel, infoToggleBtn];
+  for (const el of elsToHide) { if (el) el.style.display = "none"; }
+  // Composer side tools that don't make sense in DMs.
+  if (suggestReplyBtn) suggestReplyBtn.style.display = "none";
+  if (voiceNoteBtn) voiceNoteBtn.style.display = "none";
+}
+function showThreadHeaderCustomerTools() {
+  if (editNameBtn) editNameBtn.style.display = "";
+  if (chatBackfillBtn) chatBackfillBtn.style.display = "";
+  if (summarizeBtn) summarizeBtn.style.display = "";
+  if (aiQueryBtn) aiQueryBtn.style.display = "";
+  if (notesPanel) notesPanel.style.display = "";
+  if (infoToggleBtn) infoToggleBtn.style.display = "";
+  if (suggestReplyBtn) suggestReplyBtn.style.display = "";
+  if (voiceNoteBtn) voiceNoteBtn.style.display = "";
+  // privateToggleBtn visibility is admin-gated in updateThreadHeader.
+}
+
+// DM thread message listener. Same shape as listenMessages but reads from
+// /dms/{pairKey}/messages and skips the customer-meta self-heal step.
+function listenDmMessages(pairKey) {
+  if (messagesUnsub) { messagesUnsub(); messagesUnsub = null; }
+  const msgsRef = query(ref(db, `${ROOT}/dms/${pairKey}/messages`), orderByChild("ts"), limitToLast(500));
+  messagesUnsub = onValue(msgsRef, (snap) => {
+    const v = snap.val() || {};
+    // DM messages don't carry a "direction" field (sender is determined by
+    // fromUid). Translate to "out"/"in" for the shared renderer.
+    const me = currentUser?.uid;
+    const list = Object.entries(v).map(([k, m]) => ({
+      id: k,
+      ...m,
+      direction: m.fromUid === me ? "out" : "in",
+      sentByName: m.fromName || null,
+    })).sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    renderMessages(list);
+  });
 }
 
 // Lazy-load: if this is a group and we don't have a name yet, ask the worker
@@ -4046,6 +4616,19 @@ async function maybeFetchGroupInfo(chatKey) {
 
 function updateThreadHeader() {
   if (!currentChatId) return;
+  // DM thread header: teammate name + Internal badge in the subtitle so the
+  // user can tell at a glance their next message won't go through Periscope.
+  if (isDmKey(currentChatId)) {
+    const pairKey = pairKeyFromChatKey(currentChatId);
+    const row = dmRows.find(r => r.pairKey === pairKey);
+    const name = row?.name || "(teammate)";
+    threadName.textContent = name;
+    threadSub.innerHTML = `<span class="dm-badge">INTERNAL</span> Direct chat — won't go through Periscope`;
+    threadAvatar.textContent = avatarInitial(name);
+    threadAvatar.style.background = "#3b82f6";
+    privateToggleBtn.style.display = "none";
+    return;
+  }
   const meta = chatsCache[currentChatId] || {};
   const isGroup = meta.chatType === "group" || String(meta.chatId || "").endsWith("@g.us");
   const explicit = meta.contactName || meta.displayName;
@@ -5129,6 +5712,10 @@ fileInput.onchange = async () => {
 
 async function doSendMedia(media) {
   if (!currentChatId || !currentUser) return;
+  if (isDmKey(currentChatId)) {
+    alert("Attachments aren't supported in internal chats yet — text only for now.");
+    return;
+  }
   if (!WORKER_URL) { alert("Worker URL not configured."); return; }
   const meta = chatsCache[currentChatId] || {};
   const chatId = meta.chatId || currentChatId;
@@ -5187,6 +5774,7 @@ async function doSendMedia(media) {
 async function doSend() {
   const text = composerInput.value.trim();
   if (!text || !currentChatId || !currentUser) return;
+  if (isDmKey(currentChatId)) return doSendDm(text);
   if (!WORKER_URL) { alert("Worker URL not configured — set WORKER_URL at top of index.html."); return; }
 
   const meta = chatsCache[currentChatId] || {};
@@ -5236,6 +5824,55 @@ async function doSend() {
   }
 }
 
+// DM send. No optimistic "sending" status — writes directly to /dms/
+// (which is fast) and meta in one shot. After the write succeeds, ping the
+// worker to fan out an Expo push to the recipient. Worker failure is silent;
+// the message itself is already delivered.
+async function doSendDm(text) {
+  const pairKey = pairKeyFromChatKey(currentChatId);
+  const otherUid = pairKey.split("_").find(u => u !== currentUser.uid);
+  if (!otherUid) return;
+  const ts = Date.now();
+  const fromName = currentUser.displayName || currentUser.email || "(team)";
+
+  const msgRef = push(ref(db, `${ROOT}/dms/${pairKey}/messages`));
+  const msgKey = msgRef.key;
+  await set(msgRef, {
+    text,
+    ts,
+    fromUid: currentUser.uid,
+    fromName,
+  });
+  await update(ref(db, `${ROOT}/dms/${pairKey}/meta`), {
+    participants: {
+      [currentUser.uid]: true,
+      [otherUid]: true,
+    },
+    lastMsgAt: ts,
+    lastMsgPreview: text.slice(0, 120),
+    lastMsgFromUid: currentUser.uid,
+    lastMsgFromName: fromName,
+  });
+  // Local mark-as-seen so the unread dot doesn't briefly flash for the sender.
+  markChatSeen(currentChatId);
+  composerInput.value = "";
+  composerInput.style.height = "auto";
+
+  // Fire-and-forget push fan-out. The DM itself is already in Firebase; the
+  // recipient will see it on the dashboard either way — this just wakes
+  // their phone.
+  if (WORKER_URL) {
+    fetch(`${WORKER_URL}/dm-notify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        pairKey, fromUid: currentUser.uid, fromName, toUid: otherUid,
+        text: text.slice(0, 200),
+      }),
+    }).catch(() => {});
+  }
+}
+
 // ====== NEW CHAT ======
 newChatBtn.onclick = () => {
   newChatPhone.value = ""; newChatNameEl.value = "";
@@ -5246,6 +5883,23 @@ newChatCancel.onclick = () => newChatModal.classList.remove("visible");
 newChatGo.onclick = async () => {
   const digits = newChatPhone.value.replace(/\D/g, "");
   if (digits.length < 8) { alert("Enter a valid phone number with country code (digits only)."); return; }
+  // If this phone belongs to a teammate, route to an internal DM instead
+  // of creating a customer thread. Prevents the "Shobhit shows up twice"
+  // collision: once as customer, once as teammate.
+  if (teamPhones.has(digits)) {
+    const otherUid = findTeammateUidByPhone(digits);
+    if (otherUid) {
+      newChatModal.classList.remove("visible");
+      await ensureDmExists(otherUid);
+      currentView = "team";
+      renderChatList(lastChatRows);
+      updateTeamUnreadBadge();
+      openChat(chatKeyFromPairKey(getPairKey(currentUser.uid, otherUid)));
+      return;
+    }
+    alert("This phone is registered as a teammate's number but they haven't signed in yet. Ask them to sign in once, then try again.");
+    return;
+  }
   const chatId = `${digits}@c.us`;
   const chatKey = chatId.replace(/[.#$\[\]\/]/g, "_");
   const name = newChatNameEl.value.trim() || null;
@@ -5260,6 +5914,30 @@ newChatGo.onclick = async () => {
   newChatModal.classList.remove("visible");
   setTimeout(() => openChat(chatKey), 200);
 };
+
+// Find which teammate uid owns a given phone. Used to redirect "+ New chat"
+// for team-phone numbers into an internal DM. Returns null if the number is
+// registered but the teammate hasn't signed in (no uid mapped yet).
+function findTeammateUidByPhone(digits) {
+  const normalized = normalizePhone(digits);
+  // Match phone → email in teamMembers, then email → uid in teamUsers.
+  let targetEmail = null;
+  for (const m of Object.values(teamMembersCache)) {
+    if (!m || !m.phones) continue;
+    for (const ph of Object.keys(m.phones)) {
+      if (m.phones[ph] && normalizePhone(ph) === normalized) {
+        targetEmail = (m.email || "").toLowerCase();
+        break;
+      }
+    }
+    if (targetEmail) break;
+  }
+  if (!targetEmail) return null;
+  for (const [uid, u] of Object.entries(teamUsers)) {
+    if ((u?.email || "").toLowerCase() === targetEmail) return uid;
+  }
+  return null;
+}
 
 // ====== UTIL ======
 function escapeHtml(s) {

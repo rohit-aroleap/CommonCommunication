@@ -91,6 +91,52 @@ export interface TeamUser {
   lastSeen?: number;
 }
 
+// Email-keyed team-member profile. Mirrors commonComm/config/teamMembers from
+// the web dashboard. The phones map is the suppression list: any customer
+// chat whose phone matches an entry here gets hidden from the customer
+// inbox and (when reached via "New chat") redirected to an internal DM.
+export interface TeamMember {
+  email?: string;
+  name?: string;
+  phones?: Record<string, boolean>; // phone string → true
+}
+
+// Internal team-to-team DM thread metadata. Lives at
+// commonComm/dms/{pairKey}/meta. pairKey = sorted UIDs joined by "_".
+export interface DmMeta {
+  participants?: Record<string, boolean>; // uid → true
+  createdAt?: number;
+  lastMsgAt?: number;
+  lastMsgPreview?: string;
+  lastMsgFromUid?: string | null;
+  lastMsgFromName?: string | null;
+}
+
+// One message inside a DM thread. Direction is implicit (computed from
+// fromUid vs current user). No periscopeMsgId because DMs never leave
+// Firebase.
+export interface DmMessage {
+  id: string;
+  text?: string;
+  ts: number;
+  fromUid?: string;
+  fromName?: string | null;
+}
+
+export interface DmRow {
+  pairKey: string;
+  chatKey: string; // "dm:" + pairKey, for use as a navigation key
+  otherUid: string;
+  name: string;
+  email: string;
+  photoURL: string | null;
+  lastMsgAt: number;
+  preview: string;
+  lastMsgFromUid: string | null;
+  lastMsgFromName: string | null;
+  unread: boolean;
+}
+
 export interface ContactInfo {
   name?: string;
   source?: string;

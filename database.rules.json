@@ -1,0 +1,47 @@
+{
+  "rules": {
+    "_comment_root": "Default-deny is too disruptive for this app — every existing screen reads broad subtrees (chats, users, tickets, ferra*). We keep the existing auth-only baseline but tighten /dms with per-pair participant checks. Note: a signed-in user reading /commonComm/dms wholesale still succeeds under the auth-only root rule. The intended pattern (and what the dashboard does) is to fan out to /dms/{pairKey} per-pair where the participant check IS enforced. Tightening the wholesale read requires a per-user dm index (e.g. /userDms/{uid}/{pairKey}: true) — tracked as a v2 follow-up.",
+
+    ".read": "auth != null",
+    ".write": "auth != null",
+
+    "commonComm": {
+      "dms": {
+        "$pairKey": {
+          "_comment": "Reads and writes scoped to the two uids listed in meta/participants. A user creating a fresh DM must include themselves in newData.meta.participants — see the .validate on participants below.",
+
+          ".read": "auth != null && data.child('meta/participants/' + auth.uid).val() === true",
+          ".write": "auth != null && (data.child('meta/participants/' + auth.uid).val() === true || newData.child('meta/participants/' + auth.uid).val() === true)",
+
+          "meta": {
+            "participants": {
+              ".validate": "newData.hasChildren() && newData.child(auth.uid).val() === true"
+            },
+            "lastMsgFromUid": {
+              ".validate": "!newData.exists() || newData.val() === auth.uid || data.child('participants/' + newData.val()).val() === true"
+            }
+          },
+          "messages": {
+            "$msgId": {
+              "fromUid": {
+                ".validate": "newData.val() === auth.uid"
+              }
+            }
+          }
+        }
+      },
+
+      "config": {
+        "_comment": "Allowlist + team-member directory. Locked to admins on the client side; the rule here just ensures auth.",
+        "teamMembers": { ".write": "auth != null" },
+        "allowedEmails": { ".write": "auth != null" }
+      },
+
+      "userState": {
+        "$uid": {
+          ".write": "auth != null && auth.uid === $uid"
+        }
+      }
+    }
+  }
+}

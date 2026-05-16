@@ -37,6 +37,7 @@ export function ChatsScreen() {
     tickets,
     sharedSubsByPhone,
     myLastSeen,
+    teamPhones,
     myFavorites,
     mySendActivity,
     toggleFavorite,
@@ -79,21 +80,26 @@ export function ChatsScreen() {
 
   const enriched = useMemo(
     () =>
-      chatRows.map((r) => ({
-        row: r,
-        name: resolveDisplayName(
-          r.phone,
-          r.explicitName,
-          { chatType: r.chatType, groupName: r.groupName },
-          {
-            habitUsers,
-            cancelledUsers,
-            ferraIndex,
-            contacts,
-          },
-        ),
-      })),
-    [chatRows, habitUsers, cancelledUsers, ferraIndex, contacts],
+      chatRows
+        // Hide chats whose phone is mapped to a teammate's WhatsApp number.
+        // Those conversations belong in the Team tab as internal DMs, not
+        // in the customer inbox.
+        .filter((r) => !teamPhones.has(r.phone.replace(/\D/g, "")))
+        .map((r) => ({
+          row: r,
+          name: resolveDisplayName(
+            r.phone,
+            r.explicitName,
+            { chatType: r.chatType, groupName: r.groupName },
+            {
+              habitUsers,
+              cancelledUsers,
+              ferraIndex,
+              contacts,
+            },
+          ),
+        })),
+    [chatRows, habitUsers, cancelledUsers, ferraIndex, contacts, teamPhones],
   );
 
   const filtered = useMemo(() => {

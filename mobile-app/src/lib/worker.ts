@@ -65,6 +65,27 @@ export function mediaProxyUrl(url: string): string {
   return `${WORKER_URL}/media?u=${encodeURIComponent(url)}`;
 }
 
+// Fire a push notification for a freshly-sent DM. The message itself is
+// already in Firebase by the time we call this — the worker just fans out
+// to the recipient's Expo tokens. Best-effort; failures don't roll back.
+export async function notifyDm(body: {
+  pairKey: string;
+  fromUid: string;
+  fromName: string;
+  toUid: string;
+  text: string;
+}): Promise<void> {
+  try {
+    await fetch(`${WORKER_URL}/dm-notify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    /* swallow — push is best-effort */
+  }
+}
+
 // Registers an Expo push token against the signed-in user's uid so the Worker
 // knows where to deliver inbound-message pings. The Worker stores at
 // commonComm/pushTokens/{uid}/{tokenKey}.

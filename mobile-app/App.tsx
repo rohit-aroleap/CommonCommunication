@@ -15,6 +15,7 @@ import { AppDataProvider } from "@/data/AppDataContext";
 import { LoginScreen } from "@/auth/LoginScreen";
 import { ChatsScreen } from "@/screens/ChatsScreen";
 import { TicketsScreen } from "@/screens/TicketsScreen";
+import { TeamScreen } from "@/screens/TeamScreen";
 import { ThreadScreen } from "@/screens/ThreadScreen";
 import { CustomerInfoScreen } from "@/screens/CustomerInfoScreen";
 import { registerForPushAsync } from "@/notifications/registerForPush";
@@ -49,6 +50,15 @@ function TabsNav() {
           title: "My tickets",
           tabBarLabel: "My tickets",
           tabBarIcon: ({ color }) => <TabIcon glyph="🎫" color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="Team"
+        component={TeamScreen}
+        options={{
+          title: "Team",
+          tabBarLabel: "Team",
+          tabBarIcon: ({ color }) => <TabIcon glyph="👥" color={color} />,
         }}
       />
     </Tabs.Navigator>
