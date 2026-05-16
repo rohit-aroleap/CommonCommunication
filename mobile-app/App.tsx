@@ -69,7 +69,7 @@ function TabsNav() {
   // navigator) so useAppData is safe to call here. React Navigation
   // re-evaluates options on every render of this component, so the badge
   // number stays in sync with the listeners.
-  const { chatsUnreadCount, teamUnreadCount } = useAppData();
+  const { chatsUnreadCount, teamUnreadCount, ticketsCount } = useAppData();
   return (
     <Tabs.Navigator
       screenOptions={{
@@ -97,6 +97,7 @@ function TabsNav() {
           title: "My tickets",
           tabBarLabel: "My tickets",
           tabBarIcon: ({ color }) => <TabIcon glyph="🎫" color={color} />,
+          tabBarBadge: ticketsCount > 0 ? ticketsCount : undefined,
         }}
       />
       <Tabs.Screen

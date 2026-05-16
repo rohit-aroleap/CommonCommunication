@@ -57,9 +57,11 @@ interface AppDataValue {
   // Tab-badge counts. Computed under the same strict rules as push:
   // chatsUnread = customer chats where (latest inbound > myLastSeen) AND
   // (it's my ticket OR I starred it). teamUnread = DMs with inbound newer
-  // than myLastSeen. Reactive — updates as listeners fire.
+  // than myLastSeen. ticketsCount = workload reminder — total open
+  // tickets assigned to me, doesn't clear on read. Reactive.
   chatsUnreadCount: number;
   teamUnreadCount: number;
+  ticketsCount: number;
 }
 
 function normalizePhone(p: string): string {
@@ -312,6 +314,19 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     return dmRows.filter((r) => r.unread).length;
   }, [dmRows]);
 
+  // My tickets tab badge: count of open tickets currently assigned to me.
+  // Different signal from chatsUnreadCount — this is a workload reminder,
+  // it doesn't clear when I open the tab. Stays visible as long as I have
+  // open tickets, falls when I resolve or get reassigned off.
+  const ticketsCount = useMemo(() => {
+    if (!user) return 0;
+    let n = 0;
+    for (const t of Object.values(tickets)) {
+      if (t && t.status === "open" && t.assignee === user.uid) n++;
+    }
+    return n;
+  }, [tickets, user]);
+
   const markChatSeen = (chatKey: string) => {
     if (!user || !chatKey) return;
     set(
@@ -369,6 +384,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       bumpSendActivity,
       chatsUnreadCount,
       teamUnreadCount,
+      ticketsCount,
     }),
     [
       chatRows,
@@ -384,6 +400,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       cancelledUsers,
       chatsUnreadCount,
       teamUnreadCount,
+      ticketsCount,
       sharedSubsByPhone,
       sharedCustomerDetails,
       ferraIndex,
