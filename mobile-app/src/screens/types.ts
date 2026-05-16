@@ -6,4 +6,5 @@ export type RootStackParamList = {
   Chats: undefined;
   Tickets: undefined;
   Thread: { chatKey: string; initialTitle?: string };
+  CustomerInfo: { chatKey: string };
 };

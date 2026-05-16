@@ -12,7 +12,11 @@ import { registerPushToken } from "@/lib/worker";
 // the user is already inside the app. Matches WhatsApp's behaviour.
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
+    // shouldShowAlert is deprecated in SDK 53+; replaced by the two specific
+    // shouldShow* fields below. Keep both for back-compat across SDK levels.
     shouldShowAlert: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
     shouldPlaySound: true,
     shouldSetBadge: true,
   }),

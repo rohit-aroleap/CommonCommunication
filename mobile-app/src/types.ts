@@ -104,6 +104,23 @@ export interface FerraUser {
   phone?: string;
   phoneNumber?: string;
   subscriptionStatus?: string;
+  // Additional fields that show up in ferraHabitData/v1/users.
+  // All optional so older / sparser records don't break the type check.
+  age?: number;
+  gender?: string;
+  habitScore?: number;
+  segment?: string;
+  tier?: number;
+  tierLabel?: string;
+  streak?: { active: boolean; days: number };
+  daysSinceLastSession?: number;
+  lastActiveDate?: string;
+  trend14d?: number;
+  subscriptionDocId?: string;
+  subscriptionPlanTier?: string;
+  subscriptionSource?: string;
+  subscriptionStartDate?: number;
+  userAgeDays?: number;
 }
 
 export type StageBucket =

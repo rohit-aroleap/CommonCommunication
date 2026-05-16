@@ -16,6 +16,7 @@ import { LoginScreen } from "@/auth/LoginScreen";
 import { ChatsScreen } from "@/screens/ChatsScreen";
 import { TicketsScreen } from "@/screens/TicketsScreen";
 import { ThreadScreen } from "@/screens/ThreadScreen";
+import { CustomerInfoScreen } from "@/screens/CustomerInfoScreen";
 import { registerForPushAsync } from "@/notifications/registerForPush";
 import { colors } from "@/theme";
 import type { RootStackParamList } from "@/screens/types";
@@ -88,6 +89,11 @@ function PostAuth() {
             name="Thread"
             component={ThreadScreen}
             options={{ headerBackTitleVisible: false }}
+          />
+          <Stack.Screen
+            name="CustomerInfo"
+            component={CustomerInfoScreen}
+            options={{ title: "Customer info", headerBackTitleVisible: false }}
           />
         </Stack.Navigator>
       </NavigationContainer>

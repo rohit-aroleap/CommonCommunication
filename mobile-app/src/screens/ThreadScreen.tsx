@@ -26,7 +26,10 @@ import {
 import * as Clipboard from "expo-clipboard";
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
-import * as FileSystem from "expo-file-system";
+// expo-file-system 18+ split into "new" and "legacy" APIs. We still use the
+// legacy patterns (getInfoAsync with size, readAsStringAsync with base64),
+// so import from the legacy path to keep the existing call sites working.
+import * as FileSystem from "expo-file-system/legacy";
 import {
   limitToLast,
   onValue,
@@ -116,7 +119,24 @@ export function ThreadScreen({ route, navigation }: Props) {
 
   useLayoutEffect(() => {
     navigation.setOptions({
-      headerTitle: headerName,
+      // Custom title component so we can make the name itself a tap target
+      // that opens the Customer Info screen. Native title text isn't tappable
+      // by default on React Navigation's stack header.
+      headerTitle: () => (
+        <TouchableOpacity
+          onPress={() =>
+            navigation.navigate("CustomerInfo", { chatKey })
+          }
+          accessibilityLabel="Open customer info"
+          activeOpacity={0.6}
+          style={styles.headerTitleWrap}
+        >
+          <Text style={styles.headerTitleTxt} numberOfLines={1}>
+            {headerName}
+          </Text>
+          <Text style={styles.headerTitleSub}>tap for details</Text>
+        </TouchableOpacity>
+      ),
       headerRight: () => (
         <TouchableOpacity
           accessibilityLabel="Summarize"
@@ -127,7 +147,7 @@ export function ThreadScreen({ route, navigation }: Props) {
         </TouchableOpacity>
       ),
     });
-  }, [navigation, headerName]);
+  }, [navigation, headerName, chatKey]);
 
   // Live messages listener (last 300).
   useEffect(() => {
@@ -261,7 +281,9 @@ export function ThreadScreen({ route, navigation }: Props) {
           mimeType = asset.mimeType || "application/octet-stream";
         }
         if (!uri) return;
-        const info = await FileSystem.getInfoAsync(uri, { size: true });
+        // SDK 53+ returns size by default; the explicit { size: true } option
+        // was removed. Read info.size as before if it's present.
+        const info = await FileSystem.getInfoAsync(uri);
         if (info.exists && info.size && info.size > MAX_MEDIA_BYTES) {
           Alert.alert("Too large", "Max attachment size is 25 MB.");
           return;
@@ -595,6 +617,17 @@ const styles = StyleSheet.create({
     marginRight: 4,
   },
   headerBtnTxt: { color: "white", fontSize: 16 },
+  headerTitleWrap: { maxWidth: 240 },
+  headerTitleTxt: {
+    color: "white",
+    fontSize: 17,
+    fontWeight: "600",
+  },
+  headerTitleSub: {
+    color: "rgba(255,255,255,0.65)",
+    fontSize: 10,
+    marginTop: -2,
+  },
 
   sheetBack: {
     flex: 1,
