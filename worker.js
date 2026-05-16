@@ -42,7 +42,7 @@ export default {
         return cors(env, json({
           service: "CommonCommunication Worker",
           status: "ok",
-          endpoints: ["/health", "/send (POST)", "/webhook (POST)", "/messages?chatId=... (GET)", "/transcribe (POST)", "/register-push-token (POST)"],
+          endpoints: ["/health", "/send (POST)", "/webhook (POST)", "/messages?chatId=... (GET)", "/transcribe (POST)", "/cleanup (POST)", "/register-push-token (POST)"],
         }));
       }
       if (url.pathname === "/messages" && request.method === "GET") {
@@ -65,6 +65,9 @@ export default {
       }
       if (url.pathname === "/transcribe" && request.method === "POST") {
         return cors(env, await handleTranscribe(request, env));
+      }
+      if (url.pathname === "/cleanup" && request.method === "POST") {
+        return cors(env, await handleCleanup(request, env));
       }
       if (url.pathname === "/media" && request.method === "GET") {
         return cors(env, await handleMediaProxy(request, env));
@@ -1457,13 +1460,17 @@ async function handleTranscribe(request, env) {
     return json({ text: "", raw: "", cleaned: false, reason: "no_speech" });
   }
 
-  // (2) Claude cleanup pass. If the key isn't configured, or the call fails,
-  // we fall back to the raw transcript so the feature never hard-fails.
-  if (!env.CLAUDE_API_KEY) {
-    return json({ text: rawText, raw: rawText, cleaned: false, reason: "claude_not_configured" });
-  }
+  // (2) Claude cleanup pass — delegated to the shared helper so /cleanup
+  // (called by the browser-direct Groq STT path) uses the exact same prompt.
+  const cleanResult = await runCleanupPass(rawText, env);
+  return json(cleanResult);
+}
 
-  const systemPrompt = `You are cleaning up a voice-dictated private note from an Aroleap fitness team member about a customer. The raw audio transcript may contain filler words ("um", "uh", "like", "you know"), false starts, repeated words, and missing punctuation.
+// System prompt for voice-note cleanup. Shared between the legacy /transcribe
+// route (which does Whisper + cleanup in one call) and /cleanup (called by
+// the browser/mobile after they do STT directly via Groq with the user's
+// own API key — see v1.133).
+const VOICE_NOTE_CLEANUP_PROMPT = `You are cleaning up a voice-dictated private note from an Aroleap fitness team member about a customer. The raw audio transcript may contain filler words ("um", "uh", "like", "you know"), false starts, repeated words, and missing punctuation.
 
 Your job:
 - Remove fillers, false starts, and obvious stammers.
@@ -1476,6 +1483,17 @@ Your job:
 
 Output ONLY the cleaned note text — no preamble, no explanation, no quotes around it.`;
 
+// Runs the Claude cleanup pass over a raw transcript and returns a result
+// object in the same shape both /transcribe and /cleanup return. Never
+// throws — if Claude is unreachable or misconfigured, we fall back to the
+// raw text so the feature never hard-fails for the caller.
+async function runCleanupPass(rawText, env) {
+  if (!rawText) {
+    return { text: "", raw: "", cleaned: false, reason: "no_speech" };
+  }
+  if (!env.CLAUDE_API_KEY) {
+    return { text: rawText, raw: rawText, cleaned: false, reason: "claude_not_configured" };
+  }
   try {
     const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -1487,27 +1505,33 @@ Output ONLY the cleaned note text — no preamble, no explanation, no quotes aro
       body: JSON.stringify({
         model: "claude-haiku-4-5-20251001",
         max_tokens: 800,
-        system: systemPrompt,
+        system: VOICE_NOTE_CLEANUP_PROMPT,
         messages: [{ role: "user", content: rawText }],
       }),
     });
     const claudeJson = await safeJson(claudeRes);
     if (!claudeRes.ok) {
-      return json({ text: rawText, raw: rawText, cleaned: false, reason: "claude_api_failed", details: claudeJson });
+      return { text: rawText, raw: rawText, cleaned: false, reason: "claude_api_failed", details: claudeJson };
     }
     const cleaned = String(claudeJson?.content?.[0]?.text || "").trim();
     if (!cleaned) {
-      return json({ text: rawText, raw: rawText, cleaned: false, reason: "claude_empty" });
+      return { text: rawText, raw: rawText, cleaned: false, reason: "claude_empty" };
     }
-    return json({
-      text: cleaned,
-      raw: rawText,
-      cleaned: true,
-      usage: claudeJson?.usage || null,
-    });
+    return { text: cleaned, raw: rawText, cleaned: true, usage: claudeJson?.usage || null };
   } catch (e) {
-    return json({ text: rawText, raw: rawText, cleaned: false, reason: "claude_network_error", details: String(e?.message || e) });
+    return { text: rawText, raw: rawText, cleaned: false, reason: "claude_network_error", details: String(e?.message || e) };
   }
+}
+
+// ---------- /cleanup (Claude pass over already-transcribed text) ----------
+// Called by the browser/mobile after they hit Groq directly with the user's
+// own API key. Body: { text: "raw transcript from whisper" }. Response is
+// the same shape /transcribe returns: { text, raw, cleaned, ... }.
+async function handleCleanup(request, env) {
+  const body = await request.json().catch(() => null);
+  const rawText = String(body?.text || "").trim();
+  if (!rawText) return json({ error: "missing text" }, 400);
+  return json(await runCleanupPass(rawText, env));
 }
 
 async function handleFetchMessages(request, env) {
