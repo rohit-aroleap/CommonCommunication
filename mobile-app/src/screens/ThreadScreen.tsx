@@ -119,35 +119,35 @@ export function ThreadScreen({ route, navigation }: Props) {
 
   useLayoutEffect(() => {
     navigation.setOptions({
-      // Custom title component so we can make the name itself a tap target
-      // that opens the Customer Info screen. Native title text isn't tappable
-      // by default on React Navigation's stack header.
-      headerTitle: () => (
-        <TouchableOpacity
-          onPress={() =>
-            navigation.navigate("CustomerInfo", { chatKey })
-          }
-          accessibilityLabel="Open customer info"
-          activeOpacity={0.6}
-          style={styles.headerTitleWrap}
-        >
-          <Text style={styles.headerTitleTxt} numberOfLines={1}>
-            {headerName}
-          </Text>
-          <Text style={styles.headerTitleSub}>tap for details</Text>
-        </TouchableOpacity>
-      ),
+      headerTitle: headerName,
+      // Two icon-only buttons in the header right: 👤 opens Customer Info,
+      // ✨ opens the AI summary modal. Both are tooltip-labeled for a11y.
+      // Customer Info button is hidden for group chats since there's no
+      // single 'customer' to show details for.
       headerRight: () => (
-        <TouchableOpacity
-          accessibilityLabel="Summarize"
-          onPress={() => setSummaryOpen(true)}
-          style={styles.headerBtn}
-        >
-          <Text style={styles.headerBtnTxt}>✨</Text>
-        </TouchableOpacity>
+        <View style={styles.headerRightWrap}>
+          {!isGroup && (
+            <TouchableOpacity
+              accessibilityLabel="Customer details"
+              onPress={() =>
+                navigation.navigate("CustomerInfo", { chatKey })
+              }
+              style={styles.headerBtn}
+            >
+              <Text style={styles.headerBtnTxt}>👤</Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity
+            accessibilityLabel="Summarize"
+            onPress={() => setSummaryOpen(true)}
+            style={styles.headerBtn}
+          >
+            <Text style={styles.headerBtnTxt}>✨</Text>
+          </TouchableOpacity>
+        </View>
       ),
     });
-  }, [navigation, headerName, chatKey]);
+  }, [navigation, headerName, chatKey, isGroup]);
 
   // Live messages listener (last 300).
   useEffect(() => {
@@ -420,21 +420,6 @@ export function ThreadScreen({ route, navigation }: Props) {
           if (t) setReassignTicket(t);
         }}
       />
-      {/* Customer Details pill — only for 1-on-1 chats (groups have many
-          members, no single "customer" to show). Visible and labeled so
-          trainers don't have to discover that the header name is tappable. */}
-      {!isGroup && (
-        <TouchableOpacity
-          style={styles.detailsPill}
-          onPress={() =>
-            navigation.navigate("CustomerInfo", { chatKey })
-          }
-          activeOpacity={0.7}
-        >
-          <Text style={styles.detailsPillTxt}>👤 Customer details</Text>
-          <Text style={styles.detailsPillChevron}>›</Text>
-        </TouchableOpacity>
-      )}
       <FlatList
         ref={listRef}
         data={visible}
@@ -632,36 +617,10 @@ const styles = StyleSheet.create({
     marginRight: 4,
   },
   headerBtnTxt: { color: "white", fontSize: 16 },
-  headerTitleWrap: { maxWidth: 240 },
-  headerTitleTxt: {
-    color: "white",
-    fontSize: 17,
-    fontWeight: "600",
-  },
-  headerTitleSub: {
-    color: "rgba(255,255,255,0.65)",
-    fontSize: 10,
-    marginTop: -2,
-  },
-  detailsPill: {
+  headerRightWrap: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    backgroundColor: "#e0f2fe",
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#bae6fd",
-    paddingHorizontal: 16,
-    paddingVertical: 9,
-  },
-  detailsPillTxt: {
-    color: "#075985",
-    fontSize: 13,
-    fontWeight: "600",
-  },
-  detailsPillChevron: {
-    color: "#075985",
-    fontSize: 20,
-    lineHeight: 20,
+    gap: 6,
   },
 
   sheetBack: {

@@ -3,7 +3,16 @@
 // habit metrics, acquisition source, ticket history. Read-only for now.
 
 import React, { useEffect, useMemo, useState } from "react";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import {
+  Alert,
+  Linking,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import * as Clipboard from "expo-clipboard";
 import { onValue, ref } from "firebase/database";
 import { db } from "@/firebase";
 import { ROOT } from "@/config";
@@ -144,15 +153,61 @@ export function CustomerInfoScreen({ route }: Props) {
     .filter(Boolean)
     .join(" · ");
 
+  // Tap-the-phone action sheet. Three useful options:
+  //   Call    — opens native dialer (tel: scheme)
+  //   WhatsApp — opens chat with this customer in the WhatsApp app
+  //   Copy    — to clipboard for any other use
+  // Wrapped so it's a clear top-level handler instead of inline onPress.
+  function handlePhonePress() {
+    const e164 = phone.startsWith("+") ? phone : `+${phone}`;
+    Alert.alert(e164, undefined, [
+      {
+        text: "Call",
+        onPress: () => {
+          Linking.openURL(`tel:${e164}`).catch(() =>
+            Alert.alert("Couldn't open dialer"),
+          );
+        },
+      },
+      {
+        text: "WhatsApp",
+        onPress: () => {
+          // whatsapp:// scheme works if WhatsApp is installed; falls back
+          // to the universal wa.me web link otherwise.
+          const digits = e164.replace(/\D/g, "");
+          Linking.openURL(`whatsapp://send?phone=${digits}`).catch(() => {
+            Linking.openURL(`https://wa.me/${digits}`).catch(() =>
+              Alert.alert("Couldn't open WhatsApp"),
+            );
+          });
+        },
+      },
+      {
+        text: "Copy",
+        onPress: async () => {
+          await Clipboard.setStringAsync(e164);
+          Alert.alert("Copied", e164);
+        },
+      },
+      { text: "Cancel", style: "cancel" },
+    ]);
+  }
+
   return (
     <ScrollView style={styles.root}>
       {/* Header */}
       <View style={styles.section}>
-        <Text style={styles.name}>{displayName}</Text>
-        <Text style={styles.subline}>
-          {phone}
-          {ageGenderLine ? ` · ${ageGenderLine}` : ""}
+        <Text style={styles.name} selectable>
+          {displayName}
         </Text>
+        <View style={styles.sublineRow}>
+          <TouchableOpacity onPress={handlePhonePress} activeOpacity={0.5}>
+            <Text style={styles.phoneLink}>{phone}</Text>
+          </TouchableOpacity>
+          {ageGenderLine ? (
+            <Text style={styles.sublineMuted}> · {ageGenderLine}</Text>
+          ) : null}
+        </View>
         <View style={styles.pillRow}>
           {ferraUser && (
             <View style={styles.pillCustomer}>
@@ -189,11 +244,24 @@ export function CustomerInfoScreen({ route }: Props) {
 
       {/* Address — pulled from Ferra subscriptions via the ferra-sync worker.
           Shown right under the header since it's the field trainers will
-          most often reference (delivery checks, installation queries). */}
+          most often reference (delivery checks, installation queries).
+          selectable so trainers can long-press to copy / share the address. */}
       {customerDetail?.address && (
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>📍 ADDRESS</Text>
-          <Text style={styles.address}>{customerDetail.address}</Text>
+          <Text style={styles.address} selectable>
+            {customerDetail.address}
+          </Text>
+          <TouchableOpacity
+            onPress={async () => {
+              await Clipboard.setStringAsync(customerDetail.address!);
+              Alert.alert("Copied address");
+            }}
+            style={styles.copyBtn}
+            accessibilityLabel="Copy address"
+          >
+            <Text style={styles.copyBtnTxt}>📋 Copy address</Text>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -411,6 +479,23 @@ const styles = StyleSheet.create({
     marginTop: 2,
     marginBottom: space.sm,
   },
+  sublineRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    marginTop: 2,
+    marginBottom: space.sm,
+  },
+  phoneLink: {
+    fontSize: 13,
+    color: "#1d4ed8",
+    textDecorationLine: "underline",
+    fontWeight: "500",
+  },
+  sublineMuted: {
+    fontSize: 13,
+    color: colors.muted,
+  },
   pillRow: { flexDirection: "row", gap: 6, flexWrap: "wrap" },
   pill: {
     paddingHorizontal: 10,
@@ -491,6 +576,15 @@ const styles = StyleSheet.create({
   noteTxt: { fontSize: 13, color: colors.text, lineHeight: 18 },
   noteMeta: { fontSize: 10, color: colors.muted, marginTop: 4 },
   address: { fontSize: 14, color: colors.text, lineHeight: 20 },
+  copyBtn: {
+    alignSelf: "flex-start",
+    marginTop: 8,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 4,
+    backgroundColor: "#f3f4f6",
+  },
+  copyBtnTxt: { fontSize: 12, color: colors.muted },
   empty: {
     padding: 24,
     alignItems: "center",
