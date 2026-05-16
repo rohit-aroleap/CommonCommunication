@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.134</title>
+<title>CommonCommunication v1.135</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -578,6 +578,37 @@
   @keyframes micPulse {
     0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,.55); }
     50%      { box-shadow: 0 0 0 8px rgba(239,68,68,0); }
+  }
+
+  /* v1.135: pill-shaped variant of the mic button — used for the primary
+     voice-to-composer button (🎤 Voice). Bigger target than the circular
+     📝 notes mic to match its higher-frequency use. The `.mic-btn` base
+     handles the .recording (red pulse) + .transcribing (yellow) states;
+     we just override the shape, size, and add a text label slot. */
+  .composer .mic-btn.voice-pill {
+    width: auto; height: 40px;
+    border-radius: 20px;
+    padding: 0 16px;
+    gap: 6px;
+    font-size: 14px; font-weight: 500;
+    color: #374151;
+    background: white;
+    border: 1px solid #d1d5db;
+  }
+  .composer .mic-btn.voice-pill .voice-pill-icon { font-size: 16px; line-height: 1; }
+  .composer .mic-btn.voice-pill .voice-pill-label { line-height: 1; }
+  .composer .mic-btn.voice-pill:hover:not(:disabled):not(.recording):not(.transcribing) {
+    background: var(--hover);
+  }
+  /* While recording, the pill replaces its content with the elapsed-seconds
+     timer (set via .textContent in JS, which wipes the inner spans — that's
+     intentional, the simpler single-text layout reads better at a glance). */
+  .composer .mic-btn.voice-pill.recording {
+    padding: 0 18px;
+    font-size: 13px;
+  }
+  .composer .mic-btn.voice-pill.transcribing {
+    padding: 0 18px;
   }
 
   .emoji-popover {
@@ -1320,7 +1351,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.134</div>
+    <div class="login-version">v1.135</div>
   </div>
 </div>
 
@@ -1328,7 +1359,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.134</span>
+    <span class="ver">v1.135</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -1411,11 +1442,14 @@
           <button class="emoji-btn" id="emojiBtn" title="Insert emoji">😀</button>
           <button class="emoji-btn" id="attachBtn" title="Attach file (image, video, audio, document)">📎</button>
           <input type="file" id="fileInput" style="display:none;" accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx" />
-          <!-- v1.134: left = voice-to-private-note (📝). Right = voice-to-composer (🎤). -->
+          <!-- v1.134: left = voice-to-private-note (📝). -->
           <button class="mic-btn" id="voiceNoteBtn" title="Record a private note — transcribed and added to the notes panel (NOT sent to the customer)">📝</button>
           <textarea id="composerInput" placeholder="Type a message" rows="1"></textarea>
+          <!-- v1.135: voice-to-composer pill (mic icon + "Voice" label). Sits
+               to the left of the AI suggest button — that's the primary
+               speak-to-reply affordance, hence the bigger target. -->
+          <button class="mic-btn voice-pill" id="voiceComposerBtn" title="Record a voice message — transcribed and added to the reply box (you can edit before sending)"><span class="voice-pill-icon">🎤</span><span class="voice-pill-label">Voice</span></button>
           <button class="ai-btn" id="suggestReplyBtn" title="AI suggested reply (Claude)">✨</button>
-          <button class="mic-btn" id="voiceComposerBtn" title="Record a voice message — transcribed and added to the reply box (you can edit before sending)">🎤</button>
           <button class="send-btn" id="sendBtn" title="Send">➤</button>
         </div>
       </div>
@@ -1701,7 +1735,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.134";
+const APP_VERSION = "v1.135";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -6083,7 +6117,10 @@ let recordingStartTs = 0;
 let recordingTimer = null;
 let activeMicBtn = null;     // The button currently animated (recording / transcribing).
 let activeMicMode = null;    // "note" | "composer" — picks the destination after transcription.
-let activeMicIdleIcon = ""; // Restored on the active button after the cycle finishes.
+// Restored on the active button after the cycle finishes. Held as HTML so
+// the pill-shaped composer mic can keep its two-span icon+label layout —
+// the circular notes mic just stores a single emoji which is valid HTML too.
+let activeMicIdleHtml = "";
 let activeMicIdleTitle = "";
 const MAX_RECORDING_MS = 120_000; // 2 min cap
 
@@ -6099,16 +6136,16 @@ function blobToBase64(blob) {
 function resetActiveMicBtn() {
   if (!activeMicBtn) return;
   activeMicBtn.classList.remove("recording", "transcribing");
-  activeMicBtn.textContent = activeMicIdleIcon;
+  activeMicBtn.innerHTML = activeMicIdleHtml;
   activeMicBtn.title = activeMicIdleTitle;
   activeMicBtn.disabled = false;
   activeMicBtn = null;
   activeMicMode = null;
-  activeMicIdleIcon = "";
+  activeMicIdleHtml = "";
   activeMicIdleTitle = "";
 }
 
-async function startMicRecording(btn, mode, idleIcon, idleTitle) {
+async function startMicRecording(btn, mode, idleHtml, idleTitle) {
   if (!currentChatId) { alert("Open a chat first."); return; }
   if (!WORKER_URL) { alert("Worker URL not configured."); return; }
   if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
@@ -6142,7 +6179,7 @@ async function startMicRecording(btn, mode, idleIcon, idleTitle) {
   }
   activeMicBtn = btn;
   activeMicMode = mode;
-  activeMicIdleIcon = idleIcon;
+  activeMicIdleHtml = idleHtml;
   activeMicIdleTitle = idleTitle;
   mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) audioChunks.push(e.data); };
   mediaRecorder.onstop = async () => {
@@ -6327,9 +6364,9 @@ function maybeNudgeGroqSetup() {
   } catch { /* localStorage disabled — silently skip */ }
 }
 
-// v1.134: notes mic (left of input). Idle icon = 📝, mode = "note" — drops
+// v1.134: notes mic (left of input). Idle = 📝, mode = "note" — drops
 // the cleaned transcript into the notes draft form (NOT sent to customer).
-const NOTE_MIC_IDLE_ICON = "📝";
+const NOTE_MIC_IDLE_HTML = "📝";
 const NOTE_MIC_IDLE_TITLE = "Record a private note — transcribed and added to the notes panel (NOT sent to the customer)";
 voiceNoteBtn.onclick = () => {
   if (mediaRecorder && mediaRecorder.state === "recording") {
@@ -6338,13 +6375,14 @@ voiceNoteBtn.onclick = () => {
     if (activeMicBtn === voiceNoteBtn) stopMicRecording();
     return;
   }
-  startMicRecording(voiceNoteBtn, "note", NOTE_MIC_IDLE_ICON, NOTE_MIC_IDLE_TITLE);
+  startMicRecording(voiceNoteBtn, "note", NOTE_MIC_IDLE_HTML, NOTE_MIC_IDLE_TITLE);
 };
 
-// v1.134: composer mic (right of input). Idle icon = 🎤, mode = "composer" —
-// appends the cleaned transcript to the reply box so the trainer can edit
-// + Send. This is the new "primary" voice button for day-to-day replies.
-const COMPOSER_MIC_IDLE_ICON = "🎤";
+// v1.134: composer mic (right of input). Idle = pill with 🎤 + "Voice",
+// mode = "composer" — appends the cleaned transcript to the reply box so
+// the trainer can edit + Send. This is the primary voice button for replies.
+// v1.135: pill shape with text label, sits to the left of the ✨ AI button.
+const COMPOSER_MIC_IDLE_HTML = '<span class="voice-pill-icon">🎤</span><span class="voice-pill-label">Voice</span>';
 const COMPOSER_MIC_IDLE_TITLE = "Record a voice message — transcribed and added to the reply box (you can edit before sending)";
 const voiceComposerBtn = $("voiceComposerBtn");
 voiceComposerBtn.onclick = () => {
@@ -6352,7 +6390,7 @@ voiceComposerBtn.onclick = () => {
     if (activeMicBtn === voiceComposerBtn) stopMicRecording();
     return;
   }
-  startMicRecording(voiceComposerBtn, "composer", COMPOSER_MIC_IDLE_ICON, COMPOSER_MIC_IDLE_TITLE);
+  startMicRecording(voiceComposerBtn, "composer", COMPOSER_MIC_IDLE_HTML, COMPOSER_MIC_IDLE_TITLE);
 };
 
 // Attach: open file picker, then base64-encode and send via worker
