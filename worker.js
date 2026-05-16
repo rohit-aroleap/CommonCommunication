@@ -366,24 +366,29 @@ async function handleRegisterPushToken(request, env) {
 // Reads every registered token across the org and POSTs to Expo's push API.
 // Expo accepts up to 100 notifications per request; we batch accordingly.
 //
-// Targeting:
-//   - If the chat has open tickets with assignees → ping those assignees
-//     + every admin (admins always get fan-out as safety net).
-//   - Otherwise → broadcast to every signed-in trainer (legacy behavior).
+// Targeting (v1.120 strict rules — see resolvePushTargetUids):
+//   - Open-ticket assignees on this chat get pinged
+//   - Anyone who starred this chat gets pinged
+//   - Nobody else. No broadcast. No admin safety net. New unticketed
+//     chats are silent until someone takes ownership or stars them.
 //
-// Why: once tickets are widely used, broadcasting every inbound trains
-// people to ignore the app. But unassigned messages still need someone to
-// triage them, so the fallback stays inclusive.
+// Trade-off: a new customer's first message can sit unread if nobody is
+// watching the dashboard. The pre-v1.120 broadcast was the worse option —
+// every trainer's phone buzzed on every inbound, trained people to mute
+// the app entirely.
 async function fanoutPush(env, { title, body, data, chatId }) {
   const all = await fbGet(env, `${ROOT}/pushTokens`);
   if (!all || typeof all !== "object") return;
 
   const targetUids = await resolvePushTargetUids(env, chatId);
+  // v1.120: targetUids is always a Set. If empty (no tickets, no stars),
+  // nobody is pinged. No broadcast fallback — silence by design.
+  if (targetUids.size === 0) return;
 
   const messages = [];
   for (const [uid, userMap] of Object.entries(all)) {
     if (!userMap || typeof userMap !== "object") continue;
-    if (targetUids && !targetUids.has(uid)) continue;
+    if (!targetUids.has(uid)) continue;
     for (const entry of Object.values(userMap)) {
       if (!entry || !entry.token) continue;
       // Expo tokens look like "ExponentPushToken[...]" — skip anything that
@@ -416,33 +421,44 @@ async function fanoutPush(env, { title, body, data, chatId }) {
   }
 }
 
-// Returns a Set of uids to push to, or null for "broadcast to everyone".
-// Logic: look at the chat's open tickets. If any are assigned, push to those
-// assignees + all admins. If none assigned, return null (broadcast).
+// Returns a Set of uids to push to. v1.120 strict rules — no more broadcast,
+// no more admin safety net. Notify only:
+//   1. Users with an open ticket assigned to them on this chat
+//   2. Users who have starred (favorited) this chat
+// Otherwise: empty set → fanoutPush sends to nobody.
+//
+// Two reads per inbound: chat tickets + userState (favorites). Both are
+// small (<= a few KB combined for a typical org). Fine on every webhook.
 async function resolvePushTargetUids(env, chatId) {
-  if (!chatId) return null;
+  if (!chatId) return new Set();
   const chatKey = encodeKey(chatId);
+
+  const targets = new Set();
+
+  // 1. Open ticket assignees on this chat.
   const ticketIdsMap = await fbGet(env, `${ROOT}/chats/${chatKey}/tickets`);
-  if (!ticketIdsMap || typeof ticketIdsMap !== "object") return null;
-
-  const assignees = new Set();
-  for (const id of Object.keys(ticketIdsMap)) {
-    const t = await fbGet(env, `${ROOT}/tickets/${id}`);
-    if (t && t.status === "open" && t.assignee) {
-      assignees.add(String(t.assignee));
+  if (ticketIdsMap && typeof ticketIdsMap === "object") {
+    for (const id of Object.keys(ticketIdsMap)) {
+      const t = await fbGet(env, `${ROOT}/tickets/${id}`);
+      if (t && t.status === "open" && t.assignee) {
+        targets.add(String(t.assignee));
+      }
     }
   }
-  if (!assignees.size) return null;
 
-  // Add admins (looked up by email match in users/).
-  const users = await fbGet(env, `${ROOT}/users`);
-  if (users && typeof users === "object") {
-    for (const [uid, u] of Object.entries(users)) {
-      const email = String(u?.email || "").toLowerCase();
-      if (email && ADMIN_EMAILS.has(email)) assignees.add(uid);
+  // 2. Users who have starred this chat. userState is keyed by uid; each
+  // user's favorites map is a flat { chatKey: true } object. We iterate
+  // every user once and check whether they've starred *this* chatKey.
+  const userState = await fbGet(env, `${ROOT}/userState`);
+  if (userState && typeof userState === "object") {
+    for (const [uid, st] of Object.entries(userState)) {
+      if (st && st.favorites && st.favorites[chatKey] === true) {
+        targets.add(uid);
+      }
     }
   }
-  return assignees;
+
+  return targets;
 }
 
 // AI triage: classify an inbound message into { urgency, intent } and stamp

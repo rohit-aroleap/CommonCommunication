@@ -19,7 +19,7 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import * as Updates from "expo-updates";
 
 import { AuthProvider, useAuth } from "@/auth/AuthContext";
-import { AppDataProvider } from "@/data/AppDataContext";
+import { AppDataProvider, useAppData } from "@/data/AppDataContext";
 import { LoginScreen } from "@/auth/LoginScreen";
 import { ChatsScreen } from "@/screens/ChatsScreen";
 import { TicketsScreen } from "@/screens/TicketsScreen";
@@ -65,6 +65,11 @@ function LogoutButton() {
 }
 
 function TabsNav() {
+  // Read live unread counts. AppDataProvider wraps PostAuth (above this
+  // navigator) so useAppData is safe to call here. React Navigation
+  // re-evaluates options on every render of this component, so the badge
+  // number stays in sync with the listeners.
+  const { chatsUnreadCount, teamUnreadCount } = useAppData();
   return (
     <Tabs.Navigator
       screenOptions={{
@@ -74,6 +79,7 @@ function TabsNav() {
         headerTintColor: "white",
         headerTitleStyle: { fontWeight: "600" },
         headerRight: () => <LogoutButton />,
+        tabBarBadgeStyle: { fontSize: 10, fontWeight: "600" },
       }}
     >
       <Tabs.Screen
@@ -81,6 +87,7 @@ function TabsNav() {
         component={ChatsScreen}
         options={{
           tabBarIcon: ({ color }) => <TabIcon glyph="💬" color={color} />,
+          tabBarBadge: chatsUnreadCount > 0 ? chatsUnreadCount : undefined,
         }}
       />
       <Tabs.Screen
@@ -99,6 +106,7 @@ function TabsNav() {
           title: "Team",
           tabBarLabel: "Team",
           tabBarIcon: ({ color }) => <TabIcon glyph="👥" color={color} />,
+          tabBarBadge: teamUnreadCount > 0 ? teamUnreadCount : undefined,
         }}
       />
     </Tabs.Navigator>

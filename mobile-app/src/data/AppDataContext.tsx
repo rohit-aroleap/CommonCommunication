@@ -54,6 +54,12 @@ interface AppDataValue {
   mySendActivity: Record<string, SendActivity>;
   toggleFavorite: (chatKey: string) => void;
   bumpSendActivity: (chatKey: string) => void;
+  // Tab-badge counts. Computed under the same strict rules as push:
+  // chatsUnread = customer chats where (latest inbound > myLastSeen) AND
+  // (it's my ticket OR I starred it). teamUnread = DMs with inbound newer
+  // than myLastSeen. Reactive — updates as listeners fire.
+  chatsUnreadCount: number;
+  teamUnreadCount: number;
 }
 
 function normalizePhone(p: string): string {
@@ -268,6 +274,44 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     return out;
   }, [dmsByKey, teamUsers, user, myLastSeen]);
 
+  // Tab badge counts. Match the worker's push targeting rules so what you
+  // see on the icon matches what you'd get pinged for. Recomputed on every
+  // chatRows / tickets / favorites / myLastSeen update — all reactive.
+  const chatsUnreadCount = useMemo(() => {
+    if (!user) return 0;
+    // Build the set of chatKeys where I have an open ticket assigned.
+    const myTicketKeys = new Set<string>();
+    for (const t of Object.values(tickets)) {
+      if (
+        t &&
+        t.status === "open" &&
+        t.assignee === user.uid &&
+        t.anchorChatId
+      ) {
+        myTicketKeys.add(
+          String(t.anchorChatId).replace(/[.#$\[\]\/]/g, "_"),
+        );
+      }
+    }
+    let count = 0;
+    for (const r of chatRows) {
+      if (r.direction !== "in") continue; // last message wasn't inbound
+      const lastMsgAt = r.lastMsgAt || 0;
+      const seen = myLastSeen[r.chatKey] || 0;
+      if (lastMsgAt <= seen) continue;
+      // Strict rule: only count if I have a ticket or I starred it
+      const isMine = myTicketKeys.has(r.chatKey);
+      const isFavorite = !!myFavorites[r.chatKey];
+      if (!isMine && !isFavorite) continue;
+      count++;
+    }
+    return count;
+  }, [user, chatRows, tickets, myFavorites, myLastSeen]);
+
+  const teamUnreadCount = useMemo(() => {
+    return dmRows.filter((r) => r.unread).length;
+  }, [dmRows]);
+
   const markChatSeen = (chatKey: string) => {
     if (!user || !chatKey) return;
     set(
@@ -323,6 +367,8 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       mySendActivity,
       toggleFavorite,
       bumpSendActivity,
+      chatsUnreadCount,
+      teamUnreadCount,
     }),
     [
       chatRows,
@@ -336,6 +382,8 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       contacts,
       habitUsers,
       cancelledUsers,
+      chatsUnreadCount,
+      teamUnreadCount,
       sharedSubsByPhone,
       sharedCustomerDetails,
       ferraIndex,
