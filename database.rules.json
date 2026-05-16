@@ -6,7 +6,14 @@
     ".write": "auth != null",
 
     "commonComm": {
+      "chats": {
+        "_comment": "indexOn on meta/lastMsgAt lets the mobile app server-side limitToLast(N) instead of pulling every chat ever. Without it Firebase falls back to client-side sorting (loading the whole tree to the device), which is exactly the cold-start tax we're avoiding.",
+        ".indexOn": ["meta/lastMsgAt"]
+      },
       "dms": {
+        "_comment_indexOn": "Same reason as /chats — mobile queries the recent slice by meta/lastMsgAt.",
+        ".indexOn": ["meta/lastMsgAt"],
+
         "$pairKey": {
           "_comment": "Reads and writes scoped to the two uids listed in meta/participants. A user creating a fresh DM must include themselves in newData.meta.participants — see the .validate on participants below.",
 

@@ -41,6 +41,7 @@ export function ChatsScreen() {
     myFavorites,
     mySendActivity,
     toggleFavorite,
+    dataReady,
   } = useAppData();
   const { user } = useAuth();
 
@@ -260,7 +261,11 @@ export function ChatsScreen() {
         ListEmptyComponent={
           <View style={styles.empty}>
             <Text style={styles.emptyTxt}>
-              {favoritesOnly ? "No favorites yet." : "No chats match."}
+              {!dataReady
+                ? "Loading chats…"
+                : favoritesOnly
+                ? "No favorites yet."
+                : "No chats match."}
             </Text>
           </View>
         }

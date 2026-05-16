@@ -10,7 +10,17 @@ import React, {
   useMemo,
   useState,
 } from "react";
-import { get, onValue, ref, remove, set } from "firebase/database";
+import { InteractionManager } from "react-native";
+import {
+  get,
+  limitToLast,
+  onValue,
+  orderByChild,
+  query,
+  ref,
+  remove,
+  set,
+} from "firebase/database";
 import { db } from "@/firebase";
 import { useAuth } from "@/auth/AuthContext";
 import { ROOT } from "@/config";
@@ -18,6 +28,7 @@ import { encodeKey, chatKeyToChatId } from "@/lib/encodeKey";
 import { buildFerraIndex, type FerraIndex } from "@/lib/ferra";
 import { isDailyGroup as _isDailyGroup } from "@/lib/chats";
 import { nextSendActivity } from "@/lib/favorites";
+import { cacheGet, cacheSet } from "@/data/cache";
 import type {
   ChatMeta,
   ChatRow,
@@ -33,6 +44,14 @@ import type {
   Template,
   Ticket,
 } from "@/types";
+
+// How many chats / DMs to subscribe to. The first paint only needs the
+// recent slice — older threads are still reachable by search later (the
+// per-thread Thread listener pulls messages on demand). 200 covers a few
+// months of customer activity for a busy trainer; bump if anyone reports
+// missing rows.
+const CHATS_LIMIT = 200;
+const DMS_LIMIT = 100;
 
 interface AppDataValue {
   chatRows: ChatRow[];
@@ -66,6 +85,11 @@ interface AppDataValue {
   // Quick-reply templates (read-only on mobile in v1.126; desktop manages
   // CRUD). Slash-picker in ThreadScreen reads from this map.
   templates: Record<string, Template>;
+  // True once we've either hydrated from on-device cache or received the
+  // first /chats snapshot from Firebase. Screens use this to show "Loading
+  // chats…" on cold first-install instead of the misleading "No chats
+  // match." empty-state during the brief pre-data window.
+  dataReady: boolean;
 }
 
 function normalizePhone(p: string): string {
@@ -121,73 +145,197 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     Record<string, SendActivity>
   >({});
   const [templates, setTemplates] = useState<Record<string, Template>>({});
+  const [dataReady, setDataReady] = useState(false);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user) {
+      setDataReady(false);
+      return;
+    }
+    const uid = user.uid;
     const unsubs: Array<() => void> = [];
-    unsubs.push(
-      onValue(ref(db, `${ROOT}/chats`), (s) => setChatsRaw(s.val() || {})),
-    );
-    unsubs.push(
-      onValue(ref(db, `${ROOT}/tickets`), (s) => setTickets(s.val() || {})),
-    );
-    unsubs.push(
-      onValue(ref(db, `${ROOT}/users`), (s) => setTeamUsers(s.val() || {})),
-    );
-    unsubs.push(
-      onValue(ref(db, `${ROOT}/config/teamMembers`), (s) =>
-        setTeamMembers(s.val() || {}),
-      ),
-    );
-    unsubs.push(
-      onValue(ref(db, `${ROOT}/dms`), (s) => setDmsByKey(s.val() || {})),
-    );
-    unsubs.push(
-      onValue(ref(db, `${ROOT}/contacts`), (s) => setContacts(s.val() || {})),
-    );
-    unsubs.push(
-      onValue(ref(db, "ferraHabitData/v1/users"), (s) =>
-        setHabitUsers(s.val()),
-      ),
-    );
-    unsubs.push(
-      onValue(ref(db, "ferraHabitData/v1/cancelledUsers"), (s) =>
-        setCancelledUsers(s.val()),
-      ),
-    );
-    unsubs.push(
-      onValue(ref(db, "ferraSubscriptions/v1"), (s) => {
-        const v = s.val() as {
-          byPhone?: Record<string, string>;
-          customerDetails?: Record<string, CustomerDetail>;
-        } | null;
-        setSharedSubsByPhone(v?.byPhone ?? null);
-        setSharedCustomerDetails(v?.customerDetails ?? null);
-      }),
-    );
-    unsubs.push(
-      onValue(ref(db, `${ROOT}/userState/${user.uid}/lastSeen`), (s) =>
-        setMyLastSeen(s.val() || {}),
-      ),
-    );
-    unsubs.push(
-      onValue(ref(db, `${ROOT}/userState/${user.uid}/favorites`), (s) =>
-        setMyFavorites(s.val() || {}),
-      ),
-    );
-    unsubs.push(
-      onValue(ref(db, `${ROOT}/userState/${user.uid}/sendActivity`), (s) =>
-        setMySendActivity(s.val() || {}),
-      ),
-    );
-    // Quick-reply templates (v1.126). Read-only on mobile; the desktop
-    // dashboard's Templates modal is the source of truth.
-    unsubs.push(
-      onValue(ref(db, `${ROOT}/config/templates`), (s) =>
-        setTemplates(s.val() || {}),
-      ),
-    );
+    let cancelled = false;
+
+    // 1. Hydrate React state from the on-device cache so the UI paints with
+    //    last-known data instead of waiting for the network. Each key runs
+    //    independently — if one cache entry is missing or corrupt, the rest
+    //    still load. Live listeners below overwrite as snapshots arrive.
+    cacheGet<Record<string, { meta?: ChatMeta }>>(uid, "chatsRaw").then((v) => {
+      if (cancelled) return;
+      if (v) setChatsRaw(v);
+      // Cache hit OR cache miss both unblock the loading state: a miss
+      // means no prior session, so the live listener is the only source
+      // and we want screens to show their normal empty UX rather than a
+      // permanent "Loading…".
+      setDataReady(true);
+    });
+    cacheGet<Record<string, Ticket>>(uid, "tickets").then((v) => {
+      if (!cancelled && v) setTickets(v);
+    });
+    cacheGet<Record<string, TeamUser>>(uid, "teamUsers").then((v) => {
+      if (!cancelled && v) setTeamUsers(v);
+    });
+    cacheGet<Record<string, TeamMember>>(uid, "teamMembers").then((v) => {
+      if (!cancelled && v) setTeamMembers(v);
+    });
+    cacheGet<Record<string, { meta?: DmMeta }>>(uid, "dmsByKey").then((v) => {
+      if (!cancelled && v) setDmsByKey(v);
+    });
+    cacheGet<Record<string, ContactInfo>>(uid, "contacts").then((v) => {
+      if (!cancelled && v) setContacts(v);
+    });
+    cacheGet<Record<string, number>>(uid, "myLastSeen").then((v) => {
+      if (!cancelled && v) setMyLastSeen(v);
+    });
+    cacheGet<Record<string, boolean>>(uid, "myFavorites").then((v) => {
+      if (!cancelled && v) setMyFavorites(v);
+    });
+    cacheGet<Record<string, SendActivity>>(uid, "mySendActivity").then((v) => {
+      if (!cancelled && v) setMySendActivity(v);
+    });
+    cacheGet<Record<string, Template>>(uid, "templates").then((v) => {
+      if (!cancelled && v) setTemplates(v);
+    });
+    // ferra* snapshots can be megabytes — round-trip through AsyncStorage
+    // is slower than just letting the live listener stream them in once
+    // the JS thread is idle. Not cached on purpose.
+
+    // 2. Attach listeners in three tiers. Tier 1 fires immediately because
+    //    the first paint depends on it; Tier 2 + 3 wait for the navigator
+    //    to finish its initial render so we don't block on parsing /
+    //    setState during the most jank-sensitive moment.
+    const attachTier1 = () => {
+      // Recent chats only. orderByChild + limitToLast pushes the slicing to
+      // the server; without it Firebase ships every chat ever to the client.
+      // Requires .indexOn "meta/lastMsgAt" under /chats in database.rules.json.
+      const chatsQuery = query(
+        ref(db, `${ROOT}/chats`),
+        orderByChild("meta/lastMsgAt"),
+        limitToLast(CHATS_LIMIT),
+      );
+      unsubs.push(
+        onValue(chatsQuery, (s) => {
+          const v = (s.val() || {}) as Record<string, { meta?: ChatMeta }>;
+          setChatsRaw(v);
+          cacheSet(uid, "chatsRaw", v);
+          setDataReady(true);
+        }),
+      );
+      unsubs.push(
+        onValue(ref(db, `${ROOT}/tickets`), (s) => {
+          const v = (s.val() || {}) as Record<string, Ticket>;
+          setTickets(v);
+          cacheSet(uid, "tickets", v);
+        }),
+      );
+      unsubs.push(
+        onValue(ref(db, `${ROOT}/userState/${uid}/lastSeen`), (s) => {
+          const v = (s.val() || {}) as Record<string, number>;
+          setMyLastSeen(v);
+          cacheSet(uid, "myLastSeen", v);
+        }),
+      );
+      unsubs.push(
+        onValue(ref(db, `${ROOT}/userState/${uid}/favorites`), (s) => {
+          const v = (s.val() || {}) as Record<string, boolean>;
+          setMyFavorites(v);
+          cacheSet(uid, "myFavorites", v);
+        }),
+      );
+    };
+
+    const attachTier2 = () => {
+      if (cancelled) return;
+      const dmsQuery = query(
+        ref(db, `${ROOT}/dms`),
+        orderByChild("meta/lastMsgAt"),
+        limitToLast(DMS_LIMIT),
+      );
+      unsubs.push(
+        onValue(ref(db, `${ROOT}/users`), (s) => {
+          const v = (s.val() || {}) as Record<string, TeamUser>;
+          setTeamUsers(v);
+          cacheSet(uid, "teamUsers", v);
+        }),
+      );
+      unsubs.push(
+        onValue(ref(db, `${ROOT}/config/teamMembers`), (s) => {
+          const v = (s.val() || {}) as Record<string, TeamMember>;
+          setTeamMembers(v);
+          cacheSet(uid, "teamMembers", v);
+        }),
+      );
+      unsubs.push(
+        onValue(dmsQuery, (s) => {
+          const v = (s.val() || {}) as Record<string, { meta?: DmMeta }>;
+          setDmsByKey(v);
+          cacheSet(uid, "dmsByKey", v);
+        }),
+      );
+      unsubs.push(
+        onValue(ref(db, `${ROOT}/contacts`), (s) => {
+          const v = (s.val() || {}) as Record<string, ContactInfo>;
+          setContacts(v);
+          cacheSet(uid, "contacts", v);
+        }),
+      );
+      unsubs.push(
+        onValue(ref(db, `${ROOT}/userState/${uid}/sendActivity`), (s) => {
+          const v = (s.val() || {}) as Record<string, SendActivity>;
+          setMySendActivity(v);
+          cacheSet(uid, "mySendActivity", v);
+        }),
+      );
+      // Quick-reply templates (v1.126). Read-only on mobile; the desktop
+      // dashboard's Templates modal is the source of truth.
+      unsubs.push(
+        onValue(ref(db, `${ROOT}/config/templates`), (s) => {
+          const v = (s.val() || {}) as Record<string, Template>;
+          setTemplates(v);
+          cacheSet(uid, "templates", v);
+        }),
+      );
+    };
+
+    const attachTier3 = () => {
+      if (cancelled) return;
+      // ferra* lookups only affect display name + status pill on existing
+      // chat rows. Rows render fine without them (fall back to phone +
+      // contact name), so deferring keeps initial parse cost off the path.
+      unsubs.push(
+        onValue(ref(db, "ferraHabitData/v1/users"), (s) =>
+          setHabitUsers(s.val()),
+        ),
+      );
+      unsubs.push(
+        onValue(ref(db, "ferraHabitData/v1/cancelledUsers"), (s) =>
+          setCancelledUsers(s.val()),
+        ),
+      );
+      unsubs.push(
+        onValue(ref(db, "ferraSubscriptions/v1"), (s) => {
+          const v = s.val() as {
+            byPhone?: Record<string, string>;
+            customerDetails?: Record<string, CustomerDetail>;
+          } | null;
+          setSharedSubsByPhone(v?.byPhone ?? null);
+          setSharedCustomerDetails(v?.customerDetails ?? null);
+        }),
+      );
+    };
+
+    attachTier1();
+    const t2 = InteractionManager.runAfterInteractions(attachTier2);
+    // Stagger tier 3 a tick beyond tier 2 so the two waves of state
+    // updates don't land in the same frame and re-trigger every useMemo.
+    const t3 = InteractionManager.runAfterInteractions(() => {
+      setTimeout(attachTier3, 50);
+    });
+
     return () => {
+      cancelled = true;
+      t2.cancel?.();
+      t3.cancel?.();
       for (const u of unsubs) u();
     };
   }, [user]);
@@ -398,6 +546,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       teamUnreadCount,
       ticketsCount,
       templates,
+      dataReady,
     }),
     [
       chatRows,
@@ -421,6 +570,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       myFavorites,
       mySendActivity,
       templates,
+      dataReady,
     ],
   );
 
