@@ -12,7 +12,7 @@ import {
   View,
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
-import { SafeAreaProvider } from "react-native-safe-area-context";
+import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
 import { NavigationContainer } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
@@ -70,6 +70,12 @@ function TabsNav() {
   // re-evaluates options on every render of this component, so the badge
   // number stays in sync with the listeners.
   const { chatsUnreadCount, teamUnreadCount, ticketsCount } = useAppData();
+  // Same safe-area pattern the composer uses (v1.117). Setting an explicit
+  // tabBarStyle.height overrides React Navigation's default safe-area
+  // handling, so we add insets.bottom back in manually. Without this, the
+  // bottom tab icons get clipped by the gesture-nav pill on Androids and
+  // by the home indicator on iPhones.
+  const insets = useSafeAreaInsets();
   return (
     <Tabs.Navigator
       screenOptions={{
@@ -82,8 +88,13 @@ function TabsNav() {
         tabBarBadgeStyle: { fontSize: 10, fontWeight: "600" },
         // Bold active label so the active tab also reads strongly via text.
         tabBarLabelStyle: { fontSize: 11, fontWeight: "600" },
-        // Slightly taller tab bar to fit the pill background comfortably.
-        tabBarStyle: { height: 64, paddingTop: 6, paddingBottom: 8 },
+        // Slightly taller tab bar to fit the pill background comfortably,
+        // plus safe-area inset so it clears the gesture bar.
+        tabBarStyle: {
+          height: 64 + insets.bottom,
+          paddingTop: 6,
+          paddingBottom: 8 + insets.bottom,
+        },
       }}
     >
       <Tabs.Screen
