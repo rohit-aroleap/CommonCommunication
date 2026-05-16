@@ -15,7 +15,6 @@ import {
   View,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
-import * as FileSystem from "expo-file-system/legacy";
 import { onValue, push, ref, set } from "firebase/database";
 import { db } from "@/firebase";
 import { ROOT } from "@/config";
@@ -61,7 +60,7 @@ interface ChatNote {
 
 type Props = NativeStackScreenProps<RootStackParamList, "CustomerInfo">;
 
-export function CustomerInfoScreen({ route }: Props) {
+export function CustomerInfoScreen({ route, navigation }: Props) {
   const { chatKey } = route.params;
   const { user } = useAuth();
   const {
@@ -196,18 +195,30 @@ export function CustomerInfoScreen({ route }: Props) {
   }
 
   // Called by the MicButton sub-component once recording stops + a URI is
-  // ready. Reads the file as base64 and POSTs to /transcribe. Appends to
-  // draft so the trainer can type + dictate together (no overwrite).
+  // ready. transcribeAudio handles the Groq-vs-Worker branching internally
+  // (v1.133). Appends to draft so the trainer can type + dictate together.
   async function onTranscribe(uri: string) {
     setTranscribing(true);
     try {
-      const b64 = await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      const text = await transcribeAudio(b64);
+      const text = await transcribeAudio(uri);
       setDraft((prev) => (prev ? prev + " " + text : text).trim());
     } catch (e) {
-      Alert.alert("Transcription failed", String((e as Error)?.message || e));
+      const msg = String((e as Error)?.message || e);
+      if (msg.startsWith("groq_unauthorized")) {
+        Alert.alert(
+          "Groq key was rejected",
+          "Open Settings to check or replace your Groq API key.",
+          [
+            { text: "Cancel", style: "cancel" },
+            {
+              text: "Open Settings",
+              onPress: () => navigation.navigate("Settings"),
+            },
+          ],
+        );
+      } else {
+        Alert.alert("Transcription failed", msg);
+      }
     } finally {
       setTranscribing(false);
     }

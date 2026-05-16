@@ -482,25 +482,37 @@ export function ThreadScreen({ route, navigation }: Props) {
     async (uri: string) => {
       setTranscribing(true);
       try {
-        const b64 = await FileSystem.readAsStringAsync(uri, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-        const text = await transcribeAudio(b64);
+        const text = await transcribeAudio(uri);
         if (!text) {
           Alert.alert("No speech detected", "Try recording again, closer to the mic.");
           return;
         }
         setNotePreview(text);
       } catch (e) {
-        Alert.alert(
-          "Transcription failed",
-          String((e as Error)?.message || e),
-        );
+        const msg = String((e as Error)?.message || e);
+        // v1.133: Groq returned 401 (bad/expired key) — walk the user back
+        // to the Settings screen so they can fix it instead of trying again
+        // and failing the same way.
+        if (msg.startsWith("groq_unauthorized")) {
+          Alert.alert(
+            "Groq key was rejected",
+            "Open Settings to check or replace your Groq API key.",
+            [
+              { text: "Cancel", style: "cancel" },
+              {
+                text: "Open Settings",
+                onPress: () => navigation.navigate("Settings"),
+              },
+            ],
+          );
+        } else {
+          Alert.alert("Transcription failed", msg);
+        }
       } finally {
         setTranscribing(false);
       }
     },
-    [],
+    [navigation],
   );
 
   async function saveVoiceNote(text: string) {

@@ -11,4 +11,5 @@ export type RootStackParamList = {
   // right Firebase path and rendering mode.
   Thread: { chatKey: string; initialTitle?: string };
   CustomerInfo: { chatKey: string };
+  Settings: undefined;
 };

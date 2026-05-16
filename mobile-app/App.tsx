@@ -19,6 +19,9 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import * as Notifications from "expo-notifications";
 import * as Updates from "expo-updates";
 
+import { useNavigation } from "@react-navigation/native";
+import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
+
 import { AuthProvider, useAuth } from "@/auth/AuthContext";
 import { AppDataProvider, useAppData } from "@/data/AppDataContext";
 import { LoginScreen } from "@/auth/LoginScreen";
@@ -27,6 +30,7 @@ import { TicketsScreen } from "@/screens/TicketsScreen";
 import { TeamScreen } from "@/screens/TeamScreen";
 import { ThreadScreen } from "@/screens/ThreadScreen";
 import { CustomerInfoScreen } from "@/screens/CustomerInfoScreen";
+import { SettingsScreen } from "@/screens/SettingsScreen";
 import { registerForPushAsync } from "@/notifications/registerForPush";
 import { colors } from "@/theme";
 import type { RootStackParamList } from "@/screens/types";
@@ -65,6 +69,26 @@ function LogoutButton() {
   );
 }
 
+// v1.133: gear icon in every tab header that pushes the Settings screen onto
+// the root stack. Settings currently holds the per-user Groq API key for
+// fast voice-note transcription.
+function HeaderRight() {
+  const nav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  return (
+    <View style={styles.headerRight}>
+      <TouchableOpacity
+        accessibilityLabel="Settings"
+        onPress={() => nav.navigate("Settings")}
+        style={styles.gearBtn}
+        hitSlop={8}
+      >
+        <Text style={styles.gearTxt}>⚙</Text>
+      </TouchableOpacity>
+      <LogoutButton />
+    </View>
+  );
+}
+
 function TabsNav() {
   // Read live unread counts. AppDataProvider wraps PostAuth (above this
   // navigator) so useAppData is safe to call here. React Navigation
@@ -94,7 +118,7 @@ function TabsNav() {
         headerStyle: { backgroundColor: colors.greenDark },
         headerTintColor: "white",
         headerTitleStyle: { fontWeight: "600" },
-        headerRight: () => <LogoutButton />,
+        headerRight: () => <HeaderRight />,
         tabBarBadgeStyle: { fontSize: 10, fontWeight: "600" },
         // Bold active label so the active tab also reads strongly via text.
         tabBarLabelStyle: { fontSize: 11, fontWeight: "600" },
@@ -188,6 +212,11 @@ function PostAuth() {
             component={CustomerInfoScreen}
             options={{ title: "Customer info", headerBackTitleVisible: false }}
           />
+          <Stack.Screen
+            name="Settings"
+            component={SettingsScreen}
+            options={{ title: "Settings", headerBackTitleVisible: false }}
+          />
         </Stack.Navigator>
       </NavigationContainer>
     </AppDataProvider>
@@ -265,6 +294,25 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "600",
     transform: [{ rotate: "90deg" }],
+  },
+  // v1.133: header right cluster — gear + logout. Wrapped in a flex row so the
+  // two buttons sit side-by-side without extra padding tricks.
+  headerRight: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  gearBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    marginRight: 4,
+    backgroundColor: "rgba(255,255,255,0.18)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  gearTxt: {
+    color: "white",
+    fontSize: 18,
   },
   // Active-tab pill behind the icon. Light green wash against the bottom
   // tab bar's white so it reads at a glance without being loud.
