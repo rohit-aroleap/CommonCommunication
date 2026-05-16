@@ -16,6 +16,7 @@ import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-cont
 import { NavigationContainer } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
+import * as Notifications from "expo-notifications";
 import * as Updates from "expo-updates";
 
 import { AuthProvider, useAuth } from "@/auth/AuthContext";
@@ -76,6 +77,15 @@ function TabsNav() {
   // bottom tab icons get clipped by the gesture-nav pill on Androids and
   // by the home indicator on iPhones.
   const insets = useSafeAreaInsets();
+  // iOS app-icon badge count. Android handles this automatically via the
+  // notification tray; iOS only shows a number if the app explicitly sets
+  // it. Sum the unread Chats + Team counts (NOT ticketsCount — that's a
+  // workload reminder, doesn't represent unread). Resets to 0 when no
+  // unread, which clears the red bubble on the home screen.
+  useEffect(() => {
+    const total = chatsUnreadCount + teamUnreadCount;
+    Notifications.setBadgeCountAsync(total).catch(() => {});
+  }, [chatsUnreadCount, teamUnreadCount]);
   return (
     <Tabs.Navigator
       screenOptions={{

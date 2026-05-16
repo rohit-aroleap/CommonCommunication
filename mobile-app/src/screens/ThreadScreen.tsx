@@ -573,7 +573,11 @@ export function ThreadScreen({ route, navigation }: Props) {
   return (
     <KeyboardAvoidingView
       style={styles.root}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      // Expo SDK 55 switched Android to edge-to-edge; the previous
+      // `behavior: undefined` on Android meant the keyboard could cover the
+      // composer. "height" tells RN to resize the container above the
+      // keyboard. iOS keeps padding (works better when there's a tabbar).
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
       keyboardVerticalOffset={Platform.OS === "ios" ? 80 : 0}
     >
       {!isDm && (
