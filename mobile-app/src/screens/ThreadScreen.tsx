@@ -200,20 +200,31 @@ export function ThreadScreen({ route, navigation }: Props) {
   // config (allow-listed but maybe never signed in). Filter out yourself
   // and apply the query filter. Sort: signed-in first (so they're the
   // top hits), then alphabetical.
+  //
+  // v1.131: name resolution order is teamMembers.name (admin-set in the
+  // desktop Team modal) → Firebase Auth display name → email. A name set
+  // in the Team modal wins for both signed-in and pending teammates, so
+  // the picker reads as names everywhere as soon as the admin fills them.
   const mentionCandidates = useMemo(() => {
     if (!mentionMatch) return [] as Array<{ uid: string; name: string; active: boolean }>;
     const me = user?.uid;
+    // Pre-index teamMembers by lowercase email so the lookup per
+    // teamUsers entry is O(1).
+    const memberByEmail = new Map<string, { name?: string; email?: string }>();
+    for (const m of Object.values(teamMembers || {})) {
+      if (m?.email) memberByEmail.set(m.email.toLowerCase(), m);
+    }
     const byUid = new Map<
       string,
       { uid: string; name: string; active: boolean }
     >();
     for (const [uid, u] of Object.entries(teamUsers || {})) {
       if (!u || uid === me) continue;
-      byUid.set(uid, {
-        uid,
-        name: u.name || u.email || uid,
-        active: true,
-      });
+      const emailLower = (u.email || "").toLowerCase();
+      const override = memberByEmail.get(emailLower);
+      const displayName =
+        (override && override.name) || u.name || u.email || uid;
+      byUid.set(uid, { uid, name: displayName, active: true });
     }
     // teamMembers is keyed by emailKey; we'd love to know the matching uid
     // but config/teamMembers doesn't store one. For users who never signed
@@ -222,8 +233,6 @@ export function ThreadScreen({ route, navigation }: Props) {
     for (const [emailKey, m] of Object.entries(teamMembers || {})) {
       const email = m?.email;
       if (!email) continue;
-      // Skip if already covered by teamUsers (same email landing under a
-      // uid). Emails are unique per allow-list entry.
       const emailLower = email.toLowerCase();
       const dup = Array.from(byUid.values()).some(
         (entry) =>
