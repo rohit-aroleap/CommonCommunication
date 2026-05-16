@@ -265,10 +265,17 @@ export function ThreadScreen({ route, navigation }: Props) {
   const [reassignTicket, setReassignTicket] = useState<Ticket | null>(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [attachBusy, setAttachBusy] = useState(false);
-  // Voice-note flow state. When transcribing is true, the mic button shows
-  // a spinner. When notePreview is non-null, an editable preview modal is
-  // open with the transcript pre-filled — trainer reviews then saves.
+  // Voice-flow state — v1.134 splits the old single mic into two:
+  //   📝 left of input: still goes through the note-preview modal.
+  //   🎤 right of input: appends transcript directly to the composer.
+  // Each has its own transcribing flag so the active mic shows a spinner
+  // independently. voiceRecordingMic = which mic is currently capturing
+  // audio; the other one is disabled until this one stops.
   const [transcribing, setTranscribing] = useState(false);
+  const [composerTranscribing, setComposerTranscribing] = useState(false);
+  const [voiceRecordingMic, setVoiceRecordingMic] = useState<
+    "note" | "composer" | null
+  >(null);
   const [notePreview, setNotePreview] = useState<string | null>(null);
   const [savingNote, setSavingNote] = useState(false);
   const listRef = useRef<FlatList<Message>>(null);
@@ -511,6 +518,47 @@ export function ThreadScreen({ route, navigation }: Props) {
         }
       } finally {
         setTranscribing(false);
+      }
+    },
+    [navigation],
+  );
+
+  // v1.134: composer-mic flow (🎤 right of input). Same transcription pipeline
+  // as onTranscribed, but instead of opening the note preview modal we append
+  // the cleaned text to whatever's already in the composer. Trainer can edit
+  // before tapping Send.
+  const onComposerTranscribed = useCallback(
+    async (uri: string) => {
+      setComposerTranscribing(true);
+      try {
+        const text = await transcribeAudio(uri);
+        if (!text) {
+          Alert.alert("No speech detected", "Try recording again, closer to the mic.");
+          return;
+        }
+        setComposer((prev) => {
+          const base = (prev || "").trimEnd();
+          return base ? base + " " + text : text;
+        });
+      } catch (e) {
+        const msg = String((e as Error)?.message || e);
+        if (msg.startsWith("groq_unauthorized")) {
+          Alert.alert(
+            "Groq key was rejected",
+            "Open Settings to check or replace your Groq API key.",
+            [
+              { text: "Cancel", style: "cancel" },
+              {
+                text: "Open Settings",
+                onPress: () => navigation.navigate("Settings"),
+              },
+            ],
+          );
+        } else {
+          Alert.alert("Transcription failed", msg);
+        }
+      } finally {
+        setComposerTranscribing(false);
       }
     },
     [navigation],
@@ -998,6 +1046,23 @@ export function ThreadScreen({ route, navigation }: Props) {
         >
           <Text style={styles.attachTxt}>📎</Text>
         </TouchableOpacity>
+        {/* v1.134: 📝 notes mic (left of input). Records → cleaned transcript
+            opens the note-preview modal where trainer saves as a private note
+            (NOT sent to the customer). Customer chats only — DMs have no
+            notes feature. */}
+        {!isDm && audioMod && (
+          <VoiceMicButton
+            idleGlyph="📝"
+            accessibilityLabelIdle="Record a private note"
+            onTranscribed={onTranscribed}
+            transcribing={transcribing}
+            disabled={voiceRecordingMic === "composer"}
+            onRecordingChange={(rec) => {
+              if (rec) setVoiceRecordingMic("note");
+              else setVoiceRecordingMic((cur) => (cur === "note" ? null : cur));
+            }}
+          />
+        )}
         <TextInput
           style={styles.input}
           value={composer}
@@ -1006,16 +1071,21 @@ export function ThreadScreen({ route, navigation }: Props) {
           placeholderTextColor={colors.muted}
           multiline
         />
-        {/* 🎤 voice-to-note button. Only shown on customer chats (DMs skip
-            it — no use case for private notes on internal chats). Hidden if
-            expo-audio isn't loaded (older native builds). Records → /transcribe
-            → opens a preview modal where the trainer reviews and saves as a
-            private note (not sent to the customer). Same flow as the
-            webapp's composer mic. */}
-        {!isDm && audioMod && (
-          <VoiceNoteMic
-            onTranscribed={onTranscribed}
-            transcribing={transcribing}
+        {/* v1.134: 🎤 composer mic (right of input). Records → cleaned
+            transcript appends to whatever's in the reply box. Trainer edits
+            and taps Send. Visible on both customer chats and internal DMs —
+            voice-to-text is useful in both. */}
+        {audioMod && (
+          <VoiceMicButton
+            idleGlyph="🎤"
+            accessibilityLabelIdle="Record a voice reply"
+            onTranscribed={onComposerTranscribed}
+            transcribing={composerTranscribing}
+            disabled={voiceRecordingMic === "note"}
+            onRecordingChange={(rec) => {
+              if (rec) setVoiceRecordingMic("composer");
+              else setVoiceRecordingMic((cur) => (cur === "composer" ? null : cur));
+            }}
           />
         )}
         <TouchableOpacity
@@ -1130,17 +1200,31 @@ export function ThreadScreen({ route, navigation }: Props) {
 
 // Lightweight bottom sheet for long-press actions (Create ticket / Copy).
 // Could be a separate file, but it's tightly coupled to the thread screen.
-// 🎤 voice-note mic for the thread composer. Only mounted when expo-audio
-// loaded at module init, so React's rules-of-hooks stays clean (the hook
-// is always called from inside this component, never skipped).
-// Tap once → request mic permission → start recording (button turns red ⏹).
-// Tap again → stop recording → parent transcribes the URI.
-function VoiceNoteMic({
+// Generic voice mic button — v1.134 split the composer into two of these:
+//   📝 (left of input)  → notes flow  (caller: onNoteTranscribed)
+//   🎤 (right of input) → composer fill (caller: onComposerTranscribed)
+// Each instance owns its own expo-audio recorder; the parent passes
+// `disabled` to prevent both from recording at once (the device mic is
+// shared hardware). onRecordingChange lets the parent track which mic is
+// active so it can disable the sibling.
+//
+// Only mounted when expo-audio loaded at module init, so React's rules-of-
+// hooks stays clean (the hook is always called from inside this component,
+// never skipped).
+function VoiceMicButton({
+  idleGlyph,
+  accessibilityLabelIdle,
   onTranscribed,
   transcribing,
+  disabled,
+  onRecordingChange,
 }: {
+  idleGlyph: string;
+  accessibilityLabelIdle: string;
   onTranscribed: (uri: string) => Promise<void>;
   transcribing: boolean;
+  disabled: boolean;
+  onRecordingChange: (recording: boolean) => void;
 }) {
   // Whisper-tuned options: 16 kHz mono AAC @ 32 kbps. ~8× smaller upload
   // than HIGH_QUALITY with no transcription accuracy loss (Whisper resamples
@@ -1150,6 +1234,13 @@ function VoiceNoteMic({
   );
   const recorderState = audioMod.useAudioRecorderState(recorder);
   const isRecording = !!recorderState?.isRecording;
+
+  // Bubble recording-state changes up so the parent can disable the
+  // sibling mic. useEffect rather than reading isRecording inside toggle()
+  // so transient state from expo-audio doesn't get out of sync.
+  useEffect(() => {
+    onRecordingChange(isRecording);
+  }, [isRecording, onRecordingChange]);
 
   async function toggle() {
     if (transcribing) return;
@@ -1166,6 +1257,9 @@ function VoiceNoteMic({
       }
       return;
     }
+    // disabled is true when the sibling mic is currently recording. Guard
+    // here too in case the user manages to tap during a race window.
+    if (disabled) return;
     try {
       const perm = await audioMod.requestRecordingPermissionsAsync();
       if (!perm.granted) {
@@ -1189,17 +1283,23 @@ function VoiceNoteMic({
     }
   }
 
+  const effectivelyDisabled = transcribing || (disabled && !isRecording);
+
   return (
     <TouchableOpacity
       onPress={toggle}
-      style={[styles.mic, isRecording && styles.micRecording]}
-      disabled={transcribing}
-      accessibilityLabel={isRecording ? "Stop recording" : "Record a voice note"}
+      style={[
+        styles.mic,
+        isRecording && styles.micRecording,
+        effectivelyDisabled && styles.micDimmed,
+      ]}
+      disabled={effectivelyDisabled}
+      accessibilityLabel={isRecording ? "Stop recording" : accessibilityLabelIdle}
     >
       {transcribing ? (
         <ActivityIndicator color="white" size="small" />
       ) : (
-        <Text style={styles.micTxt}>{isRecording ? "⏹" : "🎤"}</Text>
+        <Text style={styles.micTxt}>{isRecording ? "⏹" : idleGlyph}</Text>
       )}
     </TouchableOpacity>
   );
@@ -1488,6 +1588,9 @@ const styles = StyleSheet.create({
     backgroundColor: "#dc2626",
     borderColor: "#dc2626",
   },
+  // v1.134: shown on the sibling mic while the other one is recording, so
+  // the user understands they can't tap it until the active recording stops.
+  micDimmed: { opacity: 0.35 },
   micTxt: { color: "white", fontSize: 18 },
   previewBack: {
     flex: 1,
