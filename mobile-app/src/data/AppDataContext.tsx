@@ -10,21 +10,24 @@ import React, {
   useMemo,
   useState,
 } from "react";
-import { onValue, ref, set } from "firebase/database";
+import { get, onValue, ref, remove, set } from "firebase/database";
 import { db } from "@/firebase";
 import { useAuth } from "@/auth/AuthContext";
 import { ROOT } from "@/config";
 import { encodeKey, chatKeyToChatId } from "@/lib/encodeKey";
 import { buildFerraIndex, type FerraIndex } from "@/lib/ferra";
 import { isDailyGroup as _isDailyGroup } from "@/lib/chats";
+import { nextSendActivity } from "@/lib/favorites";
 import type {
   ChatMeta,
   ChatRow,
   ChatType,
   ContactInfo,
+  CustomerDetail,
   DmMeta,
   DmRow,
   FerraUser,
+  SendActivity,
   TeamMember,
   TeamUser,
   Ticket,
@@ -43,9 +46,14 @@ interface AppDataValue {
   habitUsers: Record<string, FerraUser> | FerraUser[] | null;
   cancelledUsers: Record<string, FerraUser> | FerraUser[] | null;
   sharedSubsByPhone: Record<string, string> | null;
+  sharedCustomerDetails: Record<string, CustomerDetail> | null;
   ferraIndex: FerraIndex;
   myLastSeen: Record<string, number>;
   markChatSeen: (chatKey: string) => void;
+  myFavorites: Record<string, boolean>;
+  mySendActivity: Record<string, SendActivity>;
+  toggleFavorite: (chatKey: string) => void;
+  bumpSendActivity: (chatKey: string) => void;
 }
 
 function normalizePhone(p: string): string {
@@ -92,7 +100,14 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
   const [sharedSubsByPhone, setSharedSubsByPhone] = useState<
     Record<string, string> | null
   >(null);
+  const [sharedCustomerDetails, setSharedCustomerDetails] = useState<
+    Record<string, CustomerDetail> | null
+  >(null);
   const [myLastSeen, setMyLastSeen] = useState<Record<string, number>>({});
+  const [myFavorites, setMyFavorites] = useState<Record<string, boolean>>({});
+  const [mySendActivity, setMySendActivity] = useState<
+    Record<string, SendActivity>
+  >({});
 
   useEffect(() => {
     if (!user) return;
@@ -129,13 +144,27 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     );
     unsubs.push(
       onValue(ref(db, "ferraSubscriptions/v1"), (s) => {
-        const v = s.val() as { byPhone?: Record<string, string> } | null;
+        const v = s.val() as {
+          byPhone?: Record<string, string>;
+          customerDetails?: Record<string, CustomerDetail>;
+        } | null;
         setSharedSubsByPhone(v?.byPhone ?? null);
+        setSharedCustomerDetails(v?.customerDetails ?? null);
       }),
     );
     unsubs.push(
       onValue(ref(db, `${ROOT}/userState/${user.uid}/lastSeen`), (s) =>
         setMyLastSeen(s.val() || {}),
+      ),
+    );
+    unsubs.push(
+      onValue(ref(db, `${ROOT}/userState/${user.uid}/favorites`), (s) =>
+        setMyFavorites(s.val() || {}),
+      ),
+    );
+    unsubs.push(
+      onValue(ref(db, `${ROOT}/userState/${user.uid}/sendActivity`), (s) =>
+        setMySendActivity(s.val() || {}),
       ),
     );
     return () => {
@@ -247,6 +276,31 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     ).catch(() => {});
   };
 
+  const toggleFavorite = (chatKey: string) => {
+    if (!user || !chatKey) return;
+    const path = `${ROOT}/userState/${user.uid}/favorites/${chatKey}`;
+    if (myFavorites[chatKey]) {
+      remove(ref(db, path)).catch(() => {});
+    } else {
+      set(ref(db, path), true).catch(() => {});
+    }
+  };
+
+  // Read-modify-write the per-chat send counter. Used by ThreadScreen on
+  // every outgoing message; one extra read per send is fine for a hint.
+  const bumpSendActivity = (chatKey: string) => {
+    if (!user || !chatKey) return;
+    const path = `${ROOT}/userState/${user.uid}/sendActivity/${chatKey}`;
+    get(ref(db, path))
+      .then((snap) => {
+        const next = nextSendActivity(
+          snap.val() as SendActivity | null,
+        );
+        return set(ref(db, path), next);
+      })
+      .catch(() => {});
+  };
+
   const value: AppDataValue = useMemo(
     () => ({
       chatRows,
@@ -261,9 +315,14 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       habitUsers,
       cancelledUsers,
       sharedSubsByPhone,
+      sharedCustomerDetails,
       ferraIndex,
       myLastSeen,
       markChatSeen,
+      myFavorites,
+      mySendActivity,
+      toggleFavorite,
+      bumpSendActivity,
     }),
     [
       chatRows,
@@ -278,8 +337,11 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       habitUsers,
       cancelledUsers,
       sharedSubsByPhone,
+      sharedCustomerDetails,
       ferraIndex,
       myLastSeen,
+      myFavorites,
+      mySendActivity,
     ],
   );
 

@@ -49,6 +49,44 @@ export function buildFerraIndex(
   return { phoneToUid, cancelledPhones, phoneToStatus };
 }
 
+// Pull the full Ferra user record for a phone — used by the customer info
+// screen to show habit / subscription / acquisition details.
+export function getFerraUserByPhone(
+  phone: string,
+  habitUsers: Record<string, FerraUser> | FerraUser[] | null,
+  cancelledUsers: Record<string, FerraUser> | FerraUser[] | null,
+  index: FerraIndex,
+): FerraUser | null {
+  const norm = normalizeFerraPhone(phone);
+  if (!norm) return null;
+  const uid = index.phoneToUid[norm];
+  if (uid && habitUsers) {
+    if (Array.isArray(habitUsers)) {
+      const found = habitUsers.find(
+        (u) => u && (u.uid === uid || u.userId === uid),
+      );
+      if (found) return found;
+    } else if (habitUsers[uid]) {
+      return habitUsers[uid];
+    }
+  }
+  // Fall back to a phone-match scan across both maps.
+  const scan = (
+    src: Record<string, FerraUser> | FerraUser[] | null,
+  ): FerraUser | null => {
+    if (!src) return null;
+    const list = Array.isArray(src) ? src : Object.values(src);
+    for (const u of list) {
+      if (!u) continue;
+      if (normalizeFerraPhone(u.phone || u.phoneNumber || "") === norm) {
+        return u;
+      }
+    }
+    return null;
+  };
+  return scan(habitUsers) || scan(cancelledUsers);
+}
+
 export function getFerraDisplayName(
   phone: string,
   habitUsers: Record<string, FerraUser> | FerraUser[] | null,

@@ -10,4 +10,5 @@ export type RootStackParamList = {
   // ("dm:" + pairKey). ThreadScreen branches on the prefix to pick the
   // right Firebase path and rendering mode.
   Thread: { chatKey: string; initialTitle?: string };
+  CustomerInfo: { chatKey: string };
 };

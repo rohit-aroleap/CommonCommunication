@@ -26,7 +26,10 @@ import {
 import * as Clipboard from "expo-clipboard";
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
-import * as FileSystem from "expo-file-system";
+// expo-file-system 18+ split into "new" and "legacy" APIs. We still use the
+// legacy patterns (getInfoAsync with size, readAsStringAsync with base64),
+// so import from the legacy path to keep the existing call sites working.
+import * as FileSystem from "expo-file-system/legacy";
 import {
   limitToLast,
   onValue,
@@ -76,6 +79,7 @@ export function ThreadScreen({ route, navigation }: Props) {
     ferraIndex,
     contacts,
     markChatSeen,
+    bumpSendActivity,
   } = useAppData();
 
   // DM mode: the chatKey is "dm:" + pairKey, not a customer chatKey. Branch
@@ -134,21 +138,36 @@ export function ThreadScreen({ route, navigation }: Props) {
   useLayoutEffect(() => {
     navigation.setOptions({
       headerTitle: headerName,
-      // DM threads don't have an AI summary — there's no customer history
-      // to summarize. Skip the headerRight button entirely.
+      // DM threads skip all customer-only header tools (no person to look up,
+      // no chat to summarize). For customer chats: 👤 opens Customer Info
+      // (hidden for groups since there's no single customer), ✨ opens the
+      // AI summary modal.
       headerRight: isDm
         ? undefined
         : () => (
-            <TouchableOpacity
-              accessibilityLabel="Summarize"
-              onPress={() => setSummaryOpen(true)}
-              style={styles.headerBtn}
-            >
-              <Text style={styles.headerBtnTxt}>✨</Text>
-            </TouchableOpacity>
+            <View style={styles.headerRightWrap}>
+              {!isGroup && (
+                <TouchableOpacity
+                  accessibilityLabel="Customer details"
+                  onPress={() =>
+                    navigation.navigate("CustomerInfo", { chatKey })
+                  }
+                  style={styles.headerBtn}
+                >
+                  <Text style={styles.headerBtnTxt}>👤</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                accessibilityLabel="Summarize"
+                onPress={() => setSummaryOpen(true)}
+                style={styles.headerBtn}
+              >
+                <Text style={styles.headerBtnTxt}>✨</Text>
+              </TouchableOpacity>
+            </View>
           ),
     });
-  }, [navigation, headerName, isDm]);
+  }, [navigation, headerName, isDm, chatKey, isGroup]);
 
   // Live messages listener (last 300). DM messages live at /dms/{pairKey}
   // and use fromUid instead of a direction field — we translate at the
@@ -250,6 +269,7 @@ export function ThreadScreen({ route, navigation }: Props) {
       lastMsgDirection: "out",
       lastMsgSentByName: user.displayName || user.email,
     });
+    bumpSendActivity(chatKey);
     setComposer("");
     try {
       const res = await sendMessage({
@@ -330,7 +350,9 @@ export function ThreadScreen({ route, navigation }: Props) {
           mimeType = asset.mimeType || "application/octet-stream";
         }
         if (!uri) return;
-        const info = await FileSystem.getInfoAsync(uri, { size: true });
+        // SDK 53+ returns size by default; the explicit { size: true } option
+        // was removed. Read info.size as before if it's present.
+        const info = await FileSystem.getInfoAsync(uri);
         if (info.exists && info.size && info.size > MAX_MEDIA_BYTES) {
           Alert.alert("Too large", "Max attachment size is 25 MB.");
           return;
@@ -395,6 +417,7 @@ export function ThreadScreen({ route, navigation }: Props) {
         lastMsgDirection: "out",
         lastMsgSentByName: user.displayName || user.email,
       });
+      bumpSendActivity(chatKey);
       setComposer("");
       try {
         const res = await sendMessage({
@@ -670,6 +693,11 @@ const styles = StyleSheet.create({
     marginRight: 4,
   },
   headerBtnTxt: { color: "white", fontSize: 16 },
+  headerRightWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
 
   sheetBack: {
     flex: 1,

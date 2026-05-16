@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.095</title>
+<title>CommonCommunication v1.106</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -382,6 +382,7 @@
   .chat-row .preview {
     color: var(--muted); font-size: 14px; overflow: hidden;
     text-overflow: ellipsis; white-space: nowrap;
+    flex: 1; min-width: 0;
   }
   .chat-row .preview .who {
     color: var(--green-dark); font-weight: 500;
@@ -716,6 +717,38 @@
   .filter-pill[data-filter="Urgent"]:not(.active):hover { background: #fecaca; }
   .filter-pill[data-filter="Urgent"].active { background: #dc2626; color: white; }
   .filter-pill[data-filter="Urgent"].active:hover { background: #b91c1c; }
+  .filter-pill[data-filter="Favorites"]:not(.active) { background: #fff7e0; color: #8a6500; }
+  .filter-pill[data-filter="Favorites"]:not(.active):hover { background: #fff0c2; }
+  .filter-pill[data-filter="Favorites"].active { background: #f5b50a; color: white; }
+  .filter-pill[data-filter="Favorites"].active:hover { background: #d99c00; }
+
+  /* Star/Pin? button — sits inline at the right of the row preview. The
+     suggest variant only appears when the current user has been actively
+     sending to a non-favorited chat (3+ sends in 7 days). */
+  .star-btn {
+    background: none; border: none; padding: 2px 6px; cursor: pointer;
+    font-size: 18px; line-height: 1; color: #c2c8cc;
+    flex-shrink: 0; border-radius: 4px;
+  }
+  .star-btn:hover { background: var(--border); color: #f5b50a; }
+  .star-btn.on { color: #f5b50a; }
+  .star-btn.suggest {
+    font-size: 11px; font-weight: 600;
+    padding: 3px 8px;
+    background: #fff7e0; color: #8a6500;
+    border: 1px solid #f5b50a; border-radius: 10px;
+  }
+  .star-btn.suggest:hover { background: #fff0c2; }
+
+  /* Thin separator between the pinned block and "everyone else". */
+  .list-divider {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 16px;
+    background: #f6f7f8;
+    font-size: 10px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .5px;
+  }
+  .list-divider .line { flex: 1; height: 1px; background: var(--border); }
 
   /* Customer info drawer — collapsed to a 40px rail by default, expands to a
      full push-drawer when the rail's toggle button is clicked. */
@@ -1156,11 +1189,36 @@
     padding: 0 0 6px 4px;
   }
 
-  /* Second filter row — subscription stage tags, wraps to multiple lines */
+  /* Second filter row — subscription stage tags. Used to be a wrap-able row
+     of pills which ate ~4 lines of vertical space; collapsed to a single
+     dropdown so the chat list gets more room. */
   .tag-filter-row {
-    display: flex; gap: 5px; padding: 6px 12px;
-    background: var(--side); border-bottom: 1px solid var(--border);
-    flex-wrap: wrap;
+    padding: 6px 12px;
+    background: var(--side);
+    border-bottom: 1px solid var(--border);
+  }
+  .tag-filter-row select {
+    width: 100%;
+    height: 30px;
+    padding: 0 28px 0 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: white;
+    font-size: 12px;
+    color: var(--text);
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2354656f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+  }
+  .tag-filter-row select:focus { outline: none; border-color: var(--green); }
+  .tag-filter-row select.has-filter {
+    background-color: #d1fae5;
+    border-color: var(--green);
+    color: #065f46;
+    font-weight: 600;
   }
 
   /* Customer browser modal rows */
@@ -1219,7 +1277,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.095</div>
+    <div class="login-version">v1.106</div>
   </div>
 </div>
 
@@ -1227,7 +1285,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.095</span>
+    <span class="ver">v1.106</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -1538,7 +1596,7 @@ import {
   signInWithEmailAndPassword,
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 import {
-  getDatabase, ref, onValue, push, set, update, get, child, query, orderByChild, limitToLast,
+  getDatabase, ref, onValue, push, set, update, get, remove, child, query, orderByChild, limitToLast,
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
 
 // ====== CONFIG ======
@@ -1554,7 +1612,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.095";
+const APP_VERSION = "v1.106";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -1584,6 +1642,10 @@ let chatOpenTickets = {};         // chatKey -> [{id, ...}] of OPEN tickets (sor
 let teamUsers = {};               // uid -> { name, email, photoURL }
 let _openPopover = null;          // current ticket popover DOM element
 let myLastSeen = {};              // chatKey -> ts (ms): when I last opened the chat
+let myFavorites = {};             // chatKey -> true: per-user favorites/pins
+let mySendActivity = {};          // chatKey -> { count, lastAt }: my recent sends (for Pin? suggest)
+const SEND_SUGGEST_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const SEND_SUGGEST_MIN_COUNT = 3;
 let _baseTabTitle = "CommonCommunication";
 let contactsCache = {};   // phone (digits) -> { name, source, seenAt } from commonComm/contacts
 // Internal team-DM state. teamMembers is the email-keyed config with phones,
@@ -1804,6 +1866,8 @@ onAuthStateChanged(auth, async (user) => {
     listenDms();
     listenTickets();
     listenMyLastSeen();
+    listenMyFavorites();
+    listenMySendActivity();
     listenTemplates();
     pingWorker();
   } else {
@@ -2668,6 +2732,62 @@ function markChatSeen(chatKey) {
     rebuildDmRows();
     updateTeamUnreadBadge();
   }
+}
+
+// ====== PER-USER FAVORITES (pin to top of chat list) ======
+// Trainers see 400+ chats churning whenever any teammate replies. Favorites
+// + chats with my open ticket get pinned at the top so my conversations
+// don't get pushed out of sight. The auto-suggest below nudges a pin when
+// I've been actively messaging a chat I haven't pinned yet.
+function listenMyFavorites() {
+  if (!currentUser) return;
+  onValue(ref(db, `${ROOT}/userState/${currentUser.uid}/favorites`), (snap) => {
+    myFavorites = snap.val() || {};
+    renderChatList(lastChatRows);
+  });
+}
+function listenMySendActivity() {
+  if (!currentUser) return;
+  onValue(ref(db, `${ROOT}/userState/${currentUser.uid}/sendActivity`), (snap) => {
+    mySendActivity = snap.val() || {};
+    renderChatList(lastChatRows);
+  });
+}
+function isFavorite(chatKey) {
+  return !!myFavorites[chatKey];
+}
+function toggleFavorite(chatKey) {
+  if (!currentUser || !chatKey) return;
+  const path = `${ROOT}/userState/${currentUser.uid}/favorites/${chatKey}`;
+  if (myFavorites[chatKey]) {
+    delete myFavorites[chatKey]; // optimistic
+    remove(ref(db, path)).catch(() => {});
+  } else {
+    myFavorites[chatKey] = true; // optimistic
+    set(ref(db, path), true).catch(() => {});
+  }
+  renderChatList(lastChatRows);
+}
+function shouldSuggestPin(chatKey) {
+  if (isFavorite(chatKey)) return false;
+  const a = mySendActivity[chatKey];
+  if (!a || (a.count || 0) < SEND_SUGGEST_MIN_COUNT) return false;
+  return (Date.now() - (a.lastAt || 0)) <= SEND_SUGGEST_WINDOW_MS;
+}
+// Read-modify-write the per-chat send counter — bumped after every send.
+// Resets the count when the previous activity is older than the suggest
+// window so the threshold reflects *recent* engagement, not lifetime sends.
+async function bumpSendActivity(chatKey) {
+  if (!currentUser || !chatKey) return;
+  const path = `${ROOT}/userState/${currentUser.uid}/sendActivity/${chatKey}`;
+  try {
+    const snap = await get(ref(db, path));
+    const prev = snap.val();
+    const now = Date.now();
+    const within = prev && (now - (prev.lastAt || 0)) <= SEND_SUGGEST_WINDOW_MS;
+    const next = { count: within ? (prev.count || 0) + 1 : 1, lastAt: now };
+    await set(ref(db, path), next);
+  } catch (_e) { /* hint-only, swallow errors */ }
 }
 
 // Tab title: "(N) CommonCommunication" where N = chats with my-unread state.
@@ -3536,6 +3656,13 @@ function renderInfoDrawer() {
     user.trend14d != null && user.trend14d !== 0 ? `<span class="stat-chip"><b>${user.trend14d > 0 ? "+" : ""}${escapeHtml(String(user.trend14d))}</b>14d trend</span>` : "",
   ].filter(Boolean).join("");
 
+  // Customer details pulled from ferraSubscriptions/v1/customerDetails —
+  // synced by the ferra-sync worker from Ferra's subscription Cloud Function.
+  // Address is the headline value (trainers ask about delivery / install
+  // location constantly); the other fields enrich the Subscription block.
+  // MUST be declared above the Subscription block since subKv uses it.
+  const customerDetail = sharedSubs?.customerDetails?.[normalizeFerraPhone(phone)] || null;
+
   // Subscription
   const subKv = [
     user.subscriptionPlanTier  && ["Plan",    user.subscriptionPlanTier],
@@ -3547,6 +3674,14 @@ function renderInfoDrawer() {
     user.segment               && ["Segment", user.segment],
     user.subscriptionSource    && ["Source",  user.subscriptionSource],
   ].filter(Boolean);
+  // Append payment + email rows from the new customerDetails feed.
+  if (customerDetail?.email) subKv.push(["Email", customerDetail.email]);
+  if (customerDetail?.lastPaymentStatus) {
+    const date = customerDetail.lastPaymentDate
+      ? formatDateOnly(customerDetail.lastPaymentDate)
+      : null;
+    subKv.push(["Last payment", date ? `${customerDetail.lastPaymentStatus} · ${date}` : customerDetail.lastPaymentStatus]);
+  }
 
   // Last 7 days workouts — as a 7-box grid (green box w/ count if active,
   // purple arrow badge if progressive overload, gray box if no activity)
@@ -3592,6 +3727,15 @@ function renderInfoDrawer() {
     user.referrer   && ["Referrer", user.referrer],
   ].filter(Boolean);
 
+  // Address block — shown directly under the header so it's the first
+  // thing trainers see. Empty when customerDetails doesn't have it.
+  const addressHtml = customerDetail?.address
+    ? `<div class="info-section">
+         <h4>📍 Address</h4>
+         <div style="font-size:13px; line-height:1.4;">${escapeHtml(customerDetail.address)}</div>
+       </div>`
+    : "";
+
   infoBody.innerHTML = `
     <div class="info-section">
       <div style="font-size:16px; font-weight:600; margin-bottom:4px;">${escapeHtml(user.name || phone)}</div>
@@ -3599,6 +3743,8 @@ function renderInfoDrawer() {
       <div style="display:flex; gap:5px; flex-wrap:wrap; margin-bottom:5px;">${customerPill}${subPill}</div>
       ${stagePill ? `<div style="display:flex; gap:5px; flex-wrap:wrap;">${stagePill}</div>` : ""}
     </div>
+
+    ${addressHtml}
 
     <div class="info-section">
       <h4>Habit</h4>
@@ -3868,6 +4014,8 @@ function renderChatList(rows) {
       v = v.filter(r => (r.lastMsgAt || 0) >= liveCutoff);
     } else if (currentStatusFilter === "My tickets") {
       v = v.filter(r => myChatKeys.has(r.chatKey));
+    } else if (currentStatusFilter === "Favorites") {
+      v = v.filter(r => isFavorite(r.chatKey));
     } else if (currentStatusFilter === "Urgent") {
       // Only count "urgent" while the latest message is still inbound — once
       // we reply, the badge clears so the list doesn't keep blaring.
@@ -3896,11 +4044,39 @@ function renderChatList(rows) {
   );
 
   if (!filtered.length) {
-    chatList.innerHTML = `<div class="empty">No chats${q ? " match your search" : " yet. Click + to start one."}.</div>`;
+    const empty = q
+      ? "No chats match your search."
+      : (currentStatusFilter === "Favorites"
+          ? "No favorites yet — click ☆ on any chat to pin it here."
+          : "No chats yet. Click + to start one.");
+    chatList.innerHTML = `<div class="empty">${empty}</div>`;
     return;
   }
 
-  chatList.innerHTML = filtered.map(r => {
+  // Partition the filtered list so chats with my open ticket float to the
+  // very top, favorites (without my ticket) sit right below them, then
+  // everything else. We skip partitioning for filters whose meaning IS
+  // "show me this set" (My tickets, Favorites, Daily Groups) — the user
+  // already picked a focused view.
+  const partitionEligible =
+    currentStatusFilter !== "Favorites" &&
+    currentStatusFilter !== "My tickets" &&
+    currentStatusFilter !== "Daily Groups";
+  const ticketRows = [];
+  const favoriteRows = [];
+  const restRows = [];
+  if (partitionEligible) {
+    for (const r of filtered) {
+      if (myChatKeys.has(r.chatKey)) ticketRows.push(r);
+      else if (isFavorite(r.chatKey)) favoriteRows.push(r);
+      else restRows.push(r);
+    }
+  } else {
+    restRows.push(...filtered);
+  }
+  const pinnedRows = ticketRows.concat(favoriteRows);
+
+  const renderRow = (r) => {
     const isGroup = r.chatType === "group";
     const openTix = getOpenTicketsForChat(r.chatKey);
     const hasTicket = openTix.length > 0;
@@ -3942,7 +4118,12 @@ function renderChatList(rows) {
       if (r.triageIntent === "complaint") aiBadge += `<span class="ai-badge intent" title="AI: customer complaint">complaint</span>`;
       else if (r.triageIntent === "booking") aiBadge += `<span class="ai-badge intent" title="AI: booking/scheduling">booking</span>`;
     }
-    const rowClass = `chat-row${r.chatKey === currentChatId ? " active" : ""}${unread ? " unread" : ""}${urgentRowClass}`;
+    const favored = isFavorite(r.chatKey);
+    const suggest = !favored && shouldSuggestPin(r.chatKey);
+    const starHtml = suggest
+      ? `<button class="star-btn suggest" data-fav-key="${escapeHtml(r.chatKey)}" title="You've been messaging this chat — pin to favorites?">☆ Pin?</button>`
+      : `<button class="star-btn${favored ? " on" : ""}" data-fav-key="${escapeHtml(r.chatKey)}" title="${favored ? "Remove from favorites" : "Add to favorites"}">${favored ? "★" : "☆"}</button>`;
+    const rowClass = `chat-row${r.chatKey === currentChatId ? " active" : ""}${unread ? " unread" : ""}${urgentRowClass}${favored ? " favored" : ""}`;
     return `
     <div class="${rowClass}" data-key="${escapeHtml(r.chatKey)}">
       <div class="${avatarClass}" style="${avatarStyle}">${escapeHtml(initial)}${extraBadge}</div>
@@ -3953,15 +4134,30 @@ function renderChatList(rows) {
         </div>
         <div class="bottom">
           <span class="preview">${previewWho}${escapeHtml(r.preview)}</span>
+          ${starHtml}
         </div>
         ${assigneeTag}
         ${pillsHtml}
       </div>
     </div>`;
-  }).join("");
+  };
+
+  const pinnedHtml = pinnedRows.map(renderRow).join("");
+  const restHtml = restRows.map(renderRow).join("");
+  const dividerHtml = (pinnedRows.length > 0 && restRows.length > 0)
+    ? `<div class="list-divider"><span class="line"></span><span class="lbl">More chats</span><span class="line"></span></div>`
+    : "";
+  chatList.innerHTML = pinnedHtml + dividerHtml + restHtml;
 
   chatList.querySelectorAll(".chat-row").forEach(el => {
     el.onclick = () => openChat(el.dataset.key);
+  });
+  // Wire the star buttons — stopPropagation so we don't also open the chat.
+  chatList.querySelectorAll(".star-btn").forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      toggleFavorite(btn.dataset.favKey);
+    };
   });
 }
 
@@ -4095,7 +4291,7 @@ msgSearchModal.addEventListener("click", (e) => {
 
 // ====== STATUS FILTER PILLS ======
 const STATUS_FILTERS = [
-  "All", "Urgent", "Live", "My tickets", "ACTIVE", "CANCELLED", "Daily Groups"
+  "All", "Favorites", "Urgent", "Live", "My tickets", "ACTIVE", "CANCELLED", "Daily Groups"
 ];
 const LIVE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const DAILY_GROUP_PREFIX = "Daily Workout Ferra C";
@@ -4106,6 +4302,7 @@ let currentStatusFilter = "All";
 
 // Optional small subtitle under specific pills to hint what they mean
 const PILL_HINTS = {
+  "Favorites": "(your pinned)",
   "Urgent": "(AI flagged)",
   "Live": "(last 7 days)",
   "Daily Groups": "(workout cohorts)",
@@ -4238,17 +4435,22 @@ const TAG_FILTERS = [
 let currentTagFilter = "All";
 
 function renderTagPills(counts) {
-  tagFilterRow.innerHTML = TAG_FILTERS.map(t => {
+  // Render as a single <select> so the 15 tag options don't eat ~4 rows of
+  // vertical space. Selected option carries the count so the user still
+  // sees the size of their current filter without expanding the dropdown.
+  const optionsHtml = TAG_FILTERS.map(t => {
     const n = counts ? (counts[t] || 0) : null;
-    const suffix = n !== null ? ` (${n})` : "";
-    return `<button class="filter-pill ${t === currentTagFilter ? "active" : ""}" data-tag="${escapeHtml(t)}">${escapeHtml(t)}${suffix}</button>`;
+    const label = (t === "All" ? "All stages" : t) + (n !== null ? ` (${n})` : "");
+    const selected = t === currentTagFilter ? " selected" : "";
+    return `<option value="${escapeHtml(t)}"${selected}>${escapeHtml(label)}</option>`;
   }).join("");
-  tagFilterRow.querySelectorAll(".filter-pill").forEach(b => {
-    b.onclick = () => {
-      currentTagFilter = b.dataset.tag;
-      renderChatList(lastChatRows);
-    };
-  });
+  const hasFilter = currentTagFilter !== "All";
+  tagFilterRow.innerHTML = `<select id="tagSelect" class="${hasFilter ? "has-filter" : ""}">${optionsHtml}</select>`;
+  const sel = $("tagSelect");
+  sel.onchange = () => {
+    currentTagFilter = sel.value;
+    renderChatList(lastChatRows);
+  };
 }
 renderTagPills();
 
@@ -5544,6 +5746,7 @@ async function doSendMedia(media) {
     lastMsgDirection: "out",
     lastMsgSentByName: currentUser.displayName || currentUser.email,
   });
+  bumpSendActivity(currentChatId);
   composerInput.value = "";
   composerInput.style.height = "auto";
 
@@ -5595,6 +5798,7 @@ async function doSend() {
     lastMsgAt: ts, lastMsgPreview: text.slice(0,120),
     lastMsgDirection: "out", lastMsgSentByName: currentUser.displayName || currentUser.email,
   });
+  bumpSendActivity(currentChatId);
 
   composerInput.value = "";
   composerInput.style.height = "auto";

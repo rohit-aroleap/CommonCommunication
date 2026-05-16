@@ -150,6 +150,46 @@ export interface FerraUser {
   phone?: string;
   phoneNumber?: string;
   subscriptionStatus?: string;
+  // Additional fields that show up in ferraHabitData/v1/users.
+  // All optional so older / sparser records don't break the type check.
+  age?: number;
+  gender?: string;
+  habitScore?: number;
+  segment?: string;
+  tier?: number;
+  tierLabel?: string;
+  streak?: { active: boolean; days: number };
+  daysSinceLastSession?: number;
+  lastActiveDate?: string;
+  trend14d?: number;
+  subscriptionDocId?: string;
+  subscriptionPlanTier?: string;
+  subscriptionSource?: string;
+  subscriptionStartDate?: number;
+  userAgeDays?: number;
+  // Acquisition / UTM data — populated when the customer signed up via a
+  // paid ad. Optional because organic signups won't have these.
+  adSource?: string;
+  adMedium?: string;
+  adCampaign?: string;
+  adContent?: string;
+  adTerm?: string;
+  landingPage?: string;
+  referrer?: string;
+}
+
+// Subset of Ferra subscription columns the ferra-sync worker now writes
+// to ferraSubscriptions/v1/customerDetails/{phone}. Address is the headline
+// field — the rest is bonus context for the Customer Info panel.
+export interface CustomerDetail {
+  name?: string;
+  address?: string;
+  email?: string;
+  status?: string;
+  planTier?: string;
+  startDate?: string;
+  lastPaymentStatus?: string;
+  lastPaymentDate?: string;
 }
 
 export type StageBucket =
@@ -160,3 +200,11 @@ export type StageBucket =
   | "offboarding";
 
 export const DAILY_SENTINEL = "__daily_groups__";
+
+// Per-user send-activity ping stored at userState/<uid>/sendActivity/<chatKey>.
+// Powers the "Pin this?" suggestion when the current user has been actively
+// messaging a chat that isn't in their favorites yet.
+export interface SendActivity {
+  count: number;
+  lastAt: number;
+}
