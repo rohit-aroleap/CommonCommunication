@@ -529,11 +529,16 @@ export function ThreadScreen({ route, navigation }: Props) {
   // as onTranscribed, but instead of opening the note preview modal we append
   // the cleaned text to whatever's already in the composer. Trainer can edit
   // before tapping Send.
+  //
+  // For internal DMs we skip the Claude cleanup pass: that prompt is written
+  // for "trainer-private-notes about a customer" and refuses on casual
+  // teammate dictation. Internal-team voice → raw transcription, nothing
+  // else. Customer-bound composer keeps cleanup on as before.
   const onComposerTranscribed = useCallback(
     async (uri: string) => {
       setComposerTranscribing(true);
       try {
-        const text = await transcribeAudio(uri);
+        const text = await transcribeAudio(uri, { cleanup: !isDm });
         if (!text) {
           Alert.alert("No speech detected", "Try recording again, closer to the mic.");
           return;
@@ -563,7 +568,7 @@ export function ThreadScreen({ route, navigation }: Props) {
         setComposerTranscribing(false);
       }
     },
-    [navigation],
+    [navigation, isDm],
   );
 
   async function saveVoiceNote(text: string) {

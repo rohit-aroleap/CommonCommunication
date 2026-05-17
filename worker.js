@@ -1436,6 +1436,10 @@ Rules:
 // facts — so what the trainer sees is a clean note draft, not raw dictation.
 // Audio is NEVER sent to the customer; the frontend drops the result into
 // the notes-panel draft form.
+//
+// Body `cleanup: false` opts out of the Claude pass — used by the mobile
+// app's internal-DM composer mic, where the cleanup prompt (written for
+// trainer-notes-about-customer) is the wrong service.
 async function handleTranscribe(request, env) {
   if (!env.AI) {
     return json({ error: "workers_ai_not_bound", hint: "Add [ai] binding=\"AI\" in wrangler.toml and redeploy" }, 500);
@@ -1445,6 +1449,7 @@ async function handleTranscribe(request, env) {
   if (!audioB64 || typeof audioB64 !== "string") {
     return json({ error: "missing audio (base64 string)" }, 400);
   }
+  const cleanup = body?.cleanup !== false;
 
   // (1) Whisper transcription
   let rawText = "";
@@ -1458,6 +1463,10 @@ async function handleTranscribe(request, env) {
   }
   if (!rawText) {
     return json({ text: "", raw: "", cleaned: false, reason: "no_speech" });
+  }
+
+  if (!cleanup) {
+    return json({ text: rawText, raw: rawText, cleaned: false, reason: "cleanup_disabled" });
   }
 
   // (2) Claude cleanup pass — delegated to the shared helper so /cleanup

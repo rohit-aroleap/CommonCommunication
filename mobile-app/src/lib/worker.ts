@@ -129,22 +129,30 @@ export async function registerPushToken(
 // picks the right path based on whether a Groq key is set, and only reads
 // the file as base64 on the legacy path (Groq streams the file via fetch's
 // multipart, no base64 round-trip needed).
+//
+// `cleanup` (default true) controls whether the Claude tidy-up pass runs
+// after Whisper. The cleanup prompt is written for trainer-private-notes-
+// about-customer, so it's the wrong service for internal team DMs where
+// the trainer just wants a raw dictation. ThreadScreen's composer mic
+// passes `cleanup: false` for DM threads.
 export async function transcribeAudio(
   uri: string,
-  mimeType?: string,
+  options?: { mimeType?: string; cleanup?: boolean },
 ): Promise<string> {
+  const cleanup = options?.cleanup ?? true;
   const { getGroqKey } = await import("@/lib/groqKey");
   const groqKey = await getGroqKey();
   if (groqKey) {
-    const raw = await transcribeWithGroq(uri, groqKey, mimeType);
+    const raw = await transcribeWithGroq(uri, groqKey, options?.mimeType);
     if (!raw) return "";
+    if (!cleanup) return raw;
     return await cleanupTranscript(raw);
   }
   // Legacy path: base64-encode the file for the Worker's JSON-body endpoint.
   const audioB64 = await FileSystem.readAsStringAsync(uri, {
     encoding: FileSystem.EncodingType.Base64,
   });
-  return await transcribeViaWorker(audioB64);
+  return await transcribeViaWorker(audioB64, cleanup);
 }
 
 // Upload the recorded file straight to Groq's OpenAI-compatible Whisper.
@@ -211,12 +219,16 @@ async function cleanupTranscript(rawText: string): Promise<string> {
 
 // Legacy path — Workers-AI Whisper on the Cloudflare side, with the Claude
 // cleanup already baked in. Kept so new devices work before the user sets
-// their personal Groq key.
-async function transcribeViaWorker(audioB64: string): Promise<string> {
+// their personal Groq key. Passing `cleanup: false` skips the Claude pass
+// on the worker so internal-DM dictation is returned raw.
+async function transcribeViaWorker(
+  audioB64: string,
+  cleanup: boolean,
+): Promise<string> {
   const res = await fetch(`${WORKER_URL}/transcribe`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ audio: audioB64 }),
+    body: JSON.stringify({ audio: audioB64, cleanup }),
   });
   const j = (await res.json()) as { text?: string; error?: string };
   if (!res.ok || j.error) {
