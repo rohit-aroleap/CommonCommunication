@@ -1,16 +1,18 @@
-// Thin JS wrapper over the WidgetUpdater Expo native module. The module
-// itself only ships on Android — iOS is a separate WidgetKit + App Groups
-// effort. Callers don't need to platform-branch; this helper no-ops on
-// iOS and swallows errors if the native module didn't ship with the
-// current binary (e.g. user is running an older APK that pre-dates the
-// widget feature).
+// Thin JS wrapper over the WidgetUpdater Expo native module. Available
+// on both Android (v1.139) and iOS (v1.140). Callers don't need to
+// platform-branch; this helper picks the right native implementation
+// at runtime and silently swallows errors if the module didn't ship
+// with the current binary (e.g. user is on an older APK / TestFlight
+// build that pre-dates widget support).
 //
 // Wire: useWidgetSync hook reads useAppData() unread counts and calls
-// setWidgetUnreadCounts whenever they change. The native module persists
-// them to SharedPreferences and broadcasts AppWidgetManager.ACTION_APPWIDGET_UPDATE,
-// so the home-screen tiles redraw with fresh dot visibility within a second.
+// setWidgetUnreadCounts whenever they change. The Android module
+// persists counts to SharedPreferences and broadcasts an
+// ACTION_APPWIDGET_UPDATE; the iOS module persists to an App Group
+// UserDefaults suite and calls WidgetCenter.shared.reloadAllTimelines().
+// Either way the home-screen widget redraws with fresh dot visibility
+// within a second.
 
-import { Platform } from "react-native";
 import { requireOptionalNativeModule } from "expo-modules-core";
 
 interface WidgetUpdaterModule {
@@ -18,8 +20,9 @@ interface WidgetUpdaterModule {
 }
 
 // requireOptionalNativeModule returns null when the native module isn't
-// linked into the binary (iOS in our case, or pre-v1.139 Android builds).
-// That keeps the JS bundle running rather than crashing on import.
+// linked into the binary (older builds, or platforms the module config
+// excluded). That keeps the JS bundle running rather than crashing on
+// import.
 const WidgetUpdater =
   requireOptionalNativeModule<WidgetUpdaterModule>("WidgetUpdater");
 
@@ -28,7 +31,6 @@ export function setWidgetUnreadCounts(
   tickets: number,
   team: number,
 ): void {
-  if (Platform.OS !== "android") return;
   if (!WidgetUpdater) return;
   try {
     // Clamp to non-negative integers — RN's bridge round-trip is happier

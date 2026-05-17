@@ -1,27 +1,18 @@
-// Expo config plugin that wires the home-screen widget into the native
-// projects produced by `expo prebuild`. iOS and Android each need
-// different glue:
+// Expo config plugin for the Android side of the home-screen widget.
+// iOS has moved to @bacons/apple-targets (see app.config.js plugins
+// list + targets/CommonCommWidget/) — that plugin creates the Xcode
+// Widget Extension target during prebuild, eliminating the manual
+// "open Xcode, add target" step the iOS path used to need.
 //
-//   • Android: copy the layout/xml/drawable/strings resources into
-//     android/app/src/main/res/, copy the Kotlin provider into the app
-//     package directory, and add a <receiver> entry to
-//     AndroidManifest.xml. This is enough for AGP to bundle the widget
-//     into the APK and the launcher to discover it.
+// What this file still does (Android only):
+//   • Copy widget/android/res/* into android/app/src/main/res/
+//   • Copy widget/android/kotlin/* into the app's package dir
+//   • Patch AndroidManifest.xml with the AppWidgetProvider <receiver>
 //
-//   • iOS: copying the Swift sources is the easy part. Registering a new
-//     "Widget Extension" target inside the Xcode .pbxproj is the hard
-//     part — it requires creating a build target, a build phase, a copy
-//     files phase that embeds the .appex into the main app, plus a
-//     matching scheme. Doing that reliably from a config plugin is a
-//     substantial chunk of code; for now we copy the source files into
-//     the prebuilt ios/ tree under a `CommonCommWidget/` folder and
-//     leave a README pointing the developer at the manual Xcode step.
-//     See widget/README.md for the exact clicks.
-//
-// Run `npx expo prebuild --clean` after editing this file or any of the
-// files under widget/ to see the changes reflected in the native
-// projects. EAS Build also runs prebuild as the first step, so committed
-// changes here propagate into release builds automatically.
+// Run `npx expo prebuild --clean` after editing this file or any of
+// the files under widget/android/ to see the changes reflected in the
+// native projects. EAS Build also runs prebuild as the first step, so
+// committed changes here propagate into release builds automatically.
 
 const { withAndroidManifest, withDangerousMod } = require("expo/config-plugins");
 const fs = require("fs");
@@ -115,22 +106,8 @@ function withAndroidWidgetManifest(config) {
   });
 }
 
-function withIosWidgetSources(config) {
-  return withDangerousMod(config, [
-    "ios",
-    async (cfg) => {
-      const projectRoot = cfg.modRequest.platformProjectRoot;
-      const dest = path.join(projectRoot, "CommonCommWidget");
-      copyDir(path.join(WIDGET_SRC, "ios"), dest);
-      // Xcode-target registration is still manual — see widget/README.md.
-      return cfg;
-    },
-  ]);
-}
-
 module.exports = function withWidget(config) {
   config = withAndroidWidgetFiles(config);
   config = withAndroidWidgetManifest(config);
-  config = withIosWidgetSources(config);
   return config;
 };

@@ -10,6 +10,7 @@
     "lint:tsc": "tsc --noEmit"
   },
   "dependencies": {
+    "@bacons/apple-targets": "^4.0.7",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-navigation/bottom-tabs": "^6.6.1",
     "@react-navigation/native": "^6.1.18",
@@ -49,7 +50,9 @@
   "expo": {
     "autolinking": {
       "_comment": "Discover local Expo modules under ./modules/. Today: widget-updater pushes Android home-screen widget dot visibility.",
-      "searchPaths": ["./modules"]
+      "searchPaths": [
+        "./modules"
+      ]
     }
   },
   "jest": {

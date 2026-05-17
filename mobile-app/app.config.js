@@ -57,6 +57,23 @@ module.exports = ({ config }) => ({
       NSMicrophoneUsageDescription:
         "Record a voice note to send to a customer in a WhatsApp chat.",
     },
+    // App Group entitlement so the host app and the WidgetKit extension
+    // can share a UserDefaults suite. The widget reads the three unread
+    // counts from this group; the WidgetUpdater Expo module writes them
+    // every time the in-app counts change. The matching capability MUST
+    // ALSO be enabled on the widget target — see
+    // targets/CommonCommWidget/expo-target.config.js.
+    //
+    // Apple Developer portal setup (one-time, manual): Identifiers →
+    // App Groups → register `group.com.aroleap.commoncomm`, then add it
+    // as a capability to BOTH com.aroleap.commoncomm AND
+    // com.aroleap.commoncomm.CommonCommWidget App IDs. Without this,
+    // code signing fails during EAS Build.
+    entitlements: {
+      "com.apple.security.application-groups": [
+        "group.com.aroleap.commoncomm",
+      ],
+    },
   },
   android: {
     package: "com.aroleap.commoncomm",
@@ -94,12 +111,18 @@ module.exports = ({ config }) => ({
     ["expo-document-picker", { iCloudContainerEnvironment: "Production" }],
     ["expo-notifications", { color: "#008069" }],
     "expo-updates",
-    // Home-screen widget (Chats / My tickets / Team). The plugin copies
-    // Kotlin + Android resources into the prebuilt android/ tree and
-    // patches AndroidManifest.xml with the AppWidgetProvider receiver.
-    // For iOS it copies the Swift sources into ios/CommonCommWidget/;
-    // the Xcode widget-extension target itself still needs to be added
-    // manually once (see mobile-app/widget/README.md).
+    // Home-screen widget plumbing — split across two plugins:
+    //  • @bacons/apple-targets discovers every directory under targets/
+    //    that has an expo-target.config.js, creates the matching Xcode
+    //    target during prebuild (Widget Extension in our case), and
+    //    embeds it into the host app. Eliminates the previous "open
+    //    Xcode and click Add Target" manual step.
+    //  • with-widget.js handles the Android side only now — copies the
+    //    Kotlin provider + res/ into the prebuilt android/ tree and
+    //    patches AndroidManifest.xml with the AppWidgetProvider
+    //    receiver. The iOS file-copy that used to live in this plugin
+    //    has been retired; sources live in targets/CommonCommWidget/.
+    "@bacons/apple-targets",
     "./plugins/with-widget.js",
   ],
   extra: {
