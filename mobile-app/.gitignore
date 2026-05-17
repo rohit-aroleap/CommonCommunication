@@ -7,6 +7,13 @@ web-build/
 .env.local
 android/
 ios/
+# Hand-written widget source lives under widget/{ios,android}/ and must
+# be tracked — the patterns above would otherwise match those subtrees
+# (gitignore matches at any depth without a leading slash).
+!widget/ios/
+!widget/android/
+!widget/ios/**
+!widget/android/**
 .DS_Store
 coverage/
 GoogleService-Info.plist
