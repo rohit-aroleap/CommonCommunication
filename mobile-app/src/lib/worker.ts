@@ -131,17 +131,27 @@ export async function registerPushToken(
 // multipart, no base64 round-trip needed).
 //
 // `cleanup` (default true) controls whether the Claude tidy-up pass runs
-// after Whisper. The cleanup prompt is written for trainer-private-notes-
-// about-customer, so it's the wrong service for internal team DMs where
-// the trainer just wants a raw dictation. ThreadScreen's composer mic
-// passes `cleanup: false` for DM threads.
+// after Whisper. Two layers can disable it:
+//   1. The caller — e.g. the composer mic always passes `cleanup: false`
+//      because it's drafting an outgoing message, not a private note.
+//   2. The user — the Settings screen exposes a "Clean up transcripts"
+//      toggle stored under cc.voiceCleanup. When off, no path cleans up,
+//      regardless of what the caller asked for.
+// Whichever layer is more restrictive wins.
 export async function transcribeAudio(
   uri: string,
   options?: { mimeType?: string; cleanup?: boolean },
 ): Promise<string> {
-  const cleanup = options?.cleanup ?? true;
-  const { getGroqKey } = await import("@/lib/groqKey");
-  const groqKey = await getGroqKey();
+  const callerCleanup = options?.cleanup ?? true;
+  const [{ getGroqKey }, { getVoiceCleanupEnabled }] = await Promise.all([
+    import("@/lib/groqKey"),
+    import("@/lib/voiceCleanupPref"),
+  ]);
+  const [groqKey, prefAllowsCleanup] = await Promise.all([
+    getGroqKey(),
+    getVoiceCleanupEnabled(),
+  ]);
+  const cleanup = callerCleanup && prefAllowsCleanup;
   if (groqKey) {
     const raw = await transcribeWithGroq(uri, groqKey, options?.mimeType);
     if (!raw) return "";
