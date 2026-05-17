@@ -249,6 +249,22 @@ async function handleWebhook(request, env) {
 
   if (!msg) return json({ ok: true, skipped: "no message" });
 
+  // Tenant guard: a Periskope webhook carries the org's own WhatsApp number
+  // (the account the event belongs to). If it doesn't match PERISKOPE_PHONE,
+  // some OTHER account is posting to our endpoint — drop the message so it
+  // never lands in /commonComm/chats and leaks across accounts.
+  const expectedPhone = digitsOnly(env.PERISKOPE_PHONE);
+  const accountPhone = extractAccountPhone(payload, msg);
+  if (expectedPhone && accountPhone && accountPhone !== expectedPhone) {
+    await fbPut(env, `${ROOT}/_debug/webhook_rejected/${debugKey}`, {
+      reason: "account_phone_mismatch",
+      expected: expectedPhone,
+      got: accountPhone,
+      receivedAt: Date.now(),
+    });
+    return json({ ok: true, rejected: "account_phone_mismatch" });
+  }
+
   const rawChatId = msg.chat_id || msg.chatId;
   if (!rawChatId) return json({ ok: true, skipped: "no chat_id" });
   const chatId = String(rawChatId);
@@ -1720,6 +1736,35 @@ function phoneToChatId(phone) {
 }
 function chatIdToPhone(chatId) {
   return String(chatId || "").split("@")[0];
+}
+function digitsOnly(v) {
+  return String(v || "").replace(/\D/g, "");
+}
+// Periskope's webhook envelope isn't perfectly stable, so look in a few
+// plausible spots for the org's own phone number. Returns digits-only, or
+// "" if nothing recognizable was found (in which case the guard treats the
+// message as unverified rather than rejecting — see handleWebhook).
+function extractAccountPhone(payload, msg) {
+  const candidates = [
+    payload?.phone,
+    payload?.account_phone,
+    payload?.business_phone,
+    payload?.to,
+    payload?.data?.phone,
+    payload?.data?.account_phone,
+    payload?.data?.business_phone,
+    payload?.data?.to,
+    msg?.account_phone,
+    msg?.business_phone,
+    msg?.to,
+    msg?.to_phone,
+  ];
+  for (const c of candidates) {
+    if (!c) continue;
+    const d = digitsOnly(String(c).split("@")[0]);
+    if (d) return d;
+  }
+  return "";
 }
 // Periskope sends timestamps as ISO strings ("2026-05-14T08:17:49+00:00").
 // Older code paths might send unix seconds or millis. Handle all three.
