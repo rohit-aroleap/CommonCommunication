@@ -34,6 +34,29 @@ import { SettingsScreen } from "@/screens/SettingsScreen";
 import { registerForPushAsync } from "@/notifications/registerForPush";
 import { ThemeProvider, useTheme } from "@/theme";
 import type { RootStackParamList } from "@/screens/types";
+import type { LinkingOptions } from "@react-navigation/native";
+
+// Deep links from the home-screen widget land here. The widget opens URLs
+// like `commoncomm://chats`, `commoncomm://tickets`, or `commoncomm://team`;
+// React Navigation resolves the path to the right tab inside the Tabs
+// navigator. Paths are kept lowercase to match the iOS widgetURL strings.
+const deepLinking: LinkingOptions<RootStackParamList> = {
+  prefixes: ["commoncomm://"],
+  config: {
+    screens: {
+      Tabs: {
+        screens: {
+          Chats: "chats",
+          Tickets: "tickets",
+          Team: "team",
+        },
+      },
+      Thread: "thread/:chatKey",
+      CustomerInfo: "customer/:chatKey",
+      Settings: "settings",
+    },
+  },
+};
 
 const Tabs = createBottomTabNavigator();
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -202,7 +225,7 @@ function PostAuth() {
   }, [user]);
   return (
     <AppDataProvider>
-      <NavigationContainer>
+      <NavigationContainer linking={deepLinking}>
         <Stack.Navigator
           screenOptions={{
             headerStyle: { backgroundColor: colors.header },

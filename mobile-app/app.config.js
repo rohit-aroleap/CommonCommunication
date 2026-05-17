@@ -94,6 +94,13 @@ module.exports = ({ config }) => ({
     ["expo-document-picker", { iCloudContainerEnvironment: "Production" }],
     ["expo-notifications", { color: "#008069" }],
     "expo-updates",
+    // Home-screen widget (Chats / My tickets / Team). The plugin copies
+    // Kotlin + Android resources into the prebuilt android/ tree and
+    // patches AndroidManifest.xml with the AppWidgetProvider receiver.
+    // For iOS it copies the Swift sources into ios/CommonCommWidget/;
+    // the Xcode widget-extension target itself still needs to be added
+    // manually once (see mobile-app/widget/README.md).
+    "./plugins/with-widget.js",
   ],
   extra: {
     eas: { projectId: e.EAS_PROJECT_ID ?? "" },
