@@ -1,0 +1,1961 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#008069" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="CommonComm" />
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
+<title>CommonCommunication</title>
+<style>
+  :root {
+    --green: #00a884;
+    --green-dark: #008069;
+    --bg: #efeae2;
+    --panel: #ffffff;
+    --header: #008069;
+    --header-text: #ffffff;
+    --bubble-out: #d9fdd3;
+    --bubble-in: #ffffff;
+    --text: #111b21;
+    --muted: #667781;
+    --border: #e9edef;
+    --row-hover: #f5f6f6;
+    --red: #ef4444;
+    --red-dark: #b91c1c;
+    --safe-bot: env(safe-area-inset-bottom, 0px);
+    --safe-top: env(safe-area-inset-top, 0px);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; margin: 0; overscroll-behavior-y: none; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #d1d7db;
+    color: var(--text);
+    font-size: 15px;
+    line-height: 1.35;
+    -webkit-font-smoothing: antialiased;
+  }
+  button { font-family: inherit; }
+
+  /* ---------- Login ---------- */
+  #loginScreen {
+    position: fixed; inset: 0; z-index: 100;
+    background: linear-gradient(180deg, #00a884 0%, #008069 100%);
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+  }
+  #loginScreen.hidden { display: none; }
+  .login-card {
+    background: white; border-radius: 16px; padding: 36px 28px;
+    width: 100%; max-width: 360px; text-align: center;
+    box-shadow: 0 20px 60px rgba(0,0,0,.2);
+  }
+  .login-card h1 { margin: 0 0 6px; font-size: 20px; color: #111b21; }
+  .login-card .sub { color: #667781; font-size: 13px; margin-bottom: 24px; }
+  .login-btn {
+    background: white; border: 1px solid #dadce0; border-radius: 8px;
+    padding: 12px 20px; font-size: 14px; font-weight: 500;
+    cursor: pointer; display: inline-flex; align-items: center; gap: 10px;
+    width: 100%; justify-content: center;
+  }
+  .login-btn:active { background: #f1f3f4; }
+  .login-btn svg { width: 18px; height: 18px; }
+  .login-err { color: #b91c1c; font-size: 12px; margin-top: 12px; min-height: 16px; }
+
+  /* ---------- App shell ---------- */
+  #app {
+    display: none;
+    height: 100vh; height: 100dvh;
+    flex-direction: column;
+    background: var(--panel);
+  }
+  #app.visible { display: flex; }
+
+  .app-header {
+    background: var(--header); color: var(--header-text);
+    padding-top: var(--safe-top);
+    flex-shrink: 0;
+  }
+  .app-header .row {
+    display: flex; align-items: center; padding: 10px 14px; gap: 10px;
+    min-height: 48px;
+  }
+  .app-header .title { font-size: 17px; font-weight: 600; flex: 1; }
+  .app-header .user {
+    display: flex; align-items: center; gap: 8px; font-size: 12px; opacity: .9;
+  }
+  .app-header .user img {
+    width: 26px; height: 26px; border-radius: 50%;
+  }
+  .app-header .logout-btn {
+    background: rgba(255,255,255,.18); border: none; color: white;
+    padding: 6px 10px; border-radius: 6px; font-size: 12px;
+    cursor: pointer;
+  }
+
+  /* ---------- Main panel (tabs container) ---------- */
+  #listView { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  #listView.hidden { display: none; }
+
+  .filter-bar {
+    background: white; border-bottom: 1px solid var(--border);
+    padding: 8px 12px; display: flex; flex-direction: column; gap: 8px;
+    flex-shrink: 0;
+  }
+  .search-wrap {
+    position: relative;
+    background: #f0f2f5; border-radius: 22px;
+    display: flex; align-items: center; padding: 0 12px;
+  }
+  .search-wrap .icn { color: var(--muted); font-size: 14px; margin-right: 8px; }
+  .search-wrap input {
+    flex: 1; border: none; outline: none; background: transparent;
+    padding: 10px 0; font-size: 15px;
+  }
+  .search-wrap .clear {
+    background: none; border: none; color: var(--muted); font-size: 18px;
+    padding: 4px 6px; cursor: pointer; display: none;
+  }
+  .search-wrap.has-text .clear { display: block; }
+
+  .filter-row {
+    display: flex; gap: 8px;
+  }
+  .filter-select {
+    flex: 1;
+    appearance: none; -webkit-appearance: none;
+    background: #f0f2f5
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%23667781' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E")
+      no-repeat right 12px center;
+    border: 1px solid transparent; border-radius: 8px;
+    padding: 8px 28px 8px 12px;
+    font-size: 13px; color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    min-width: 0;
+  }
+  .filter-select:focus { outline: 2px solid var(--green); border-color: transparent; }
+  .filter-select.active {
+    background-color: #d1f4cc;
+    border-color: var(--green);
+    color: var(--green-dark); font-weight: 500;
+  }
+
+  /* ---------- Chat list ---------- */
+  #scrollList {
+    flex: 1; overflow-y: auto; overscroll-behavior: contain;
+    background: var(--panel);
+    -webkit-overflow-scrolling: touch;
+  }
+  .empty-state {
+    padding: 60px 24px; text-align: center; color: var(--muted);
+    font-size: 14px;
+  }
+  .row {
+    display: flex; align-items: center; padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer; gap: 12px;
+    min-height: 64px;
+  }
+  .row:active { background: var(--row-hover); }
+  .avatar {
+    width: 44px; height: 44px; border-radius: 50%;
+    background: var(--green-dark); color: white;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; font-weight: 500;
+    flex-shrink: 0;
+  }
+  .avatar.has-ticket { background: var(--red); }
+  .avatar.is-group { background: #6b7280; }
+  .row .meta-col {
+    flex: 1; min-width: 0;
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .row .top {
+    display: flex; align-items: baseline; gap: 8px;
+  }
+  .row .name {
+    flex: 1; font-size: 15px; font-weight: 500;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--text);
+  }
+  .row .time {
+    font-size: 11px; color: var(--muted); flex-shrink: 0;
+  }
+  .row .preview {
+    font-size: 13px; color: var(--muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    display: flex; align-items: center; gap: 4px;
+  }
+  .row .preview .who {
+    color: var(--green-dark); font-weight: 500;
+  }
+  .row .badges {
+    display: flex; gap: 4px; flex-shrink: 0; align-items: center;
+  }
+  .pill {
+    font-size: 10px; padding: 2px 6px; border-radius: 10px;
+    background: #e9edef; color: #54656f; font-weight: 500;
+    white-space: nowrap;
+  }
+  .pill.active { background: #d1fae5; color: #065f46; }
+  .pill.cancelled { background: #fee2e2; color: #991b1b; }
+  .pill.paused { background: #fef3c7; color: #92400e; }
+  .pill.setup { background: #fef3c7; color: #92400e; }
+  .pill.onboarding { background: #ffedd5; color: #9a3412; }
+  .pill.sa { background: #dbeafe; color: #1e40af; }
+  .pill.offboarding { background: #fee2e2; color: #991b1b; }
+  .ticket-dot {
+    background: var(--red); color: white;
+    border-radius: 10px; padding: 2px 7px; font-size: 11px; font-weight: 600;
+  }
+
+  /* ---------- Tickets list rows ---------- */
+  .ticket-row {
+    padding: 12px 14px; border-bottom: 1px solid var(--border);
+    cursor: pointer;
+  }
+  .ticket-row:active { background: var(--row-hover); }
+  .ticket-row .tt-top {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+    margin-bottom: 4px;
+  }
+  .ticket-row .tt-title {
+    font-size: 15px; font-weight: 500;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    flex: 1;
+  }
+  .ticket-row .tt-time {
+    font-size: 11px; color: var(--muted); flex-shrink: 0;
+  }
+  .ticket-row .tt-customer {
+    font-size: 13px; color: var(--green-dark); font-weight: 500;
+    margin-bottom: 2px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .ticket-row .tt-from {
+    font-size: 12px; color: var(--muted);
+  }
+
+  /* ---------- Bottom tab nav ---------- */
+  .tab-nav {
+    display: flex; background: white;
+    border-top: 1px solid var(--border);
+    padding-bottom: var(--safe-bot);
+    flex-shrink: 0;
+  }
+  .tab-nav button {
+    flex: 1; background: none; border: none;
+    padding: 10px 4px 8px; cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    color: var(--muted); font-size: 11px;
+    border-top: 3px solid transparent;
+    margin-top: -1px;
+  }
+  .tab-nav button.active {
+    color: var(--green-dark);
+    border-top-color: var(--green-dark);
+  }
+  .tab-nav .icon { font-size: 22px; line-height: 1; }
+  .tab-nav .count {
+    position: absolute; top: 4px; right: calc(50% - 24px);
+    background: var(--red); color: white;
+    font-size: 10px; font-weight: 600;
+    padding: 1px 6px; border-radius: 9px;
+    min-width: 18px; text-align: center;
+  }
+  .tab-nav button { position: relative; }
+
+  /* ---------- Thread view ---------- */
+  #threadView {
+    display: none;
+    flex: 1; min-height: 0;
+    flex-direction: column;
+    background: var(--bg);
+  }
+  #threadView.visible { display: flex; }
+  .thread-header {
+    background: var(--header); color: white;
+    padding-top: var(--safe-top);
+    flex-shrink: 0;
+  }
+  .thread-header .row-inner {
+    display: flex; align-items: center; padding: 8px 8px 8px 4px; gap: 10px;
+    min-height: 56px;
+  }
+  .back-btn {
+    background: none; border: none; color: white; font-size: 24px;
+    padding: 8px 10px; cursor: pointer; line-height: 1;
+  }
+  .thread-avatar {
+    width: 38px; height: 38px; border-radius: 50%;
+    background: rgba(255,255,255,.2);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; font-weight: 500;
+    flex-shrink: 0;
+  }
+  .thread-meta { flex: 1; min-width: 0; }
+  .thread-meta .name {
+    font-size: 16px; font-weight: 500;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .thread-meta .sub {
+    font-size: 12px; opacity: .8;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  #messagesEl {
+    flex: 1; overflow-y: auto; padding: 12px 8px;
+    background: var(--bg);
+    -webkit-overflow-scrolling: touch;
+  }
+  .day-divider {
+    text-align: center; margin: 12px 0;
+    font-size: 11px; color: var(--muted);
+  }
+  .day-divider span {
+    background: #e1f2fb; padding: 4px 10px; border-radius: 6px;
+    box-shadow: 0 1px 0 rgba(0,0,0,.04);
+  }
+  .msg {
+    display: flex; margin-bottom: 4px;
+  }
+  .msg.out { justify-content: flex-end; }
+  .msg.in  { justify-content: flex-start; }
+  .bubble {
+    max-width: 78%; padding: 6px 9px 5px;
+    border-radius: 7px;
+    box-shadow: 0 1px 0.5px rgba(11,20,26,.13);
+    font-size: 14.5px;
+    word-wrap: break-word; overflow-wrap: anywhere;
+    position: relative;
+  }
+  .bubble.in  { background: var(--bubble-in); border-top-left-radius: 0; }
+  .bubble.out { background: var(--bubble-out); border-top-right-radius: 0; }
+  .bubble .sender-tag {
+    font-size: 11.5px; font-weight: 500; color: var(--green-dark);
+    margin-bottom: 2px;
+  }
+  .bubble .text { white-space: pre-wrap; }
+  .bubble .footer {
+    display: flex; align-items: center; justify-content: flex-end;
+    gap: 4px; margin-top: 2px;
+    font-size: 10.5px; color: var(--muted);
+  }
+  .bubble .status.sending { color: var(--muted); }
+  .bubble .status.sent { color: #53bdeb; }
+  .bubble .status.failed { color: var(--red); }
+  .bubble .media-img {
+    max-width: 240px; max-height: 280px;
+    display: block; border-radius: 4px; margin-bottom: 4px;
+    background: rgba(0,0,0,.04);
+  }
+  .bubble .media-doc {
+    display: flex; align-items: center; gap: 8px;
+    background: rgba(0,0,0,.04); padding: 8px 10px; border-radius: 6px;
+    margin-bottom: 4px; font-size: 13px;
+  }
+  .bubble .media-doc a { color: inherit; text-decoration: none; }
+  .empty-thread {
+    text-align: center; color: var(--muted); padding: 40px 24px;
+    font-size: 13px;
+  }
+
+  .composer {
+    background: var(--header); padding: 6px 8px;
+    padding-bottom: calc(6px + var(--safe-bot));
+    display: flex; align-items: flex-end; gap: 6px;
+    flex-shrink: 0;
+  }
+  .composer textarea {
+    flex: 1;
+    background: white; border: none; outline: none;
+    border-radius: 22px; padding: 10px 14px;
+    font-size: 15px; line-height: 1.3;
+    resize: none; min-height: 40px; max-height: 120px;
+    font-family: inherit;
+  }
+  .composer .send-btn {
+    width: 44px; height: 44px; border-radius: 50%;
+    background: var(--green); color: white; border: none;
+    font-size: 20px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .composer .send-btn:disabled { background: #8fb3a8; cursor: default; }
+  .composer .send-btn:active { transform: scale(0.95); }
+  .composer .attach-btn {
+    width: 40px; height: 40px; border-radius: 50%;
+    background: rgba(255,255,255,.18); color: white; border: none;
+    font-size: 20px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .composer .attach-btn:active { transform: scale(0.95); }
+  .composer .attach-btn.busy { opacity: .5; pointer-events: none; }
+
+  .thread-header .header-actions {
+    display: flex; gap: 4px; align-items: center; padding-right: 4px;
+  }
+  .thread-header .icon-btn {
+    background: rgba(255,255,255,.18); border: none; color: white;
+    width: 36px; height: 36px; border-radius: 50%;
+    font-size: 16px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .thread-header .icon-btn:active { transform: scale(0.95); }
+  .thread-header .icon-btn:disabled { opacity: .5; cursor: default; }
+
+  .summary-body {
+    white-space: pre-wrap; font-size: 14px; line-height: 1.5;
+    max-height: 50vh; overflow-y: auto;
+    margin-bottom: 12px;
+    color: var(--text);
+  }
+  .summary-body.thinking { color: var(--muted); font-style: italic; }
+
+  /* Banner shown at top of thread when there are open tickets on this chat */
+  .ticket-banner {
+    background: #fee2e2; color: #991b1b;
+    padding: 8px 12px; font-size: 12px;
+    display: flex; align-items: center; gap: 6px;
+    border-bottom: 1px solid #fecaca;
+  }
+  .ticket-banner.mine { background: #fef3c7; color: #92400e; border-bottom-color: #fde68a; }
+  .ticket-banner button {
+    margin-left: auto;
+    background: white; border: 1px solid currentColor; color: inherit;
+    padding: 3px 10px; border-radius: 6px; font-size: 12px; font-weight: 500;
+    cursor: pointer;
+  }
+
+  /* Action sheet (long-press on a message) */
+  .sheet-back {
+    position: fixed; inset: 0; background: rgba(0,0,0,.5);
+    z-index: 150; display: none;
+    align-items: flex-end; justify-content: center;
+  }
+  .sheet-back.visible { display: flex; }
+  .sheet {
+    width: 100%; max-width: 480px;
+    background: white; border-radius: 14px 14px 0 0;
+    padding: 0 0 max(8px, var(--safe-bot));
+    box-shadow: 0 -4px 20px rgba(0,0,0,.2);
+    animation: sheetUp .18s ease-out;
+  }
+  @keyframes sheetUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+  .sheet .grab { width: 36px; height: 4px; background: #d1d7db; border-radius: 2px; margin: 8px auto 12px; }
+  .sheet .quote {
+    padding: 0 18px 12px; color: var(--muted); font-size: 13px;
+    border-bottom: 1px solid var(--border);
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .sheet button.sheet-act {
+    display: flex; align-items: center; gap: 14px; width: 100%;
+    padding: 14px 18px; background: white; border: none;
+    font-size: 15px; color: var(--text); cursor: pointer; text-align: left;
+    font-family: inherit;
+  }
+  .sheet button.sheet-act:active { background: var(--row-hover); }
+  .sheet button.sheet-act .glyph { font-size: 18px; width: 24px; text-align: center; }
+  .sheet button.sheet-act.cancel { color: var(--muted); border-top: 1px solid var(--border); }
+
+  /* Modal (ticket creation) */
+  .modal-back {
+    position: fixed; inset: 0; background: rgba(0,0,0,.5);
+    z-index: 160; display: none;
+    align-items: center; justify-content: center;
+    padding: 16px;
+  }
+  .modal-back.visible { display: flex; }
+  .modal-card {
+    width: 100%; max-width: 380px; background: white; border-radius: 12px;
+    padding: 20px; box-shadow: 0 20px 60px rgba(0,0,0,.3);
+    max-height: 90vh; overflow-y: auto;
+  }
+  .modal-card h3 { margin: 0 0 4px; font-size: 17px; }
+  .modal-card .sub { color: var(--muted); font-size: 12px; margin-bottom: 14px; }
+  .modal-card .quote-msg {
+    background: #f0f2f5; border-left: 3px solid var(--green);
+    border-radius: 4px; padding: 8px 10px; font-size: 13px; color: var(--muted);
+    margin-bottom: 16px;
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .modal-card .field { margin-bottom: 14px; }
+  .modal-card .field label {
+    display: block; font-size: 11px; color: var(--muted);
+    margin-bottom: 4px; text-transform: uppercase; letter-spacing: .5px;
+  }
+  .modal-card input, .modal-card select {
+    width: 100%; border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; font-size: 15px; font-family: inherit;
+    outline: none; background: white;
+  }
+  .modal-card input:focus, .modal-card select:focus { border-color: var(--green); }
+  .modal-card .btn-row {
+    display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px;
+  }
+  .modal-card button {
+    background: white; border: 1px solid var(--border); border-radius: 8px;
+    padding: 9px 16px; font-size: 14px; cursor: pointer;
+    font-family: inherit;
+  }
+  .modal-card button.primary { background: var(--green); color: white; border-color: var(--green); font-weight: 500; }
+  .modal-card button.primary:disabled { background: #8fb3a8; border-color: #8fb3a8; cursor: default; }
+  .modal-card button:active { transform: scale(.97); }
+
+  /* Bubbles aren't selectable so long-press triggers our handler instead of
+     the browser's native text-selection menu. */
+  .bubble { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+
+  /* Toast */
+  #toast {
+    position: fixed; bottom: calc(70px + var(--safe-bot)); left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0,0,0,.82); color: white;
+    padding: 8px 16px; border-radius: 20px; font-size: 13px;
+    pointer-events: none; opacity: 0; transition: opacity .2s;
+    z-index: 200; max-width: 90vw; text-align: center;
+  }
+  #toast.show { opacity: 1; }
+
+  /* Force-mobile guard: also works on desktop browsers narrowed down */
+  @media (min-width: 720px) {
+    /* still let it work, just constrain width for nicer testing on desktop */
+    #app, #loginScreen { max-width: 480px; margin: 0 auto; box-shadow: 0 0 30px rgba(0,0,0,.15); }
+    #loginScreen .login-card { width: 360px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ============== LOGIN ============== -->
+<div id="loginScreen">
+  <div class="login-card">
+    <h1>CommonCommunication</h1>
+    <div class="sub">Aroleap shared customer inbox</div>
+    <button class="login-btn" id="loginBtn">
+      <svg viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0012 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09 0-.72.13-1.43.35-2.09V7.07H2.18a11 11 0 000 9.85l3.66-2.83z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+      Sign in with Google
+    </button>
+    <div class="login-err" id="loginErr"></div>
+    <div style="font-size:11px; color:#99a5ad; margin-top:18px;">Mobile · v1</div>
+  </div>
+</div>
+
+<!-- ============== APP ============== -->
+<div id="app">
+  <div class="app-header">
+    <div class="row">
+      <div class="title" id="headerTitle">Chats</div>
+      <div class="user">
+        <img id="userPhoto" alt="" />
+        <button class="logout-btn" id="logoutBtn">Sign out</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- LIST VIEW: chats or tickets -->
+  <div id="listView">
+    <!-- Filter bar (only visible on Chats tab) -->
+    <div class="filter-bar" id="filterBar">
+      <div class="search-wrap" id="searchWrap">
+        <span class="icn">🔍</span>
+        <input id="searchInput" placeholder="Search by name or number" type="search" autocomplete="off" />
+        <button class="clear" id="searchClear" type="button">×</button>
+      </div>
+      <div class="filter-row">
+        <select class="filter-select" id="statusFilter">
+          <option value="">All subscriptions</option>
+        </select>
+        <select class="filter-select" id="stageFilter">
+          <option value="">All stages</option>
+          <option value="setup">Setup</option>
+          <option value="onboarding">Onboarding</option>
+          <option value="sa">SA</option>
+          <option value="active">Active</option>
+          <option value="offboarding">Offboarding</option>
+        </select>
+      </div>
+    </div>
+
+    <div id="scrollList">
+      <div id="chatList"></div>
+      <div id="ticketList" hidden></div>
+    </div>
+
+    <nav class="tab-nav">
+      <button id="tabChats" class="active">
+        <span class="icon">💬</span>
+        <span>Chats</span>
+      </button>
+      <button id="tabTickets">
+        <span class="icon">🎫</span>
+        <span>My tickets</span>
+        <span class="count" id="ticketsCount" style="display:none;">0</span>
+      </button>
+    </nav>
+  </div>
+
+  <!-- THREAD VIEW -->
+  <div id="threadView">
+    <div class="thread-header">
+      <div class="row-inner">
+        <button class="back-btn" id="backBtn">←</button>
+        <div class="thread-avatar" id="threadAvatar">?</div>
+        <div class="thread-meta">
+          <div class="name" id="threadName">—</div>
+          <div class="sub" id="threadSub"></div>
+        </div>
+        <div class="header-actions">
+          <button class="icon-btn" id="summarizeBtn" title="AI summary" aria-label="Summarize">✨</button>
+        </div>
+      </div>
+    </div>
+    <div id="ticketBannerWrap"></div>
+    <div id="messagesEl">
+      <div class="empty-thread">Loading messages…</div>
+    </div>
+    <form class="composer" id="composerForm">
+      <button type="button" class="attach-btn" id="attachBtn" aria-label="Attach">📎</button>
+      <textarea id="composerInput" rows="1" placeholder="Type a message" autocomplete="off"></textarea>
+      <button class="send-btn" id="sendBtn" type="submit" aria-label="Send">➤</button>
+    </form>
+    <input type="file" id="fileInput" style="display:none;" accept="image/*,video/*,audio/*,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/plain" />
+  </div>
+</div>
+
+<!-- Long-press action sheet -->
+<div class="sheet-back" id="msgSheet">
+  <div class="sheet">
+    <div class="grab"></div>
+    <div class="quote" id="msgSheetQuote"></div>
+    <button class="sheet-act" data-act="ticket"><span class="glyph">🎫</span> Create ticket from this message</button>
+    <button class="sheet-act" data-act="copy"><span class="glyph">📋</span> Copy text</button>
+    <button class="sheet-act cancel" data-act="cancel">Cancel</button>
+  </div>
+</div>
+
+<!-- AI summary modal -->
+<div class="modal-back" id="summaryModal">
+  <div class="modal-card">
+    <h3>Chat summary</h3>
+    <div class="sub" id="summarySub">Calling Claude…</div>
+    <div class="summary-body thinking" id="summaryBody">Thinking…</div>
+    <div class="btn-row">
+      <button type="button" id="summaryRegen">Regenerate</button>
+      <button type="button" id="summaryClose" class="primary">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Ticket reassign modal -->
+<div class="modal-back" id="reassignModal">
+  <div class="modal-card">
+    <h3>Reassign ticket</h3>
+    <div class="sub">Pick a new owner</div>
+    <div class="quote-msg" id="reassignTitleEl"></div>
+    <div class="field">
+      <label for="reassignAssignee">Assign to</label>
+      <select id="reassignAssignee"></select>
+    </div>
+    <div class="btn-row">
+      <button type="button" id="reassignCancel">Cancel</button>
+      <button type="button" id="reassignSubmit" class="primary">Reassign</button>
+    </div>
+  </div>
+</div>
+
+<!-- Ticket creation modal -->
+<div class="modal-back" id="ticketModal">
+  <div class="modal-card">
+    <h3>Create ticket</h3>
+    <div class="sub">Anchored to the selected message</div>
+    <div class="quote-msg" id="ticketQuote"></div>
+    <div class="field">
+      <label for="ticketTitle">Title</label>
+      <input id="ticketTitle" maxlength="80" placeholder="Short summary" />
+    </div>
+    <div class="field">
+      <label for="ticketAssignee">Assign to</label>
+      <select id="ticketAssignee"></select>
+    </div>
+    <div class="btn-row">
+      <button type="button" id="ticketCancel">Cancel</button>
+      <button type="button" id="ticketSubmit" class="primary">Create</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import {
+  getAuth, GoogleAuthProvider, signInWithRedirect, signInWithPopup,
+  getRedirectResult, onAuthStateChanged, signOut, browserLocalPersistence, setPersistence,
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import {
+  getDatabase, ref, onValue, push, set, update, get, query, orderByChild, limitToLast,
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+
+// Same Firebase project as the desktop dashboard (index.html). Mobile reads the
+// exact same data: commonComm/chats, commonComm/tickets, ferraHabitData, etc.
+const firebaseConfig = {
+  apiKey: "AIzaSyC5mZAG98VAeDpp1IssYYQ2kcKeClyqIGc",
+  authDomain: "motherofdashboard.firebaseapp.com",
+  databaseURL: "https://motherofdashboard-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "motherofdashboard",
+  storageBucket: "motherofdashboard.firebasestorage.app",
+  messagingSenderId: "1014194001329",
+  appId: "1:1014194001329:web:ca49a6a081d42575d2d990",
+};
+const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
+const ROOT = "commonComm";
+const BOOTSTRAP_ADMINS = ["rohit@aroleap.com", "rohitpatel.mailid297@gmail.com"];
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getDatabase(app);
+const provider = new GoogleAuthProvider();
+
+// ====== STATE ======
+let currentUser = null;
+let chatsCache = {};            // chatKey -> meta
+let lastChatRows = [];
+let ticketsCache = {};
+let teamUsers = {};
+let contactsCache = {};
+let myLastSeen = {};
+let sharedSubs = null;
+let habitUsers = null;
+let habitCancelledUsers = null;
+let phoneToUidIdx = {};
+let cancelledPhones = new Set();
+let phoneToStatus = {};
+let currentChatKey = null;
+let messagesUnsub = null;
+let activeTab = "chats";   // "chats" | "tickets"
+let statusFilterVal = "";  // "" = all
+let stageFilterVal = "";   // "" = all
+let searchVal = "";
+
+const FERRA_TAG_STAGE = {
+  "Order Pending":"setup","Auto Pay Pending":"setup","Approval Pending":"setup",
+  "Machine Assign Pending":"setup","Installation Pending":"setup",
+  "Persona Call Pending":"onboarding","Exercises Call Pending":"onboarding","Hand Off Pending":"onboarding",
+  "SA Reach Out Pending":"sa","SA Follow Up":"sa",
+  "All Steps Complete":"active","All Done":"active",
+  "Uninstallation Pending":"offboarding","Pickup Pending":"offboarding","Received in Warehouse":"offboarding",
+};
+
+// "Daily Workout Ferra C…" cohort groups are clubbed together and hidden from
+// every other view, matching the desktop behaviour (see DAILY_GROUP_PREFIX in
+// index.html). They're only shown when the user explicitly picks the "Daily
+// groups" option in the subscription dropdown.
+const DAILY_GROUP_PREFIX = "Daily Workout Ferra C";
+const DAILY_SENTINEL = "__daily_groups__";
+function isDailyGroup(r) {
+  return r && r.chatType === "group" && String(r.groupName || "").startsWith(DAILY_GROUP_PREFIX);
+}
+
+// ====== ELEMENTS ======
+const $ = (id) => document.getElementById(id);
+const loginScreen = $("loginScreen");
+const loginBtn = $("loginBtn");
+const loginErr = $("loginErr");
+const appEl = $("app");
+const userPhoto = $("userPhoto");
+const logoutBtn = $("logoutBtn");
+const headerTitle = $("headerTitle");
+const listView = $("listView");
+const threadView = $("threadView");
+const filterBar = $("filterBar");
+const searchWrap = $("searchWrap");
+const searchInput = $("searchInput");
+const searchClear = $("searchClear");
+const statusFilter = $("statusFilter");
+const stageFilter = $("stageFilter");
+const chatListEl = $("chatList");
+const ticketListEl = $("ticketList");
+const tabChats = $("tabChats");
+const tabTickets = $("tabTickets");
+const ticketsCountEl = $("ticketsCount");
+const backBtn = $("backBtn");
+const threadName = $("threadName");
+const threadSub = $("threadSub");
+const threadAvatar = $("threadAvatar");
+const messagesEl = $("messagesEl");
+const composerForm = $("composerForm");
+const composerInput = $("composerInput");
+const sendBtn = $("sendBtn");
+const ticketBannerWrap = $("ticketBannerWrap");
+const toast = $("toast");
+const msgSheet = $("msgSheet");
+const msgSheetQuote = $("msgSheetQuote");
+const ticketModal = $("ticketModal");
+const ticketTitleInput = $("ticketTitle");
+const ticketAssigneeSelect = $("ticketAssignee");
+const ticketQuote = $("ticketQuote");
+const ticketSubmit = $("ticketSubmit");
+const ticketCancel = $("ticketCancel");
+const attachBtn = $("attachBtn");
+const fileInput = $("fileInput");
+const summarizeBtn = $("summarizeBtn");
+const summaryModal = $("summaryModal");
+const summarySub = $("summarySub");
+const summaryBody = $("summaryBody");
+const summaryClose = $("summaryClose");
+const summaryRegen = $("summaryRegen");
+const reassignModal = $("reassignModal");
+const reassignTitleEl = $("reassignTitleEl");
+const reassignAssignee = $("reassignAssignee");
+const reassignSubmit = $("reassignSubmit");
+const reassignCancel = $("reassignCancel");
+
+// ====== HELPERS ======
+const escapeHtml = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const linkify = (s) => String(s ?? "").replace(/https?:\/\/[^\s<]+/g, m => `<a href="${m}" target="_blank" rel="noopener">${m}</a>`);
+function encodeKey(k) { return String(k || "").replace(/[.#$\[\]\/]/g, "_"); }
+function chatKeyToChatId(key) { return String(key || "").replace(/@c_us$/, "@c.us").replace(/@g_us$/, "@g.us"); }
+function normalizeFerraPhone(p) {
+  let n = String(p || "").replace(/\D/g, ""); n = n.replace(/^0+/, "");
+  if (n.length === 10) n = "91" + n;
+  return n;
+}
+function avatarInitial(name) {
+  return String(name || "?").replace(/[()]/g, "").trim().charAt(0).toUpperCase() || "?";
+}
+function isAdmin(email) {
+  return !!email && BOOTSTRAP_ADMINS.includes(String(email).toLowerCase());
+}
+function showToast(msg, ms = 2200) {
+  toast.textContent = msg;
+  toast.classList.add("show");
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => toast.classList.remove("show"), ms);
+}
+function formatTime(ts) {
+  if (!ts) return "";
+  const d = new Date(ts);
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  if (sameDay) {
+    return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  }
+  const yest = new Date(now.getTime() - 86400000);
+  if (d.toDateString() === yest.toDateString()) return "Yesterday";
+  const diff = (now - d) / 86400000;
+  if (diff < 7) return d.toLocaleDateString([], { weekday: "short" });
+  return d.toLocaleDateString([], { day: "2-digit", month: "2-digit", year: "2-digit" });
+}
+function dayLabel(ts) {
+  if (!ts) return "";
+  const d = new Date(ts);
+  const now = new Date();
+  if (d.toDateString() === now.toDateString()) return "Today";
+  const yest = new Date(now.getTime() - 86400000);
+  if (d.toDateString() === yest.toDateString()) return "Yesterday";
+  return d.toLocaleDateString([], { weekday: "long", day: "numeric", month: "short", year: "numeric" });
+}
+function formatClock(ts) {
+  if (!ts) return "";
+  return new Date(ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+// ====== AUTH ======
+// Persist sign-in across visits so the agent doesn't re-auth every reload.
+setPersistence(auth, browserLocalPersistence).catch(() => {});
+
+// Mobile browsers (especially Chrome on Android in standalone PWA mode) block
+// signInWithPopup more often than desktop. Use popup first with redirect as a
+// fallback so the same flow works on installed PWA, in-browser, and desktop.
+loginBtn.onclick = async () => {
+  loginErr.textContent = "";
+  try {
+    await signInWithPopup(auth, provider);
+  } catch (e) {
+    // popup blocked or unsupported (common in iOS Safari + installed PWA) → redirect
+    if (e?.code === "auth/popup-blocked" || e?.code === "auth/operation-not-supported-in-this-environment" || e?.code === "auth/popup-closed-by-user") {
+      try { await signInWithRedirect(auth, provider); }
+      catch (e2) { loginErr.textContent = "Sign-in failed: " + (e2.message || e2); }
+    } else {
+      loginErr.textContent = "Sign-in failed: " + (e.message || e);
+    }
+  }
+};
+
+// Handle the post-redirect leg (mobile flow lands back here).
+getRedirectResult(auth).catch(e => {
+  if (e?.code && e.code !== "auth/no-auth-event") {
+    loginErr.textContent = "Sign-in error: " + (e.message || e.code);
+  }
+});
+
+logoutBtn.onclick = () => signOut(auth);
+
+onAuthStateChanged(auth, async (user) => {
+  if (user) {
+    const allowed = await isUserAllowed(user.email);
+    if (!allowed) {
+      loginErr.textContent = `${user.email} is not in the allowlist. Ask an admin to add you.`;
+      try { await signOut(auth); } catch {}
+      return;
+    }
+    currentUser = user;
+    loginScreen.classList.add("hidden");
+    appEl.classList.add("visible");
+    userPhoto.src = user.photoURL || "";
+    // Record presence
+    update(ref(db, `${ROOT}/users/${user.uid}`), {
+      name: user.displayName || user.email,
+      email: user.email,
+      photoURL: user.photoURL || null,
+      lastSeen: Date.now(),
+    }).catch(() => {});
+    attachAllListeners();
+  } else {
+    currentUser = null;
+    loginScreen.classList.remove("hidden");
+    appEl.classList.remove("visible");
+  }
+});
+
+async function isUserAllowed(email) {
+  if (!email) return false;
+  const lower = email.toLowerCase();
+  if (BOOTSTRAP_ADMINS.includes(lower)) return true;
+  try {
+    const key = lower.replace(/[.#$\[\]\/]/g, "_");
+    const snap = await get(ref(db, `${ROOT}/config/allowedEmails/${key}`));
+    return snap.exists() && !!snap.val();
+  } catch { return false; }
+}
+
+// ====== DATA LISTENERS ======
+let listenersAttached = false;
+function attachAllListeners() {
+  if (listenersAttached) return;
+  listenersAttached = true;
+
+  onValue(ref(db, `${ROOT}/chats`), (snap) => {
+    const all = snap.val() || {};
+    chatsCache = {};
+    const rows = [];
+    for (const [chatKey, val] of Object.entries(all)) {
+      const rawMeta = val.meta || {};
+      const chatId = rawMeta.chatId || chatKeyToChatId(chatKey);
+      const derivedPhone = String(chatId || "").split("@")[0] || rawMeta.phone || chatKey;
+      const meta = { ...rawMeta, chatId, phone: derivedPhone };
+      chatsCache[chatKey] = meta;
+      let preview = meta.lastMsgPreview || "";
+      if (preview === "(added from Ferra)" || preview === "(new chat)") preview = "";
+      const chatType = meta.chatType || (String(chatId).endsWith("@g.us") ? "group" : "user");
+      rows.push({
+        chatKey, chatId, chatType,
+        phone: derivedPhone,
+        explicitName: meta.contactName || meta.displayName || null,
+        groupName: meta.groupName || null,
+        private: meta.private === true,
+        lastMsgAt: meta.lastMsgAt || 0,
+        preview,
+        direction: meta.lastMsgDirection || "in",
+        sentByName: meta.lastMsgSentByName || null,
+      });
+    }
+    rows.sort((a, b) => (b.lastMsgAt || 0) - (a.lastMsgAt || 0));
+    lastChatRows = rows;
+    rebuildStatusFilterOptions();
+    renderActiveTab();
+  });
+
+  onValue(ref(db, `${ROOT}/tickets`), (snap) => {
+    ticketsCache = snap.val() || {};
+    renderTicketsCount();
+    if (activeTab === "tickets") renderTickets();
+    if (currentChatKey) renderTicketBanner();
+  });
+
+  onValue(ref(db, `${ROOT}/users`), (snap) => {
+    teamUsers = snap.val() || {};
+  });
+
+  onValue(ref(db, `${ROOT}/contacts`), (snap) => {
+    contactsCache = snap.val() || {};
+    if (activeTab === "chats") renderActiveTab();
+  });
+
+  onValue(ref(db, "ferraSubscriptions/v1"), (snap) => {
+    sharedSubs = snap.val();
+    if (activeTab === "chats") renderActiveTab();
+  });
+
+  onValue(ref(db, "ferraHabitData/v1/users"), (snap) => {
+    habitUsers = snap.val();
+    rebuildPhoneToUidIdx();
+    rebuildStatusFilterOptions();
+    if (activeTab === "chats") renderActiveTab();
+  });
+
+  onValue(ref(db, "ferraHabitData/v1/cancelledUsers"), (snap) => {
+    habitCancelledUsers = snap.val();
+    rebuildCancelledIdx();
+    rebuildStatusFilterOptions();
+    if (activeTab === "chats") renderActiveTab();
+  });
+
+  // Per-user last-seen for unread indicators
+  onValue(ref(db, `${ROOT}/userState/${currentUser.uid}/lastSeen`), (snap) => {
+    myLastSeen = snap.val() || {};
+    if (activeTab === "chats") renderActiveTab();
+  });
+}
+
+function rebuildPhoneToUidIdx() {
+  phoneToUidIdx = {};
+  if (!habitUsers) return;
+  const list = Array.isArray(habitUsers) ? habitUsers : Object.values(habitUsers);
+  for (const u of list) {
+    if (!u) continue;
+    const uid = u.uid || u.userId;
+    if (!uid) continue;
+    const norm = normalizeFerraPhone(u.phone || u.phoneNumber || "");
+    if (norm) phoneToUidIdx[norm] = uid;
+  }
+  rebuildPhoneToStatus();
+}
+function rebuildCancelledIdx() {
+  cancelledPhones = new Set();
+  if (!habitCancelledUsers) return;
+  const list = Array.isArray(habitCancelledUsers) ? habitCancelledUsers : Object.values(habitCancelledUsers);
+  for (const u of list) {
+    if (!u) continue;
+    const norm = normalizeFerraPhone(u.phone || u.phoneNumber || "");
+    if (norm) cancelledPhones.add(norm);
+  }
+  rebuildPhoneToStatus();
+}
+function rebuildPhoneToStatus() {
+  phoneToStatus = {};
+  const collect = (rawList) => {
+    if (!rawList) return;
+    const list = Array.isArray(rawList) ? rawList : Object.values(rawList);
+    for (const u of list) {
+      if (!u) continue;
+      const norm = normalizeFerraPhone(u.phone || u.phoneNumber || "");
+      if (!norm) continue;
+      const status = u.subscriptionStatus;
+      if (status) phoneToStatus[norm] = String(status).toUpperCase();
+    }
+  };
+  collect(habitUsers);
+  collect(habitCancelledUsers);
+}
+function getSubscriptionStatusFor(phone) {
+  return phoneToStatus[normalizeFerraPhone(phone)] || null;
+}
+function getSubscriptionTag(phone) {
+  if (!sharedSubs || !sharedSubs.byPhone) return null;
+  return sharedSubs.byPhone[normalizeFerraPhone(phone)] || null;
+}
+function getFerraDisplayName(phone) {
+  if (!phone || !habitUsers) return null;
+  const norm = normalizeFerraPhone(phone);
+  if (!norm) return null;
+  const uid = phoneToUidIdx[norm];
+  if (uid) {
+    if (Array.isArray(habitUsers)) {
+      const f = habitUsers.find(u => u && (u.uid === uid || u.userId === uid));
+      if (f?.name) return f.name;
+    } else if (habitUsers[uid]?.name) return habitUsers[uid].name;
+  }
+  if (habitCancelledUsers) {
+    const list = Array.isArray(habitCancelledUsers) ? habitCancelledUsers : Object.values(habitCancelledUsers);
+    for (const u of list) {
+      if (!u) continue;
+      if (normalizeFerraPhone(u.phone || u.phoneNumber || "") === norm) return u.name || null;
+    }
+  }
+  return null;
+}
+function resolveDisplayName(phone, explicitName, opts) {
+  if (opts && opts.chatType === "group") return opts.groupName || "Unnamed group";
+  const ferra = getFerraDisplayName(phone);
+  const manual = explicitName && String(explicitName).trim();
+  if (manual) {
+    if (ferra && manual.toLowerCase() === String(ferra).toLowerCase()) return ferra;
+    return `(${manual})`;
+  }
+  if (ferra) return ferra;
+  const digits = String(phone || "").replace(/\D/g, "");
+  if (digits && contactsCache[digits]?.name) return contactsCache[digits].name;
+  return phone || "?";
+}
+
+// Build the subscriptions dropdown options from what's actually present in the
+// data so we don't show empty buckets. "All" is always first; defaults to "All".
+function rebuildStatusFilterOptions() {
+  const counts = {};
+  let dailyCount = 0;
+  for (const r of lastChatRows) {
+    if (isDailyGroup(r)) { dailyCount++; continue; }   // counted separately, excluded from status buckets
+    const s = getSubscriptionStatusFor(r.phone);
+    if (s) counts[s] = (counts[s] || 0) + 1;
+  }
+  const statuses = Object.keys(counts).sort();
+  const prev = statusFilter.value;
+  let html = `<option value="">All subscriptions</option>`;
+  if (dailyCount > 0) {
+    html += `<option value="${DAILY_SENTINEL}">Daily groups (${dailyCount})</option>`;
+  }
+  html += statuses.map(s => `<option value="${escapeHtml(s)}">${prettyStatus(s)} (${counts[s]})</option>`).join("");
+  statusFilter.innerHTML = html;
+  // Restore previous selection if it's still a valid option.
+  if (prev === DAILY_SENTINEL && dailyCount > 0) statusFilter.value = DAILY_SENTINEL;
+  else if (statuses.includes(prev)) statusFilter.value = prev;
+  statusFilter.classList.toggle("active", !!statusFilter.value);
+  stageFilter.classList.toggle("active", !!stageFilter.value);
+}
+function prettyStatus(s) {
+  // "ACTIVE" → "Active", "ORDER_PENDING" → "Order pending"
+  return String(s || "")
+    .toLowerCase().replace(/_/g, " ")
+    .replace(/^./, c => c.toUpperCase());
+}
+
+// ====== CHAT TAB RENDER ======
+function renderActiveTab() {
+  if (activeTab === "chats") {
+    filterBar.style.display = "";
+    chatListEl.hidden = false;
+    ticketListEl.hidden = true;
+    headerTitle.textContent = "Chats";
+    renderChats();
+  } else {
+    filterBar.style.display = "none";
+    chatListEl.hidden = true;
+    ticketListEl.hidden = false;
+    headerTitle.textContent = "My tickets";
+    renderTickets();
+  }
+}
+
+function renderChats() {
+  const q = searchVal.trim().toLowerCase();
+  const qDigits = q.replace(/\D/g, "");
+  const isAdminUser = isAdmin(currentUser?.email);
+
+  let rows = lastChatRows;
+
+  // privacy filter — non-admins don't see chats marked private
+  if (!isAdminUser) rows = rows.filter(r => !r.private);
+
+  // Daily workout cohort groups: hidden by default; shown only when the user
+  // explicitly picks "Daily groups" in the dropdown. When the daily-groups
+  // option is selected, the stage filter is bypassed (groups don't carry
+  // subscription tags, so combining them would always return empty).
+  if (statusFilterVal === DAILY_SENTINEL) {
+    rows = rows.filter(isDailyGroup);
+  } else {
+    rows = rows.filter(r => !isDailyGroup(r));
+    if (statusFilterVal) {
+      rows = rows.filter(r => getSubscriptionStatusFor(r.phone) === statusFilterVal);
+    }
+    if (stageFilterVal) {
+      rows = rows.filter(r => {
+        const tag = getSubscriptionTag(r.phone);
+        return tag && FERRA_TAG_STAGE[tag] === stageFilterVal;
+      });
+    }
+  }
+  if (q) {
+    rows = rows.filter(r => {
+      const name = resolveDisplayName(r.phone, r.explicitName, { chatType: r.chatType, groupName: r.groupName });
+      if (name && name.toLowerCase().includes(q)) return true;
+      if (qDigits && r.phone && String(r.phone).includes(qDigits)) return true;
+      return false;
+    });
+  }
+
+  if (!rows.length) {
+    chatListEl.innerHTML = `<div class="empty-state">No chats match.</div>`;
+    return;
+  }
+
+  let html = "";
+  for (const r of rows) {
+    const name = resolveDisplayName(r.phone, r.explicitName, { chatType: r.chatType, groupName: r.groupName });
+    const isGroup = r.chatType === "group";
+    const openTickets = openTicketsForChat(r.chatKey);
+    const hasTicket = openTickets.length > 0;
+    const myTicket = openTickets.some(t => t.assignee === currentUser?.uid);
+    const status = getSubscriptionStatusFor(r.phone);
+    const tag = getSubscriptionTag(r.phone);
+    const stage = tag ? FERRA_TAG_STAGE[tag] : null;
+    const lastSeen = myLastSeen[r.chatKey] || 0;
+    const unread = r.lastMsgAt > lastSeen && r.direction === "in";
+    let previewWho = "";
+    if (r.direction === "out" && r.sentByName) previewWho = `<span class="who">${escapeHtml(r.sentByName)}:</span> `;
+    const previewText = r.preview ? `${previewWho}${escapeHtml(r.preview)}` : `<em style="color:#9aa5ad">No messages yet</em>`;
+    const avatarClass = `avatar ${isGroup ? "is-group" : ""} ${hasTicket ? "has-ticket" : ""}`.trim();
+    const avatarChar = isGroup ? "👥" : avatarInitial(name);
+    let pills = "";
+    if (status === "ACTIVE") pills += `<span class="pill active">Active</span>`;
+    else if (status === "CANCELLED") pills += `<span class="pill cancelled">Cancelled</span>`;
+    else if (status === "PAUSED") pills += `<span class="pill paused">Paused</span>`;
+    if (stage && stage !== "active") pills += `<span class="pill ${stage}">${stage[0].toUpperCase() + stage.slice(1)}</span>`;
+    const ticketPill = myTicket ? `<span class="ticket-dot">🎫</span>` : "";
+    html += `<div class="row" data-key="${escapeHtml(r.chatKey)}">
+      <div class="${avatarClass}">${avatarChar}</div>
+      <div class="meta-col">
+        <div class="top">
+          <div class="name">${escapeHtml(name)}</div>
+          <div class="time">${escapeHtml(formatTime(r.lastMsgAt))}</div>
+        </div>
+        <div class="preview">
+          <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${previewText}</span>
+          <span class="badges">${ticketPill}${pills}</span>
+        </div>
+      </div>
+    </div>`;
+  }
+  chatListEl.innerHTML = html;
+}
+
+chatListEl.addEventListener("click", (e) => {
+  const row = e.target.closest(".row");
+  if (!row) return;
+  openChat(row.dataset.key);
+});
+
+// ====== TICKETS TAB ======
+function openTicketsForChat(chatKey) {
+  const out = [];
+  if (!ticketsCache) return out;
+  for (const [id, t] of Object.entries(ticketsCache)) {
+    if (!t || t.status !== "open" || !t.anchorChatId) continue;
+    const k = encodeKey(t.anchorChatId);
+    if (k === chatKey) out.push({ id, ...t });
+  }
+  out.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  return out;
+}
+
+function myOpenTickets() {
+  const myUid = currentUser?.uid;
+  if (!myUid) return [];
+  return Object.entries(ticketsCache || {})
+    .filter(([, t]) => t && t.status === "open" && t.assignee === myUid)
+    .map(([id, t]) => ({ id, ...t }))
+    .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+}
+
+function renderTicketsCount() {
+  const n = myOpenTickets().length;
+  if (n > 0) {
+    ticketsCountEl.style.display = "";
+    ticketsCountEl.textContent = String(n);
+  } else {
+    ticketsCountEl.style.display = "none";
+  }
+}
+
+function renderTickets() {
+  const tickets = myOpenTickets();
+  if (!tickets.length) {
+    ticketListEl.innerHTML = `<div class="empty-state">
+      No open tickets assigned to you. 🎉
+    </div>`;
+    return;
+  }
+  let html = "";
+  for (const t of tickets) {
+    const chatKey = encodeKey(t.anchorChatId);
+    const meta = chatsCache[chatKey] || {};
+    const chatType = meta.chatType || (String(t.anchorChatId).endsWith("@g.us") ? "group" : "user");
+    const name = resolveDisplayName(meta.phone, meta.contactName || meta.displayName, { chatType, groupName: meta.groupName });
+    html += `<div class="ticket-row" data-chat="${escapeHtml(chatKey)}">
+      <div class="tt-top">
+        <div class="tt-title">${escapeHtml(t.title || "(no title)")}</div>
+        <div class="tt-time">${escapeHtml(formatTime(t.createdAt))}</div>
+      </div>
+      <div class="tt-customer">💬 ${escapeHtml(name)}</div>
+      <div class="tt-from">From: ${escapeHtml(t.createdByName || "—")}</div>
+    </div>`;
+  }
+  ticketListEl.innerHTML = html;
+}
+
+ticketListEl.addEventListener("click", (e) => {
+  const row = e.target.closest(".ticket-row");
+  if (!row) return;
+  openChat(row.dataset.chat);
+});
+
+// ====== TABS ======
+tabChats.onclick = () => switchTab("chats");
+tabTickets.onclick = () => switchTab("tickets");
+function switchTab(name) {
+  activeTab = name;
+  tabChats.classList.toggle("active", name === "chats");
+  tabTickets.classList.toggle("active", name === "tickets");
+  renderActiveTab();
+}
+
+// ====== SEARCH + FILTERS ======
+searchInput.addEventListener("input", (e) => {
+  searchVal = e.target.value;
+  searchWrap.classList.toggle("has-text", !!searchVal);
+  if (activeTab === "chats") renderChats();
+});
+searchClear.onclick = () => {
+  searchInput.value = "";
+  searchVal = "";
+  searchWrap.classList.remove("has-text");
+  renderChats();
+  searchInput.focus();
+};
+statusFilter.addEventListener("change", (e) => {
+  statusFilterVal = e.target.value;
+  statusFilter.classList.toggle("active", !!statusFilterVal);
+  renderChats();
+});
+stageFilter.addEventListener("change", (e) => {
+  stageFilterVal = e.target.value;
+  stageFilter.classList.toggle("active", !!stageFilterVal);
+  renderChats();
+});
+
+// ====== THREAD ======
+function openChat(chatKey) {
+  currentChatKey = chatKey;
+  const meta = chatsCache[chatKey] || {};
+  const chatType = meta.chatType || (String(meta.chatId || "").endsWith("@g.us") ? "group" : "user");
+  const name = resolveDisplayName(meta.phone, meta.contactName || meta.displayName, { chatType, groupName: meta.groupName });
+  const isGroup = chatType === "group";
+  threadName.textContent = name;
+  threadSub.textContent = isGroup ? "Group" : (meta.phone || "");
+  threadAvatar.textContent = isGroup ? "👥" : avatarInitial(name);
+  messagesEl.innerHTML = `<div class="empty-thread">Loading messages…</div>`;
+  listView.classList.add("hidden");
+  threadView.classList.add("visible");
+  renderTicketBanner();
+  listenMessages(chatKey);
+  markChatSeen(chatKey);
+  // For groups without a stored name, ask the worker to fetch it.
+  maybeFetchGroupInfo(chatKey);
+  setTimeout(() => composerInput.focus(), 50);
+  // Push a history entry so Android's back gesture closes the thread (via
+  // popstate) instead of exiting the PWA.
+  history.pushState({ chat: chatKey }, "");
+}
+
+function closeThread() {
+  if (messagesUnsub) { messagesUnsub(); messagesUnsub = null; }
+  currentChatKey = null;
+  threadView.classList.remove("visible");
+  listView.classList.remove("hidden");
+}
+// Back button on the thread header: pop history so popstate runs the close.
+backBtn.onclick = () => {
+  if (history.state && history.state.chat) history.back();
+  else closeThread();
+};
+window.addEventListener("popstate", () => {
+  if (currentChatKey) closeThread();
+});
+
+function markChatSeen(chatKey) {
+  if (!currentUser || !chatKey) return;
+  set(ref(db, `${ROOT}/userState/${currentUser.uid}/lastSeen/${chatKey}`), Date.now()).catch(() => {});
+}
+
+async function maybeFetchGroupInfo(chatKey) {
+  const meta = chatsCache[chatKey] || {};
+  const isGroup = meta.chatType === "group" || String(meta.chatId || "").endsWith("@g.us");
+  if (!isGroup || meta.groupName) return;
+  try {
+    await fetch(`${WORKER_URL}/fetch-chat-info`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId: meta.chatId || chatKey }),
+    });
+  } catch {}
+}
+
+function listenMessages(chatKey) {
+  if (messagesUnsub) { messagesUnsub(); messagesUnsub = null; }
+  const msgsRef = query(ref(db, `${ROOT}/chats/${chatKey}/messages`), orderByChild("ts"), limitToLast(300));
+  messagesUnsub = onValue(msgsRef, (snap) => {
+    if (chatKey !== currentChatKey) return;
+    const v = snap.val() || {};
+    const list = Object.entries(v).map(([k, m]) => ({ id: k, ...m })).sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    renderMessages(list);
+    markChatSeen(chatKey);
+  });
+}
+
+function dedupMessages(list) {
+  const extractInnerId = (m) => {
+    if (m.periskopeUniqueId) return m.periskopeUniqueId;
+    if (m.periskopeMsgId) {
+      const parts = String(m.periskopeMsgId).split("_");
+      return parts[parts.length - 1] || null;
+    }
+    return null;
+  };
+  const byId = new Map();
+  const noId = [];
+  for (const m of list) {
+    const id = extractInnerId(m);
+    if (!id) { noId.push(m); continue; }
+    const existing = byId.get(id);
+    if (!existing || (m.sentByName && !existing.sentByName)) byId.set(id, m);
+  }
+  return [...byId.values(), ...noId].sort((a, b) => (a.ts || 0) - (b.ts || 0));
+}
+
+// Lookup of currently-rendered messages by id, populated in renderMessages.
+// Used by the long-press handler to know which message a bubble corresponds to.
+let currentMessagesById = new Map();
+
+function renderMessages(list) {
+  if (!list.length) {
+    messagesEl.innerHTML = `<div class="empty-thread">No messages yet — say hi.</div>`;
+    currentMessagesById = new Map();
+    return;
+  }
+  const deduped = dedupMessages(list);
+  currentMessagesById = new Map();
+  for (const m of deduped) currentMessagesById.set(m.id, m);
+  const meta = chatsCache[currentChatKey] || {};
+  const isGroup = meta.chatType === "group" || String(meta.chatId || "").endsWith("@g.us");
+
+  let html = ""; let lastDay = "";
+  for (const m of deduped) {
+    const day = dayLabel(m.ts);
+    if (day !== lastDay) {
+      html += `<div class="day-divider"><span>${escapeHtml(day)}</span></div>`;
+      lastDay = day;
+    }
+    const out = m.direction === "out";
+    let senderTag = "";
+    if (out && m.sentByName) senderTag = `<div class="sender-tag">— ${escapeHtml(m.sentByName)}</div>`;
+    else if (!out && isGroup && m.senderPhone) {
+      const senderName = resolveDisplayName(m.senderPhone, null, { chatType: "user" });
+      senderTag = `<div class="sender-tag">~ ${escapeHtml(senderName)}</div>`;
+    }
+    const status = out
+      ? `<span class="status ${escapeHtml(m.status || "sent")}">${statusGlyph(m.status)}</span>`
+      : "";
+    const mediaHtml = renderMediaHtml(m);
+    const textHtml = m.text ? `<div class="text">${linkify(escapeHtml(m.text))}</div>` : "";
+    html += `<div class="msg ${out ? "out" : "in"}">
+      <div class="bubble ${out ? "out" : "in"}" data-msg-key="${escapeHtml(m.id)}">
+        ${senderTag}${mediaHtml}${textHtml}
+        <div class="footer"><span>${formatClock(m.ts)}</span>${status}</div>
+      </div>
+    </div>`;
+  }
+  const wasNearBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 80;
+  messagesEl.innerHTML = html;
+  if (wasNearBottom || deduped.length <= 30) {
+    requestAnimationFrame(() => { messagesEl.scrollTop = messagesEl.scrollHeight; });
+  }
+}
+
+function statusGlyph(s) {
+  if (s === "sending") return "⏳";
+  if (s === "failed") return "✗";
+  return "✓";
+}
+
+function renderMediaHtml(m) {
+  if (!m.media || !m.media.url) {
+    if (m.media && m.media.fileName) {
+      return `<div class="media-doc">📎 ${escapeHtml(m.media.fileName)}</div>`;
+    }
+    return "";
+  }
+  const mt = String(m.media.mimeType || m.messageType || "").toLowerCase();
+  const proxied = `${WORKER_URL}/media?u=${encodeURIComponent(m.media.url)}`;
+  if (mt.startsWith("image")) {
+    return `<a href="${proxied}" target="_blank" rel="noopener"><img class="media-img" src="${proxied}" loading="lazy" /></a>`;
+  }
+  if (mt.startsWith("video")) {
+    return `<video class="media-img" src="${proxied}" controls preload="metadata"></video>`;
+  }
+  if (mt.startsWith("audio")) {
+    return `<audio src="${proxied}" controls style="max-width:240px;"></audio>`;
+  }
+  return `<div class="media-doc">📎 <a href="${proxied}" target="_blank" rel="noopener">${escapeHtml(m.media.fileName || "Attachment")}</a></div>`;
+}
+
+// ====== TICKET BANNER (in thread) ======
+function renderTicketBanner() {
+  if (!currentChatKey) { ticketBannerWrap.innerHTML = ""; return; }
+  const tickets = openTicketsForChat(currentChatKey);
+  if (!tickets.length) { ticketBannerWrap.innerHTML = ""; return; }
+  let html = "";
+  for (const t of tickets) {
+    const mine = t.assignee === currentUser?.uid;
+    html += `<div class="ticket-banner ${mine ? "mine" : ""}">
+      🎫 <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+        ${escapeHtml(t.title || "Ticket")}${t.assigneeName ? ` · ${escapeHtml(t.assigneeName)}` : ""}
+      </span>
+      <button data-reassign="${escapeHtml(t.id)}">Reassign</button>
+      <button data-resolve="${escapeHtml(t.id)}">Resolve</button>
+    </div>`;
+  }
+  ticketBannerWrap.innerHTML = html;
+}
+
+ticketBannerWrap.addEventListener("click", async (e) => {
+  const resolveBtn = e.target.closest("[data-resolve]");
+  const reassignBtn = e.target.closest("[data-reassign]");
+  if (resolveBtn) {
+    const tid = resolveBtn.dataset.resolve;
+    const t = ticketsCache[tid];
+    if (!t) return;
+    // Match desktop: warn when resolving someone else's ticket.
+    if (t.assignee && t.assignee !== currentUser?.uid) {
+      if (!confirm(`This ticket is assigned to ${t.assigneeName || "someone else"}. Resolve anyway?`)) return;
+    } else {
+      if (!confirm(`Resolve "${t.title || "this ticket"}"?`)) return;
+    }
+    try {
+      const updates = {};
+      updates[`${ROOT}/tickets/${tid}/status`] = "resolved";
+      updates[`${ROOT}/tickets/${tid}/resolvedBy`] = currentUser.uid;
+      updates[`${ROOT}/tickets/${tid}/resolvedByName`] = currentUser.displayName || currentUser.email;
+      updates[`${ROOT}/tickets/${tid}/resolvedAt`] = Date.now();
+      await update(ref(db), updates);
+      showToast("Ticket resolved");
+    } catch (err) {
+      showToast("Resolve failed: " + (err.message || err));
+    }
+    return;
+  }
+  if (reassignBtn) {
+    openReassignModal(reassignBtn.dataset.reassign);
+  }
+});
+
+// ====== REASSIGN ======
+let pendingReassignId = null;
+
+function openReassignModal(ticketId) {
+  const t = ticketsCache[ticketId];
+  if (!t) return;
+  pendingReassignId = ticketId;
+  const assignees = teamAssignees();
+  if (!assignees.length) { showToast("No team members loaded yet"); return; }
+  reassignAssignee.innerHTML = assignees.map(u => {
+    const sel = u.uid === t.assignee ? "selected" : "";
+    const tag = u.uid === currentUser?.uid ? " (me)" : "";
+    return `<option value="${escapeHtml(u.uid)}" data-name="${escapeHtml(u.name)}" ${sel}>${escapeHtml(u.name)}${tag}</option>`;
+  }).join("");
+  reassignTitleEl.textContent = `${t.title || "(no title)"}${t.assigneeName ? ` · currently ${t.assigneeName}` : ""}`;
+  reassignModal.classList.add("visible");
+}
+function closeReassignModal() { reassignModal.classList.remove("visible"); pendingReassignId = null; }
+reassignCancel.onclick = closeReassignModal;
+reassignModal.addEventListener("click", (e) => { if (e.target === reassignModal) closeReassignModal(); });
+
+reassignSubmit.onclick = async () => {
+  if (!pendingReassignId || !currentUser) return;
+  const t = ticketsCache[pendingReassignId];
+  if (!t) return;
+  const newUid = reassignAssignee.value;
+  const opt = reassignAssignee.options[reassignAssignee.selectedIndex];
+  const newName = (opt?.dataset.name || "").trim();
+  if (!newUid) return;
+  if (newUid === t.assignee) { closeReassignModal(); return; }
+  reassignSubmit.disabled = true;
+  try {
+    const reassignEntry = {
+      from: t.assignee || null,
+      fromName: t.assigneeName || null,
+      to: newUid,
+      toName: newName,
+      at: Date.now(),
+      byUid: currentUser.uid,
+      byName: currentUser.displayName || currentUser.email,
+    };
+    const existing = t.reassignments || [];
+    const updates = {};
+    updates[`${ROOT}/tickets/${pendingReassignId}/assignee`] = newUid;
+    updates[`${ROOT}/tickets/${pendingReassignId}/assigneeName`] = newName;
+    updates[`${ROOT}/tickets/${pendingReassignId}/reassignments`] = [...existing, reassignEntry];
+    await update(ref(db), updates);
+    closeReassignModal();
+    showToast(`Reassigned to ${newName}`);
+  } catch (e) {
+    showToast("Reassign failed: " + (e.message || e));
+  } finally {
+    reassignSubmit.disabled = false;
+  }
+};
+
+// ====== SEND ======
+composerInput.addEventListener("input", () => {
+  composerInput.style.height = "auto";
+  composerInput.style.height = Math.min(composerInput.scrollHeight, 120) + "px";
+});
+
+composerForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const text = composerInput.value.trim();
+  if (!text || !currentChatKey || !currentUser) return;
+  await doSend(text);
+});
+
+async function doSend(text) {
+  const meta = chatsCache[currentChatKey] || {};
+  const chatId = meta.chatId || chatKeyToChatId(currentChatKey);
+  const phone = meta.phone || chatId.split("@")[0];
+  const msgRef = push(ref(db, `${ROOT}/chats/${currentChatKey}/messages`));
+  const localMsgId = msgRef.key;
+  const ts = Date.now();
+
+  // Optimistic write — same shape the desktop uses.
+  await set(msgRef, {
+    direction: "out", text, ts,
+    sentByUid: currentUser.uid,
+    sentByName: currentUser.displayName || currentUser.email,
+    status: "sending",
+  });
+  await update(ref(db, `${ROOT}/chats/${currentChatKey}/meta`), {
+    chatId, phone,
+    lastMsgAt: ts, lastMsgPreview: text.slice(0, 120),
+    lastMsgDirection: "out",
+    lastMsgSentByName: currentUser.displayName || currentUser.email,
+  });
+  composerInput.value = "";
+  composerInput.style.height = "auto";
+
+  try {
+    const res = await fetch(`${WORKER_URL}/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chatId, phone, message: text,
+        sentByUid: currentUser.uid,
+        sentByName: currentUser.displayName || currentUser.email,
+        localMsgId,
+      }),
+    });
+    if (!res.ok) {
+      const t = await res.text();
+      await update(msgRef, { status: "failed", error: t.slice(0, 300) });
+      showToast("Send failed");
+    }
+  } catch (e) {
+    await update(msgRef, { status: "failed", error: String(e) });
+    showToast("Network error");
+  }
+}
+
+// ====== TICKET CREATION (long-press a bubble) ======
+let pendingTicketMsg = null;
+let _lpTimer = null, _lpStart = null;
+const LONG_PRESS_MS = 450;
+const LONG_PRESS_SLOP = 12;
+
+messagesEl.addEventListener("touchstart", (e) => {
+  const bubble = e.target.closest(".bubble");
+  if (!bubble || !e.touches[0]) return;
+  _lpStart = { x: e.touches[0].clientX, y: e.touches[0].clientY, key: bubble.dataset.msgKey };
+  _lpTimer = setTimeout(() => {
+    if (_lpStart) openMsgSheet(_lpStart.key);
+  }, LONG_PRESS_MS);
+}, { passive: true });
+messagesEl.addEventListener("touchmove", (e) => {
+  if (!_lpStart || !e.touches[0]) return;
+  const dx = e.touches[0].clientX - _lpStart.x;
+  const dy = e.touches[0].clientY - _lpStart.y;
+  if (Math.hypot(dx, dy) > LONG_PRESS_SLOP) {
+    if (_lpTimer) clearTimeout(_lpTimer);
+    _lpTimer = null; _lpStart = null;
+  }
+}, { passive: true });
+messagesEl.addEventListener("touchend", () => {
+  if (_lpTimer) clearTimeout(_lpTimer);
+  _lpTimer = null; _lpStart = null;
+});
+// Desktop fallback (right-click, useful when testing in a desktop browser).
+messagesEl.addEventListener("contextmenu", (e) => {
+  const bubble = e.target.closest(".bubble");
+  if (!bubble) return;
+  e.preventDefault();
+  openMsgSheet(bubble.dataset.msgKey);
+});
+
+function openMsgSheet(msgKey) {
+  const m = currentMessagesById.get(msgKey);
+  if (!m) return;
+  pendingTicketMsg = m;
+  msgSheetQuote.textContent = msgQuoteText(m);
+  msgSheet.classList.add("visible");
+  if (navigator.vibrate) { try { navigator.vibrate(15); } catch {} }
+}
+function closeMsgSheet() { msgSheet.classList.remove("visible"); }
+
+function msgQuoteText(m) {
+  return m.text || m.media?.caption || m.media?.fileName || "[media]";
+}
+
+msgSheet.addEventListener("click", async (e) => {
+  if (e.target === msgSheet) { closeMsgSheet(); return; } // backdrop dismiss
+  const btn = e.target.closest("[data-act]");
+  if (!btn) return;
+  const act = btn.dataset.act;
+  closeMsgSheet();
+  if (act === "ticket" && pendingTicketMsg) {
+    openTicketModal(pendingTicketMsg);
+  } else if (act === "copy" && pendingTicketMsg) {
+    try {
+      await navigator.clipboard.writeText(pendingTicketMsg.text || msgQuoteText(pendingTicketMsg));
+      showToast("Copied");
+    } catch { showToast("Copy not supported"); }
+  }
+});
+
+function openTicketModal(m) {
+  const assignees = teamAssignees();
+  if (!assignees.length) { showToast("No team members loaded yet"); return; }
+  ticketAssigneeSelect.innerHTML = assignees.map(u => {
+    const sel = u.uid === currentUser?.uid ? "selected" : "";
+    const tag = u.uid === currentUser?.uid ? " (me)" : "";
+    return `<option value="${escapeHtml(u.uid)}" data-name="${escapeHtml(u.name)}" ${sel}>${escapeHtml(u.name)}${tag}</option>`;
+  }).join("");
+  const defaultTitle = String(msgQuoteText(m)).slice(0, 80);
+  ticketTitleInput.value = defaultTitle;
+  ticketQuote.textContent = msgQuoteText(m);
+  ticketModal.classList.add("visible");
+  setTimeout(() => ticketTitleInput.focus(), 80);
+}
+function closeTicketModal() {
+  ticketModal.classList.remove("visible");
+  pendingTicketMsg = null;
+}
+ticketCancel.onclick = closeTicketModal;
+ticketModal.addEventListener("click", (e) => { if (e.target === ticketModal) closeTicketModal(); });
+
+ticketSubmit.onclick = async () => {
+  if (!pendingTicketMsg || !currentUser || !currentChatKey) return;
+  const assigneeUid = ticketAssigneeSelect.value;
+  const opt = ticketAssigneeSelect.options[ticketAssigneeSelect.selectedIndex];
+  const assigneeName = (opt?.dataset.name || opt?.textContent || "").replace(" (me)", "").trim();
+  if (!assigneeUid) { showToast("Pick an assignee"); return; }
+  const titleVal = ticketTitleInput.value.trim().slice(0, 80);
+  if (!titleVal) { showToast("Title required"); return; }
+  ticketSubmit.disabled = true;
+  try {
+    await createTicket(pendingTicketMsg, assigneeUid, assigneeName, titleVal);
+    closeTicketModal();
+    showToast("Ticket created");
+  } catch (e) {
+    showToast("Failed: " + (e.message || e));
+  } finally {
+    ticketSubmit.disabled = false;
+  }
+};
+
+function teamAssignees() {
+  const out = [];
+  const seen = new Set();
+  if (currentUser) {
+    seen.add(currentUser.uid);
+    out.push({ uid: currentUser.uid, name: currentUser.displayName || currentUser.email });
+  }
+  for (const [uid, u] of Object.entries(teamUsers || {})) {
+    if (seen.has(uid) || !u) continue;
+    seen.add(uid);
+    out.push({ uid, name: u.name || u.email || uid });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function createTicket(message, assigneeUid, assigneeName, titleOverride) {
+  const meta = chatsCache[currentChatKey] || {};
+  const chatId = meta.chatId || chatKeyToChatId(currentChatKey);
+  const titleSrc = String(msgQuoteText(message)).trim();
+  const title = (titleOverride || titleSrc || "[empty message]").slice(0, 80);
+  const ticketRef = push(ref(db, `${ROOT}/tickets`));
+  const id = ticketRef.key;
+  const ticket = {
+    title,
+    anchorChatId: chatId,
+    anchorMsgKey: message.id,
+    anchorText: titleSrc.slice(0, 240),
+    assignee: assigneeUid,
+    assigneeName,
+    status: "open",
+    createdBy: currentUser.uid,
+    createdByName: currentUser.displayName || currentUser.email,
+    createdAt: Date.now(),
+  };
+  const updates = {};
+  updates[`${ROOT}/tickets/${id}`] = ticket;
+  updates[`${ROOT}/chats/${encodeKey(chatId)}/tickets/${id}`] = true;
+  await update(ref(db), updates);
+}
+
+// ====== MEDIA SEND ======
+// Periskope's send endpoint takes base64 in body.media.filedata, so we
+// FileReader-encode the picked file and let the existing /send Worker do
+// the upload. Same shape as the desktop's doSendMedia.
+const MAX_MEDIA_BYTES = 25 * 1024 * 1024; // 25 MB — keeps us inside Worker limits
+
+attachBtn.onclick = () => {
+  if (!currentChatKey) return;
+  fileInput.click();
+};
+fileInput.onchange = async () => {
+  const file = fileInput.files?.[0];
+  fileInput.value = ""; // reset so re-picking the same file fires change again
+  if (!file) return;
+  if (file.size > MAX_MEDIA_BYTES) {
+    showToast(`Too large (max ${Math.round(MAX_MEDIA_BYTES / 1024 / 1024)} MB)`);
+    return;
+  }
+  attachBtn.classList.add("busy");
+  try {
+    const base64 = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result).split(",")[1] || "");
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(file);
+    });
+    const mt = file.type || "application/octet-stream";
+    const mediaType = mt.startsWith("image/") ? "image"
+                    : mt.startsWith("video/") ? "video"
+                    : mt.startsWith("audio/") ? "audio"
+                    : "document";
+    await doSendMedia({
+      type: mediaType,
+      filename: file.name,
+      mimetype: mt,
+      filedata: base64,
+    });
+  } catch (e) {
+    showToast("Attach failed: " + (e.message || e));
+  } finally {
+    attachBtn.classList.remove("busy");
+  }
+};
+
+async function doSendMedia(media) {
+  if (!currentChatKey || !currentUser) return;
+  const meta = chatsCache[currentChatKey] || {};
+  const chatId = meta.chatId || chatKeyToChatId(currentChatKey);
+  const phone = meta.phone || chatId.split("@")[0];
+  const caption = composerInput.value.trim();
+  const msgRef = push(ref(db, `${ROOT}/chats/${currentChatKey}/messages`));
+  const localMsgId = msgRef.key;
+  const ts = Date.now();
+  await set(msgRef, {
+    direction: "out", text: caption, ts,
+    sentByUid: currentUser.uid,
+    sentByName: currentUser.displayName || currentUser.email,
+    status: "sending",
+    media: { mimeType: media.mimetype, fileName: media.filename },
+    messageType: media.type,
+  });
+  const previewIcon = media.type === "image" ? "📷"
+                    : media.type === "video" ? "🎥"
+                    : media.type === "audio" ? "🎤" : "📎";
+  await update(ref(db, `${ROOT}/chats/${currentChatKey}/meta`), {
+    chatId, phone,
+    lastMsgAt: ts,
+    lastMsgPreview: caption || `${previewIcon} ${media.filename}`,
+    lastMsgDirection: "out",
+    lastMsgSentByName: currentUser.displayName || currentUser.email,
+  });
+  composerInput.value = "";
+  composerInput.style.height = "auto";
+  showToast(`Sending ${media.type}…`);
+
+  try {
+    const res = await fetch(`${WORKER_URL}/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chatId, phone, message: caption,
+        media,
+        sentByUid: currentUser.uid,
+        sentByName: currentUser.displayName || currentUser.email,
+        localMsgId,
+      }),
+    });
+    if (!res.ok) {
+      const t = await res.text();
+      await update(msgRef, { status: "failed", error: t.slice(0, 300) });
+      showToast("Send failed");
+    }
+  } catch (e) {
+    await update(msgRef, { status: "failed", error: String(e) });
+    showToast("Network error");
+  }
+}
+
+// ====== AI SUMMARIZE ======
+let _lastSummaryChatKey = null;
+summarizeBtn.onclick = () => runSummary(false);
+summaryRegen.onclick = () => runSummary(true);
+summaryClose.onclick = () => summaryModal.classList.remove("visible");
+summaryModal.addEventListener("click", (e) => { if (e.target === summaryModal) summaryModal.classList.remove("visible"); });
+
+async function runSummary(_force) {
+  if (!currentChatKey) return;
+  const meta = chatsCache[currentChatKey] || {};
+  const chatId = meta.chatId || chatKeyToChatId(currentChatKey);
+  _lastSummaryChatKey = currentChatKey;
+  summaryModal.classList.add("visible");
+  summaryBody.classList.add("thinking");
+  summaryBody.textContent = "Thinking…";
+  summarySub.textContent = "Calling Claude via worker…";
+  summaryRegen.disabled = true;
+  try {
+    const res = await fetch(`${WORKER_URL}/summarize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId }),
+    });
+    const j = await res.json();
+    // Drop the response if the user has navigated away from this chat.
+    if (_lastSummaryChatKey !== currentChatKey) return;
+    if (!res.ok) {
+      summaryBody.classList.remove("thinking");
+      summaryBody.textContent = "Failed: " + (j?.error || `HTTP ${res.status}`);
+      summarySub.textContent = "";
+      return;
+    }
+    summaryBody.classList.remove("thinking");
+    summaryBody.textContent = j.summary || "(empty)";
+    summarySub.textContent = `${j.count} of ${j.total} messages summarized`;
+  } catch (e) {
+    summaryBody.classList.remove("thinking");
+    summaryBody.textContent = "Network error: " + (e.message || e);
+    summarySub.textContent = "";
+  } finally {
+    summaryRegen.disabled = false;
+  }
+}
+
+// ====== Service worker (installability) ======
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("service-worker.js").catch(() => {});
+  });
+}
+</script>
+</body>
+</html>
