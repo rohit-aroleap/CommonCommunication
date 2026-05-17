@@ -142,6 +142,7 @@ export async function transcribeAudio(
   uri: string,
   options?: { mimeType?: string; cleanup?: boolean },
 ): Promise<string> {
+  const tIn = Date.now();
   const callerCleanup = options?.cleanup ?? true;
   const [{ getGroqKey }, { getVoiceCleanupEnabled }] = await Promise.all([
     import("@/lib/groqKey"),
@@ -152,17 +153,28 @@ export async function transcribeAudio(
     getVoiceCleanupEnabled(),
   ]);
   const cleanup = callerCleanup && prefAllowsCleanup;
+  const tPrefsReady = Date.now();
+  console.log("[stt]", "prefs-ready", { ms: tPrefsReady - tIn, groqKey: !!groqKey, cleanup });
   if (groqKey) {
     const raw = await transcribeWithGroq(uri, groqKey, options?.mimeType);
+    const tGroqDone = Date.now();
+    console.log("[stt]", "groq-done", { ms: tGroqDone - tPrefsReady, chars: raw.length });
     if (!raw) return "";
     if (!cleanup) return raw;
-    return await cleanupTranscript(raw);
+    const cleaned = await cleanupTranscript(raw);
+    const tCleanDone = Date.now();
+    console.log("[stt]", "cleanup-done", { ms: tCleanDone - tGroqDone, total_ms: tCleanDone - tIn });
+    return cleaned;
   }
   // Legacy path: base64-encode the file for the Worker's JSON-body endpoint.
   const audioB64 = await FileSystem.readAsStringAsync(uri, {
     encoding: FileSystem.EncodingType.Base64,
   });
-  return await transcribeViaWorker(audioB64, cleanup);
+  const tB64 = Date.now();
+  console.log("[stt]", "b64-ready", { ms: tB64 - tPrefsReady, bytes: audioB64.length });
+  const text = await transcribeViaWorker(audioB64, cleanup);
+  console.log("[stt]", "worker-done", { ms: Date.now() - tB64, total_ms: Date.now() - tIn });
+  return text;
 }
 
 // Upload the recorded file straight to Groq's OpenAI-compatible Whisper.
@@ -186,11 +198,13 @@ async function transcribeWithGroq(
   form.append("model", "whisper-large-v3-turbo");
   form.append("response_format", "json");
 
+  const tReq = Date.now();
   const res = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
     method: "POST",
     headers: { Authorization: "Bearer " + apiKey },
     body: form as any,
   });
+  console.log("[stt]", "groq-http", { ms: Date.now() - tReq, status: res.status });
   const j = (await res.json().catch(() => ({}))) as {
     text?: string;
     error?: { message?: string } | string;

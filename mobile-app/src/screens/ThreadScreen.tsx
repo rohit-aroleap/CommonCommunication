@@ -57,6 +57,8 @@ import { dayLabel } from "@/lib/format";
 import { chatKeyToChatId } from "@/lib/encodeKey";
 import { fetchChatInfo, sendMessage, notifyDm, transcribeAudio } from "@/lib/worker";
 import { makeVoiceNoteRecordingOptions } from "@/lib/voiceRecording";
+import { prewarmTranscription } from "@/lib/prewarm";
+import { getGroqKey } from "@/lib/groqKey";
 import { dedupMessages } from "@/lib/messageDedup";
 import {
   filterTemplates,
@@ -281,6 +283,38 @@ export function ThreadScreen({ route, navigation }: Props) {
   const { colors } = useTheme();
   const styles = useStyles(makeStyles);
   const listRef = useRef<FlatList<Message>>(null);
+
+  // Pre-warm the TLS pool to api.groq.com and the Worker on screen entry so
+  // the first voice-note POST doesn't pay a cold handshake (~200-500ms saved
+  // on cellular). Also requests mic permission + sets the audio mode up
+  // front, off the tap path — VoiceMicButton's per-recorder prepareToRecord
+  // still runs on mount of each mic. Cheap, fire-and-forget.
+  useEffect(() => {
+    if (!audioMod) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const k = await getGroqKey();
+        if (cancelled) return;
+        prewarmTranscription(k);
+      } catch {
+        /* swallow */
+      }
+      try {
+        const perm = await audioMod.requestRecordingPermissionsAsync();
+        if (cancelled || !perm.granted) return;
+        await audioMod.setAudioModeAsync({
+          allowsRecording: true,
+          playsInSilentMode: true,
+        });
+      } catch {
+        /* swallow — VoiceMicButton will retry on tap if this failed */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Android edge-to-edge keyboard fix (v1.127). KeyboardAvoidingView's
   // "height" / "padding" behaviors are unreliable on SDK 55 Android because
@@ -1259,6 +1293,11 @@ function VoiceMicButton({
   const recorderState = audioMod.useAudioRecorderState(recorder);
   const isRecording = !!recorderState?.isRecording;
 
+  // True once the recorder is prepared and ready to .record() without first
+  // having to await prepareToRecordAsync. Prepared once on mount and after
+  // each stop (in the background) so subsequent taps are instant.
+  const preparedRef = useRef(false);
+
   // Bubble recording-state changes up so the parent can disable the
   // sibling mic. useEffect rather than reading isRecording inside toggle()
   // so transient state from expo-audio doesn't get out of sync.
@@ -1266,11 +1305,46 @@ function VoiceMicButton({
     onRecordingChange(isRecording);
   }, [isRecording, onRecordingChange]);
 
+  // Prepare the recorder once on mount. Permission + setAudioModeAsync are
+  // handled at the ThreadScreen level (so they don't run per-mic), but each
+  // recorder still needs its own prepareToRecordAsync. If it fails — usually
+  // because permission hasn't been granted yet or the sibling mic is in the
+  // middle of its own prepare — we silently skip; toggle() will retry on
+  // demand with the full permission flow.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const perm = await audioMod.getRecordingPermissionsAsync?.();
+        if (cancelled) return;
+        if (perm && !perm.granted) return;
+        await recorder.prepareToRecordAsync();
+        if (!cancelled) preparedRef.current = true;
+      } catch {
+        /* swallow — fall back to on-demand prepare in toggle() */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [recorder]);
+
   async function toggle() {
     if (transcribing) return;
     if (isRecording) {
       try {
         await recorder.stop();
+        // After stop() the recorder is in a "stopped" state and needs to be
+        // re-prepared before the next record(). Fire that in the background
+        // so it overlaps with the upload+transcribe round-trip instead of
+        // adding to the next tap's latency.
+        preparedRef.current = false;
+        recorder
+          .prepareToRecordAsync()
+          .then(() => {
+            preparedRef.current = true;
+          })
+          .catch(() => {});
         const uri = recorder.uri as string | undefined;
         if (uri) await onTranscribed(uri);
       } catch (e) {
@@ -1284,6 +1358,19 @@ function VoiceMicButton({
     // disabled is true when the sibling mic is currently recording. Guard
     // here too in case the user manages to tap during a race window.
     if (disabled) return;
+
+    // Fast path: recorder pre-prepared on mount / after last stop. Skip the
+    // permission round-trip entirely.
+    if (preparedRef.current) {
+      try {
+        recorder.record();
+        return;
+      } catch {
+        // Fall through to the full prepare path below.
+        preparedRef.current = false;
+      }
+    }
+
     try {
       const perm = await audioMod.requestRecordingPermissionsAsync();
       if (!perm.granted) {
@@ -1298,6 +1385,7 @@ function VoiceMicButton({
         playsInSilentMode: true,
       });
       await recorder.prepareToRecordAsync();
+      preparedRef.current = true;
       recorder.record();
     } catch (e) {
       Alert.alert(

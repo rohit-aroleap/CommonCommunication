@@ -2,7 +2,7 @@
 // Mirrors the right-side drawer on the desktop dashboard: subscription stage,
 // habit metrics, acquisition source, ticket history. Read-only for now.
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -622,11 +622,43 @@ function MicButton({
   const recorderState = audioMod.useAudioRecorderState(recorder);
   const isRecording = !!recorderState?.isRecording;
 
+  // True once the recorder has been prepared and can call .record() instantly
+  // without first awaiting prepareToRecordAsync. Prepared on mount and re-
+  // prepared in the background after every stop.
+  const preparedRef = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const perm = await audioMod.getRecordingPermissionsAsync?.();
+        if (cancelled) return;
+        if (perm && !perm.granted) return;
+        await recorder.prepareToRecordAsync();
+        if (!cancelled) preparedRef.current = true;
+      } catch {
+        /* swallow — toggle() will redo the full prepare on first tap */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [recorder]);
+
   async function toggle() {
     if (transcribing || disabled) return;
     if (isRecording) {
       try {
         await recorder.stop();
+        // Re-prepare in the background so the *next* tap is instant. This
+        // overlaps with the upload/transcribe roundtrip happening below.
+        preparedRef.current = false;
+        recorder
+          .prepareToRecordAsync()
+          .then(() => {
+            preparedRef.current = true;
+          })
+          .catch(() => {});
         const uri = recorder.uri as string | undefined;
         if (uri) await onTranscribe(uri);
       } catch (e) {
@@ -637,6 +669,17 @@ function MicButton({
       }
       return;
     }
+
+    // Fast path: recorder already prepared. record() with no awaits in front.
+    if (preparedRef.current) {
+      try {
+        recorder.record();
+        return;
+      } catch {
+        preparedRef.current = false;
+      }
+    }
+
     try {
       const perm = await audioMod.requestRecordingPermissionsAsync();
       if (!perm.granted) {
@@ -651,6 +694,7 @@ function MicButton({
         playsInSilentMode: true,
       });
       await recorder.prepareToRecordAsync();
+      preparedRef.current = true;
       recorder.record();
     } catch (e) {
       Alert.alert(
