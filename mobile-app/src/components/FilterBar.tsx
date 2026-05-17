@@ -16,7 +16,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { colors, space } from "@/theme";
+import { space, useStyles, useTheme, type Colors } from "@/theme";
 import { DAILY_SENTINEL, type ChatRow } from "@/types";
 import { isDailyGroup } from "@/data/AppDataContext";
 import { normalizeFerraPhone } from "@/lib/ferra";
@@ -56,6 +56,8 @@ export function FilterBar({
   onChangeSearch,
   onChangeFavoritesOnly,
 }: Props) {
+  const { colors } = useTheme();
+  const styles = useStyles(makeStyles);
   // Build the status dropdown options from what's actually present in the
   // data — empty buckets would just confuse the user. Daily-groups gets its
   // own pseudo-option above the real statuses.
@@ -203,6 +205,7 @@ function PickerSheet({
   onPick: (v: string) => void;
   onClose: () => void;
 }) {
+  const styles = useStyles(makeStyles);
   return (
     <Modal
       transparent
@@ -237,106 +240,105 @@ function PickerSheet({
   );
 }
 
-const styles = StyleSheet.create({
-  bar: {
-    backgroundColor: "white",
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-    gap: space.sm,
-  },
-  searchWrap: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#f0f2f5",
-    borderRadius: 22,
-    paddingHorizontal: 12,
-  },
-  searchIcn: { color: colors.muted, fontSize: 13, marginRight: 8 },
-  searchInput: {
-    flex: 1,
-    paddingVertical: 10,
-    fontSize: 15,
-    color: colors.text,
-  },
-  clearTxt: { fontSize: 20, color: colors.muted, paddingHorizontal: 6 },
-  dropRow: { flexDirection: "row", gap: space.sm },
-  drop: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: "#f0f2f5",
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "transparent",
-  },
-  dropActive: {
-    backgroundColor: "#d1f4cc",
-    borderColor: colors.green,
-  },
-  dropTxt: { fontSize: 13, color: colors.text },
-  dropTxtActive: { color: colors.greenDark, fontWeight: "500" },
-  caret: { fontSize: 10, color: colors.muted, marginLeft: 6 },
-  favChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: "#f0f2f5",
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "transparent",
-  },
-  favChipOn: {
-    backgroundColor: "#fff7e0",
-    borderColor: "#f5b50a",
-  },
-  favChipTxt: { fontSize: 13, color: colors.text },
-  favChipTxtOn: { color: "#8a6500", fontWeight: "500" },
+function makeStyles(colors: Colors) {
+  return StyleSheet.create({
+    bar: {
+      backgroundColor: colors.panel,
+      paddingHorizontal: space.md,
+      paddingVertical: space.sm,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+      gap: space.sm,
+    },
+    searchWrap: {
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: colors.bg,
+      borderRadius: 22,
+      paddingHorizontal: 12,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    searchIcn: { color: colors.muted, fontSize: 13, marginRight: 8 },
+    searchInput: { flex: 1, paddingVertical: 10, fontSize: 15, color: colors.text },
+    clearTxt: { fontSize: 20, color: colors.muted, paddingHorizontal: 6 },
+    dropRow: { flexDirection: "row", gap: space.sm },
+    drop: {
+      flex: 1,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      backgroundColor: colors.bg,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    dropActive: {
+      backgroundColor: colors.pillActiveBg,
+      borderColor: colors.green,
+    },
+    dropTxt: { fontSize: 13, color: colors.text },
+    dropTxtActive: { color: colors.pillActiveFg, fontWeight: "500" },
+    caret: { fontSize: 10, color: colors.muted, marginLeft: 6 },
+    favChip: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      backgroundColor: colors.bg,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    favChipOn: {
+      backgroundColor: "#fff7e0",
+      borderColor: "#f5b50a",
+    },
+    favChipTxt: { fontSize: 13, color: colors.text },
+    favChipTxtOn: { color: "#8a6500", fontWeight: "500" },
 
-  sheetBack: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.5)",
-    justifyContent: "flex-end",
-  },
-  sheet: {
-    backgroundColor: "white",
-    borderTopLeftRadius: 14,
-    borderTopRightRadius: 14,
-    paddingBottom: 24,
-    paddingTop: 8,
-    maxHeight: "75%",
-  },
-  grab: {
-    width: 36,
-    height: 4,
-    backgroundColor: "#d1d7db",
-    borderRadius: 2,
-    alignSelf: "center",
-    marginBottom: 8,
-  },
-  sheetTitle: {
-    fontSize: 13,
-    color: colors.muted,
-    paddingHorizontal: 18,
-    paddingBottom: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-  },
-  sheetItem: {
-    paddingVertical: 14,
-    paddingHorizontal: 18,
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  sheetItemSel: { backgroundColor: "#f0f2f5" },
-  sheetItemTxt: { fontSize: 15, color: colors.text, flex: 1 },
-  sheetItemTxtSel: { fontWeight: "500", color: colors.greenDark },
-  sheetCheck: { fontSize: 16, color: colors.greenDark },
-});
+    sheetBack: {
+      flex: 1,
+      backgroundColor: "rgba(0,0,0,0.55)",
+      justifyContent: "flex-end",
+    },
+    sheet: {
+      backgroundColor: colors.panel,
+      borderTopLeftRadius: 14,
+      borderTopRightRadius: 14,
+      paddingBottom: 24,
+      paddingTop: 8,
+      maxHeight: "75%",
+    },
+    grab: {
+      width: 36,
+      height: 4,
+      backgroundColor: colors.border,
+      borderRadius: 2,
+      alignSelf: "center",
+      marginBottom: 8,
+    },
+    sheetTitle: {
+      fontSize: 13,
+      color: colors.muted,
+      paddingHorizontal: 18,
+      paddingBottom: 10,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+      textTransform: "uppercase",
+      letterSpacing: 0.5,
+    },
+    sheetItem: {
+      paddingVertical: 14,
+      paddingHorizontal: 18,
+      flexDirection: "row",
+      alignItems: "center",
+    },
+    sheetItemSel: { backgroundColor: colors.rowHover },
+    sheetItemTxt: { fontSize: 15, color: colors.text, flex: 1 },
+    sheetItemTxtSel: { fontWeight: "500", color: colors.green },
+    sheetCheck: { fontSize: 16, color: colors.green },
+  });
+}

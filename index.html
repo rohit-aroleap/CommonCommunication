@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.131</title>
+<title>CommonCommunication v1.146</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -257,7 +257,7 @@
     color: var(--muted); font-size: 16px; padding: 0 4px;
   }
   .team-member-row .rm:hover { color: #d9534f; }
-  /* v1.131: inline display-name editor. Feeds the @mention picker
+  /* v1.132: inline display-name editor. Feeds the @mention picker
      and other UIs that show "who said this" so we don't have to
      stare at full emails. Optional — falls back to email when blank. */
   .team-member-row .name-row {
@@ -578,6 +578,37 @@
   @keyframes micPulse {
     0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,.55); }
     50%      { box-shadow: 0 0 0 8px rgba(239,68,68,0); }
+  }
+
+  /* v1.146: pill-shaped variant of the mic button — used for the primary
+     voice-to-composer button (🎤 Voice). Bigger target than the circular
+     📝 notes mic to match its higher-frequency use. The `.mic-btn` base
+     handles the .recording (red pulse) + .transcribing (yellow) states;
+     we just override the shape, size, and add a text label slot. */
+  .composer .mic-btn.voice-pill {
+    width: auto; height: 40px;
+    border-radius: 20px;
+    padding: 0 16px;
+    gap: 6px;
+    font-size: 14px; font-weight: 500;
+    color: #374151;
+    background: white;
+    border: 1px solid #d1d5db;
+  }
+  .composer .mic-btn.voice-pill .voice-pill-icon { font-size: 16px; line-height: 1; }
+  .composer .mic-btn.voice-pill .voice-pill-label { line-height: 1; }
+  .composer .mic-btn.voice-pill:hover:not(:disabled):not(.recording):not(.transcribing) {
+    background: var(--hover);
+  }
+  /* While recording, the pill replaces its content with the elapsed-seconds
+     timer (set via .textContent in JS, which wipes the inner spans — that's
+     intentional, the simpler single-text layout reads better at a glance). */
+  .composer .mic-btn.voice-pill.recording {
+    padding: 0 18px;
+    font-size: 13px;
+  }
+  .composer .mic-btn.voice-pill.transcribing {
+    padding: 0 18px;
   }
 
   .emoji-popover {
@@ -1320,7 +1351,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.131</div>
+    <div class="login-version">v1.146</div>
   </div>
 </div>
 
@@ -1328,12 +1359,13 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.131</span>
+    <span class="ver">v1.146</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
     <span id="workerStatus" style="font-size:11px; opacity:.85;"></span>
     <span class="user">
+      <button class="logout" id="aiSettingsBtn" style="margin-right:6px;" title="AI settings — set your personal Groq key for fast voice-note transcription">⚙</button>
       <button class="logout" id="densityBtn" style="margin-right:6px;" title="Toggle compact / comfortable density">⇕</button>
       <button class="logout" id="ticketsBtn" style="margin-right:6px;" title="All tickets">🎫 All tickets</button>
       <button class="logout" id="templatesBtn" style="display:none; margin-right:6px;" title="Manage quick reply templates">📋 Templates</button>
@@ -1410,9 +1442,14 @@
           <button class="emoji-btn" id="emojiBtn" title="Insert emoji">😀</button>
           <button class="emoji-btn" id="attachBtn" title="Attach file (image, video, audio, document)">📎</button>
           <input type="file" id="fileInput" style="display:none;" accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx" />
+          <!-- v1.134: left = voice-to-private-note (📝). -->
+          <button class="mic-btn" id="voiceNoteBtn" title="Record a private note — transcribed and added to the notes panel (NOT sent to the customer)">📝</button>
           <textarea id="composerInput" placeholder="Type a message" rows="1"></textarea>
+          <!-- v1.146: voice-to-composer pill (mic icon + "Voice" label). Sits
+               to the left of the AI suggest button — that's the primary
+               speak-to-reply affordance, hence the bigger target. -->
+          <button class="mic-btn voice-pill" id="voiceComposerBtn" title="Record a voice message — transcribed and added to the reply box (you can edit before sending)"><span class="voice-pill-icon">🎤</span><span class="voice-pill-label">Voice</span></button>
           <button class="ai-btn" id="suggestReplyBtn" title="AI suggested reply (Claude)">✨</button>
-          <button class="mic-btn" id="voiceNoteBtn" title="Record a voice note — transcribed and saved as a private note (NOT sent to the customer)">🎤</button>
           <button class="send-btn" id="sendBtn" title="Send">➤</button>
         </div>
       </div>
@@ -1451,6 +1488,49 @@
     </div>
     <div class="actions" style="margin-top:18px;">
       <button class="btn btn-secondary" id="teamClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============== AI SETTINGS MODAL (v1.133) ============== -->
+<!-- Per-user Groq API key for direct browser-side voice-note transcription.
+     Each teammate signs up at console.groq.com for a free account, pastes
+     their personal key here, and from then on the 🎤 button uploads audio
+     straight to Groq's Whisper from this browser. The Worker only does the
+     Claude cleanup pass on the returned text. This gives every user their
+     own free-tier quota and skips one network hop. -->
+<div class="modal-back" id="aiSettingsModal">
+  <div class="modal" style="width:560px;">
+    <h3>AI settings</h3>
+    <div style="font-size:12px; color:var(--muted); margin-bottom:14px;">
+      Voice-note transcription uses <b>Groq</b> when you provide your own API key — it's noticeably faster than the Worker fallback, and each teammate has their own free-tier quota (8 hours of audio/day).
+    </div>
+
+    <label style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+      <span>Groq API key</span>
+      <a href="https://console.groq.com/keys" target="_blank" rel="noopener" style="font-size:11px; color:var(--accent); text-decoration:none;">Get a key →</a>
+    </label>
+    <div style="display:flex; gap:6px; margin-bottom:8px;">
+      <input id="groqKeyInput" type="password" placeholder="gsk_..." autocomplete="off" spellcheck="false" style="flex:1; font-family:monospace;" />
+      <button class="btn btn-secondary" id="groqKeyReveal" title="Show / hide" style="padding:6px 10px;">👁</button>
+    </div>
+    <div id="groqKeyStatus" style="font-size:12px; min-height:18px; margin-bottom:10px;"></div>
+
+    <details style="margin-bottom:14px;">
+      <summary style="cursor:pointer; font-size:12px; color:var(--muted);">How do I get a free Groq key?</summary>
+      <ol style="font-size:12px; color:var(--muted); padding-left:20px; margin-top:8px; line-height:1.6;">
+        <li>Sign up at <a href="https://console.groq.com" target="_blank" rel="noopener">console.groq.com</a> (free, no card needed)</li>
+        <li>Open <a href="https://console.groq.com/keys" target="_blank" rel="noopener">API Keys</a> → <b>Create API Key</b></li>
+        <li>Copy the <code>gsk_...</code> string and paste it above</li>
+        <li>Click <b>Test &amp; save</b></li>
+      </ol>
+      <div style="font-size:11px; color:var(--muted); margin-top:8px;">Your key is stored in this browser only — never sent to our Worker or to other teammates.</div>
+    </details>
+
+    <div class="actions" style="display:flex; gap:8px; justify-content:flex-end;">
+      <button class="btn btn-secondary" id="groqKeyClear">Remove key</button>
+      <button class="btn btn-secondary" id="aiSettingsClose">Close</button>
+      <button class="btn btn-primary" id="groqKeySave">Test &amp; save</button>
     </div>
   </div>
 </div>
@@ -1655,7 +1735,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.131";
+const APP_VERSION = "v1.146";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -1827,6 +1907,94 @@ densityBtn.onclick = () => {
   const next = document.body.classList.contains("compact") ? "comfortable" : "compact";
   localStorage.setItem("cc-density", next);
   applyDensity(next);
+};
+
+// ====== AI SETTINGS (Groq key) — v1.133 ======
+// Per-user Groq API key for browser-direct voice-note transcription.
+// Stored under "cc-groq-key" in localStorage so it's per-browser, per-device.
+// We never send the key to the Worker — the browser calls Groq directly.
+const GROQ_KEY_LS = "cc-groq-key";
+function getGroqKey() {
+  try { return localStorage.getItem(GROQ_KEY_LS) || ""; } catch { return ""; }
+}
+function setGroqKey(k) {
+  try {
+    if (k) localStorage.setItem(GROQ_KEY_LS, k);
+    else localStorage.removeItem(GROQ_KEY_LS);
+  } catch { /* private mode — fail soft */ }
+}
+
+const aiSettingsModal = $("aiSettingsModal");
+const aiSettingsBtn = $("aiSettingsBtn");
+const aiSettingsClose = $("aiSettingsClose");
+const groqKeyInput = $("groqKeyInput");
+const groqKeyStatus = $("groqKeyStatus");
+const groqKeySave = $("groqKeySave");
+const groqKeyClear = $("groqKeyClear");
+const groqKeyReveal = $("groqKeyReveal");
+
+function openAiSettings() {
+  groqKeyInput.value = getGroqKey();
+  groqKeyInput.type = "password";
+  renderGroqKeyStatus();
+  aiSettingsModal.classList.add("visible");
+}
+function renderGroqKeyStatus() {
+  const has = !!getGroqKey();
+  groqKeyStatus.innerHTML = has
+    ? `<span style="color:#2e7d32;">● Saved — voice notes will use your Groq key.</span>`
+    : `<span style="color:#999;">No key saved — voice notes use the slower Worker fallback.</span>`;
+}
+renderGroqKeyStatus();
+
+aiSettingsBtn.onclick = openAiSettings;
+aiSettingsClose.onclick = () => aiSettingsModal.classList.remove("visible");
+aiSettingsModal.addEventListener("click", (e) => {
+  if (e.target === aiSettingsModal) aiSettingsModal.classList.remove("visible");
+});
+
+groqKeyReveal.onclick = () => {
+  groqKeyInput.type = groqKeyInput.type === "password" ? "text" : "password";
+};
+
+groqKeyClear.onclick = () => {
+  setGroqKey("");
+  groqKeyInput.value = "";
+  renderGroqKeyStatus();
+  groqKeyStatus.innerHTML = `<span style="color:#999;">Key removed.</span>`;
+};
+
+// Validates the pasted key against Groq's /models endpoint before saving.
+// Cheap call (no audio uploaded) that exercises the auth header — surfaces
+// typos / revoked keys / wrong-provider keys immediately rather than at the
+// next 🎤 tap.
+groqKeySave.onclick = async () => {
+  const k = (groqKeyInput.value || "").trim();
+  if (!k) {
+    groqKeyStatus.innerHTML = `<span style="color:#d9534f;">Paste a key first.</span>`;
+    return;
+  }
+  if (!/^gsk_/.test(k)) {
+    groqKeyStatus.innerHTML = `<span style="color:#d9534f;">That doesn't look like a Groq key (should start with <code>gsk_</code>).</span>`;
+    return;
+  }
+  groqKeySave.disabled = true;
+  groqKeyStatus.innerHTML = `<span style="color:#888;">Testing…</span>`;
+  try {
+    const res = await fetch("https://api.groq.com/openai/v1/models", {
+      headers: { "Authorization": "Bearer " + k },
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      throw new Error(j?.error?.message || ("HTTP " + res.status));
+    }
+    setGroqKey(k);
+    groqKeyStatus.innerHTML = `<span style="color:#2e7d32;">● Saved — voice notes are now using your Groq key.</span>`;
+  } catch (e) {
+    groqKeyStatus.innerHTML = `<span style="color:#d9534f;">Test failed: ${String(e?.message || e)}</span>`;
+  } finally {
+    groqKeySave.disabled = false;
+  }
 };
 
 // ====== AUTH ======
@@ -2081,7 +2249,7 @@ function renderAllowedList() {
       await set(ref(db, `${ROOT}/config/teamMembers/${b.dataset.key}/phones/${b.dataset.phone}`), null);
     };
   });
-  // v1.131: save the inline display name on blur. Empty string deletes
+  // v1.132: save the inline display name on blur. Empty string deletes
   // the name field (falls back to email everywhere via `name || email`).
   allowedListEl.querySelectorAll(".name-input").forEach((inp) => {
     inp.onblur = async () => {
@@ -5642,7 +5810,7 @@ function insertTemplateById(id) {
   closeTplPicker();
 }
 
-// ====== @-mention picker (composer) — v1.131 ======
+// ====== @-mention picker (composer) — v1.132 ======
 // Type "@" (at start, or after a space) and a popover appears with
 // teammate candidates. Pick one, the "@<query>" is replaced with the
 // teammate's name and their uid is stashed in _mentions so doSend can
@@ -5707,7 +5875,7 @@ function getMentionCandidates(query) {
   // emailKey). De-dupe by email. Signed-in ones are pushable; pending
   // ones are display-only.
   //
-  // v1.131: name resolution order is teamMembers.name (admin-set in the
+  // v1.132: name resolution order is teamMembers.name (admin-set in the
   // Team modal) → Firebase Auth display name → email. Same order for
   // signed-in AND pending users, so a name set in the Team modal always
   // wins regardless of whether the teammate has signed in yet.
@@ -5935,15 +6103,25 @@ suggestReplyBtn.onclick = async () => {
   }
 };
 
-// ====== VOICE NOTES (mic → Whisper → notes-panel draft) ======
-// Records mic audio via MediaRecorder, sends it to /transcribe (Cloudflare
-// Workers AI whisper-large-v3-turbo), then opens the notes draft form with
-// the transcript pre-filled so the trainer can edit/save. Audio is NEVER
-// sent to the customer — this only feeds the private notes panel.
+// ====== VOICE MIC BUTTONS (v1.134) ======
+// Two mic buttons share one recording state machine, distinguished by which
+// button is "active":
+//   📝 voiceNoteBtn      (left, mode="note")     → opens notes panel
+//   🎤 voiceComposerBtn  (right, mode="composer") → appends to reply box
+// Whichever button started the recording shows the red pulsing animation +
+// the elapsed-time count-up; the other stays idle and ignores clicks until
+// the active recording stops.
 let mediaRecorder = null;
 let audioChunks = [];
 let recordingStartTs = 0;
 let recordingTimer = null;
+let activeMicBtn = null;     // The button currently animated (recording / transcribing).
+let activeMicMode = null;    // "note" | "composer" — picks the destination after transcription.
+// Restored on the active button after the cycle finishes. Held as HTML so
+// the pill-shaped composer mic can keep its two-span icon+label layout —
+// the circular notes mic just stores a single emoji which is valid HTML too.
+let activeMicIdleHtml = "";
+let activeMicIdleTitle = "";
 const MAX_RECORDING_MS = 120_000; // 2 min cap
 
 function blobToBase64(blob) {
@@ -5955,18 +6133,29 @@ function blobToBase64(blob) {
   });
 }
 
-function resetVoiceBtn() {
-  voiceNoteBtn.classList.remove("recording", "transcribing");
-  voiceNoteBtn.textContent = "🎤";
-  voiceNoteBtn.title = "Record a voice note — transcribed and saved as a private note (NOT sent to the customer)";
-  voiceNoteBtn.disabled = false;
+function resetActiveMicBtn() {
+  if (!activeMicBtn) return;
+  activeMicBtn.classList.remove("recording", "transcribing");
+  activeMicBtn.innerHTML = activeMicIdleHtml;
+  activeMicBtn.title = activeMicIdleTitle;
+  activeMicBtn.disabled = false;
+  activeMicBtn = null;
+  activeMicMode = null;
+  activeMicIdleHtml = "";
+  activeMicIdleTitle = "";
 }
 
-async function startVoiceNote() {
+async function startMicRecording(btn, mode, idleHtml, idleTitle) {
   if (!currentChatId) { alert("Open a chat first."); return; }
   if (!WORKER_URL) { alert("Worker URL not configured."); return; }
   if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
     alert("Voice recording isn't supported in this browser. Try Chrome, Edge, or Firefox.");
+    return;
+  }
+  if (mediaRecorder && mediaRecorder.state === "recording") {
+    // Other mic is already recording — ignore. The user must stop that one
+    // before starting another. Belt-and-braces; the click handlers also
+    // disable the inactive button while the other is in flight.
     return;
   }
   let stream;
@@ -5988,74 +6177,220 @@ async function startVoiceNote() {
     alert("Couldn't start recorder: " + (e?.message || e));
     return;
   }
+  activeMicBtn = btn;
+  activeMicMode = mode;
+  activeMicIdleHtml = idleHtml;
+  activeMicIdleTitle = idleTitle;
   mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) audioChunks.push(e.data); };
   mediaRecorder.onstop = async () => {
     stream.getTracks().forEach(t => t.stop());
     const type = mediaRecorder.mimeType || mime || "audio/webm";
     const blob = new Blob(audioChunks, { type });
     audioChunks = [];
-    await transcribeAndDraft(blob);
+    await transcribeAndRoute(blob);
   };
   mediaRecorder.start();
   recordingStartTs = Date.now();
-  voiceNoteBtn.classList.add("recording");
-  voiceNoteBtn.textContent = "0s";
-  voiceNoteBtn.title = "Stop recording";
+  btn.classList.add("recording");
+  btn.textContent = "0s";
+  btn.title = "Stop recording";
   recordingTimer = setInterval(() => {
     const secs = Math.floor((Date.now() - recordingStartTs) / 1000);
-    voiceNoteBtn.textContent = secs + "s";
-    if (Date.now() - recordingStartTs >= MAX_RECORDING_MS) stopVoiceNote();
+    btn.textContent = secs + "s";
+    if (Date.now() - recordingStartTs >= MAX_RECORDING_MS) stopMicRecording();
   }, 250);
 }
 
-function stopVoiceNote() {
+function stopMicRecording() {
   if (!mediaRecorder || mediaRecorder.state !== "recording") return;
   if (recordingTimer) { clearInterval(recordingTimer); recordingTimer = null; }
-  voiceNoteBtn.classList.remove("recording");
-  voiceNoteBtn.classList.add("transcribing");
-  voiceNoteBtn.textContent = "…";
-  voiceNoteBtn.title = "Transcribing…";
-  voiceNoteBtn.disabled = true;
+  if (activeMicBtn) {
+    activeMicBtn.classList.remove("recording");
+    activeMicBtn.classList.add("transcribing");
+    activeMicBtn.textContent = "…";
+    activeMicBtn.title = "Transcribing…";
+    activeMicBtn.disabled = true;
+  }
   try { mediaRecorder.stop(); } catch { /* already stopped */ }
 }
 
-async function transcribeAndDraft(blob) {
+// v1.133: if the signed-in user has set their own Groq key, upload the audio
+// directly to Groq from this browser, then ask the Worker to clean it up via
+// Claude. If no key is set, fall back to the legacy /transcribe path (which
+// runs Workers AI Whisper on Cloudflare). The fallback exists so a fresh
+// device works on first launch — but Groq is meaningfully faster and gives
+// each teammate their own free-tier quota.
+// v1.134: now also routes the cleaned text to either the notes panel
+// ("note" mode) or the composer ("composer" mode) based on activeMicMode.
+async function transcribeAndRoute(blob) {
+  const mode = activeMicMode; // snapshot — resetActiveMicBtn() clears it.
   try {
     if (!blob || blob.size < 500) { alert("Recording was too short."); return; }
-    const base64 = await blobToBase64(blob);
-    const res = await fetch(`${WORKER_URL}/transcribe`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ audio: base64 }),
-    });
-    const j = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      alert("Transcribe failed: " + (j.error || ("HTTP " + res.status)));
-      return;
+
+    const groqKey = getGroqKey();
+    let text = "";
+
+    if (groqKey) {
+      // Browser → Groq (multipart) → Worker /cleanup. Groq returns a raw
+      // transcript with fillers/false starts; the Worker's Claude pass
+      // tightens it up using the same prompt as /transcribe.
+      let rawText = "";
+      try {
+        rawText = await transcribeWithGroq(blob, groqKey);
+      } catch (e) {
+        const msg = String(e?.message || e);
+        // 401 = bad/expired key. Walk the user back to the settings modal.
+        if (/401|invalid.api.key|unauthorized/i.test(msg)) {
+          alert("Your Groq key was rejected. Open AI settings and check it.");
+          openAiSettings();
+          return;
+        }
+        alert("Groq transcription failed: " + msg);
+        return;
+      }
+      rawText = (rawText || "").trim();
+      if (!rawText) { alert("No speech detected in the recording."); return; }
+      text = await cleanupTranscript(rawText);
+    } else {
+      // No personal key set — use legacy server path. Encourage the user to
+      // set up Groq once they've completed this note, so subsequent notes
+      // are fast.
+      const base64 = await blobToBase64(blob);
+      const res = await fetch(`${WORKER_URL}/transcribe`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ audio: base64 }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert("Transcribe failed: " + (j.error || ("HTTP " + res.status)));
+        return;
+      }
+      text = (j.text || "").trim();
+      if (!text) { alert("No speech detected in the recording."); return; }
+      maybeNudgeGroqSetup();
     }
-    const text = (j.text || "").trim();
-    if (!text) { alert("No speech detected in the recording."); return; }
-    // Open the notes draft pre-filled with the transcript so the trainer
-    // reviews/edits before committing. Reuses the existing note-form UI.
-    addingNote = true;
-    setNotesExpanded(true);
-    renderNotes();
-    const input = document.getElementById("noteNewInput");
-    if (input) {
-      input.value = text;
-      input.focus();
-      input.setSelectionRange(text.length, text.length);
+
+    if (mode === "composer") {
+      // Append to whatever's already in the reply box. Single space separator
+      // when there's existing text; otherwise just drop the transcript in.
+      const existing = composerInput.value;
+      const next = existing && existing.trim() ? existing.trimEnd() + " " + text : text;
+      composerInput.value = next;
+      composerInput.focus();
+      composerInput.setSelectionRange(next.length, next.length);
+      // Trigger autoresize + send-button enable since we mutated value
+      // programmatically (input event doesn't fire on direct .value writes).
+      composerInput.dispatchEvent(new Event("input", { bubbles: true }));
+    } else {
+      // mode === "note" — open the notes draft pre-filled with the transcript
+      // so the trainer reviews/edits before committing. Reuses the existing
+      // note-form UI.
+      addingNote = true;
+      setNotesExpanded(true);
+      renderNotes();
+      const input = document.getElementById("noteNewInput");
+      if (input) {
+        input.value = text;
+        input.focus();
+        input.setSelectionRange(text.length, text.length);
+      }
     }
   } catch (e) {
     alert("Transcribe network error: " + (e?.message || e));
   } finally {
-    resetVoiceBtn();
+    resetActiveMicBtn();
   }
 }
 
+// Send the recorded blob to Groq's OpenAI-compatible audio endpoint. Whisper
+// large v3 turbo is the fastest model with Hindi/English mix support — good
+// match for our trainer base. Returns the raw transcript string; the caller
+// is responsible for the Claude cleanup step.
+async function transcribeWithGroq(blob, apiKey) {
+  const ext = (blob.type || "").includes("mp4") ? "mp4"
+            : (blob.type || "").includes("ogg") ? "ogg"
+            : "webm";
+  const form = new FormData();
+  form.append("file", blob, `voice.${ext}`);
+  form.append("model", "whisper-large-v3-turbo");
+  form.append("response_format", "json");
+  // Tell Whisper our customers speak English + Hindi mostly. Leaving this
+  // off makes Groq autodetect, which is occasionally wrong on short clips.
+  // form.append("language", "en");
+  const res = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+    method: "POST",
+    headers: { "Authorization": "Bearer " + apiKey },
+    body: form,
+  });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(j?.error?.message || j?.error || ("HTTP " + res.status));
+  }
+  return String(j?.text || "");
+}
+
+// Asks the Worker to run the Claude filler-word cleanup over a raw transcript
+// that this browser already obtained from Groq. If Claude is unreachable or
+// disabled, the Worker returns the raw text unchanged so the trainer still
+// gets *something* to edit.
+async function cleanupTranscript(rawText) {
+  try {
+    const res = await fetch(`${WORKER_URL}/cleanup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: rawText }),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) return rawText; // graceful degrade
+    return (j.text || rawText).trim();
+  } catch {
+    return rawText;
+  }
+}
+
+// First-time nudge: after a user records a voice note via the slow Worker
+// fallback, suggest they set up their own Groq key for next time. Shown at
+// most once per browser (then suppressed forever via localStorage).
+function maybeNudgeGroqSetup() {
+  try {
+    if (localStorage.getItem("cc-groq-nudge-shown") === "1") return;
+    localStorage.setItem("cc-groq-nudge-shown", "1");
+    setTimeout(() => {
+      if (confirm("Tip: set up a free Groq API key for ~2× faster voice notes. Open AI settings now?")) {
+        openAiSettings();
+      }
+    }, 800);
+  } catch { /* localStorage disabled — silently skip */ }
+}
+
+// v1.134: notes mic (left of input). Idle = 📝, mode = "note" — drops
+// the cleaned transcript into the notes draft form (NOT sent to customer).
+const NOTE_MIC_IDLE_HTML = "📝";
+const NOTE_MIC_IDLE_TITLE = "Record a private note — transcribed and added to the notes panel (NOT sent to the customer)";
 voiceNoteBtn.onclick = () => {
-  if (mediaRecorder && mediaRecorder.state === "recording") stopVoiceNote();
-  else startVoiceNote();
+  if (mediaRecorder && mediaRecorder.state === "recording") {
+    // Only the button that started the recording can stop it. Taps on the
+    // other mic during an active recording are ignored.
+    if (activeMicBtn === voiceNoteBtn) stopMicRecording();
+    return;
+  }
+  startMicRecording(voiceNoteBtn, "note", NOTE_MIC_IDLE_HTML, NOTE_MIC_IDLE_TITLE);
+};
+
+// v1.134: composer mic (right of input). Idle = pill with 🎤 + "Voice",
+// mode = "composer" — appends the cleaned transcript to the reply box so
+// the trainer can edit + Send. This is the primary voice button for replies.
+// v1.146: pill shape with text label, sits to the left of the ✨ AI button.
+const COMPOSER_MIC_IDLE_HTML = '<span class="voice-pill-icon">🎤</span><span class="voice-pill-label">Voice</span>';
+const COMPOSER_MIC_IDLE_TITLE = "Record a voice message — transcribed and added to the reply box (you can edit before sending)";
+const voiceComposerBtn = $("voiceComposerBtn");
+voiceComposerBtn.onclick = () => {
+  if (mediaRecorder && mediaRecorder.state === "recording") {
+    if (activeMicBtn === voiceComposerBtn) stopMicRecording();
+    return;
+  }
+  startMicRecording(voiceComposerBtn, "composer", COMPOSER_MIC_IDLE_HTML, COMPOSER_MIC_IDLE_TITLE);
 };
 
 // Attach: open file picker, then base64-encode and send via worker
@@ -6167,7 +6502,7 @@ async function doSend() {
   const chatId = meta.chatId || currentChatId;
   const phone = meta.phone || currentChatId.split("_")[0];
 
-  // v1.131: snapshot mentions before we clear the composer. snapshotMentions
+  // v1.132: snapshot mentions before we clear the composer. snapshotMentions
   // filters out anyone whose name was erased between picking and sending.
   const mentionUids = snapshotMentions(text);
 

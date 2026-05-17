@@ -44,7 +44,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { db } from "@/firebase";
 import { ROOT, MAX_MEDIA_BYTES } from "@/config";
-import { colors, space } from "@/theme";
+import { space, useStyles, useTheme, type Colors } from "@/theme";
 import {
   useAppData,
   openTicketsForChat,
@@ -56,6 +56,9 @@ import { resolveDisplayName } from "@/lib/displayName";
 import { dayLabel } from "@/lib/format";
 import { chatKeyToChatId } from "@/lib/encodeKey";
 import { fetchChatInfo, sendMessage, notifyDm, transcribeAudio } from "@/lib/worker";
+import { makeVoiceNoteRecordingOptions } from "@/lib/voiceRecording";
+import { prewarmTranscription } from "@/lib/prewarm";
+import { getGroqKey } from "@/lib/groqKey";
 import { dedupMessages } from "@/lib/messageDedup";
 import {
   filterTemplates,
@@ -264,13 +267,54 @@ export function ThreadScreen({ route, navigation }: Props) {
   const [reassignTicket, setReassignTicket] = useState<Ticket | null>(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [attachBusy, setAttachBusy] = useState(false);
-  // Voice-note flow state. When transcribing is true, the mic button shows
-  // a spinner. When notePreview is non-null, an editable preview modal is
-  // open with the transcript pre-filled — trainer reviews then saves.
+  // Voice-flow state — v1.134 splits the old single mic into two:
+  //   📝 left of input: still goes through the note-preview modal.
+  //   🎤 right of input: appends transcript directly to the composer.
+  // Each has its own transcribing flag so the active mic shows a spinner
+  // independently. voiceRecordingMic = which mic is currently capturing
+  // audio; the other one is disabled until this one stops.
   const [transcribing, setTranscribing] = useState(false);
+  const [composerTranscribing, setComposerTranscribing] = useState(false);
+  const [voiceRecordingMic, setVoiceRecordingMic] = useState<
+    "note" | "composer" | null
+  >(null);
   const [notePreview, setNotePreview] = useState<string | null>(null);
   const [savingNote, setSavingNote] = useState(false);
+  const { colors } = useTheme();
+  const styles = useStyles(makeStyles);
   const listRef = useRef<FlatList<Message>>(null);
+
+  // Pre-warm the TLS pool to api.groq.com and the Worker on screen entry so
+  // the first voice-note POST doesn't pay a cold handshake (~200-500ms saved
+  // on cellular). Also requests mic permission + sets the audio mode up
+  // front, off the tap path — VoiceMicButton's per-recorder prepareToRecord
+  // still runs on mount of each mic. Cheap, fire-and-forget.
+  useEffect(() => {
+    if (!audioMod) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const k = await getGroqKey();
+        if (cancelled) return;
+        prewarmTranscription(k);
+      } catch {
+        /* swallow */
+      }
+      try {
+        const perm = await audioMod.requestRecordingPermissionsAsync();
+        if (cancelled || !perm.granted) return;
+        await audioMod.setAudioModeAsync({
+          allowsRecording: true,
+          playsInSilentMode: true,
+        });
+      } catch {
+        /* swallow — VoiceMicButton will retry on tap if this failed */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Android edge-to-edge keyboard fix (v1.127). KeyboardAvoidingView's
   // "height" / "padding" behaviors are unreliable on SDK 55 Android because
@@ -367,13 +411,15 @@ export function ThreadScreen({ route, navigation }: Props) {
         }
         return { ...m, id: k } as Message;
       });
-      list.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+      // v1.132: descending sort (newest first). Pairs with inverted FlatList
+      // below — data[0] renders at the BOTTOM of the screen, so the thread
+      // opens at the most recent message with no scroll animation. Previously
+      // we ascending-sorted + scrollToEnd'd, which made the user watch the
+      // list visibly scroll top → bottom on every open (especially bad on
+      // groups with lots of messages or images).
+      list.sort((a, b) => (b.ts || 0) - (a.ts || 0));
       setMessages(list);
       markChatSeen(chatKey);
-      // Auto-scroll to bottom after the snapshot lands.
-      requestAnimationFrame(() => {
-        listRef.current?.scrollToEnd({ animated: false });
-      });
     });
     // Fetch group name lazily if missing.
     if (!isDm && isGroup && !meta.groupName) {
@@ -384,7 +430,13 @@ export function ThreadScreen({ route, navigation }: Props) {
   }, [chatKey]);
 
   // Deduplicate by inner unique id — see lib/messageDedup for the rationale.
-  const visible = useMemo(() => dedupMessages(messages), [messages]);
+  // dedupMessages returns ascending (oldest → newest) to match the webapp's
+  // top-down renderer. The inverted FlatList below needs descending so data[0]
+  // (newest) renders at the BOTTOM of the screen.
+  const visible = useMemo(
+    () => [...dedupMessages(messages)].reverse(),
+    [messages],
+  );
 
   const banner = useMemo<Ticket[]>(
     () => (isDm ? [] : openTicketsForChat(tickets, chatKey)),
@@ -480,25 +532,84 @@ export function ThreadScreen({ route, navigation }: Props) {
     async (uri: string) => {
       setTranscribing(true);
       try {
-        const b64 = await FileSystem.readAsStringAsync(uri, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-        const text = await transcribeAudio(b64);
+        const text = await transcribeAudio(uri);
         if (!text) {
           Alert.alert("No speech detected", "Try recording again, closer to the mic.");
           return;
         }
         setNotePreview(text);
       } catch (e) {
-        Alert.alert(
-          "Transcription failed",
-          String((e as Error)?.message || e),
-        );
+        const msg = String((e as Error)?.message || e);
+        // v1.133: Groq returned 401 (bad/expired key) — walk the user back
+        // to the Settings screen so they can fix it instead of trying again
+        // and failing the same way.
+        if (msg.startsWith("groq_unauthorized")) {
+          Alert.alert(
+            "Groq key was rejected",
+            "Open Settings to check or replace your Groq API key.",
+            [
+              { text: "Cancel", style: "cancel" },
+              {
+                text: "Open Settings",
+                onPress: () => navigation.navigate("Settings"),
+              },
+            ],
+          );
+        } else {
+          Alert.alert("Transcription failed", msg);
+        }
       } finally {
         setTranscribing(false);
       }
     },
-    [],
+    [navigation],
+  );
+
+  // v1.134: composer-mic flow (🎤 right of input). Same transcription pipeline
+  // as onTranscribed, but instead of opening the note preview modal we append
+  // the cleaned text to whatever's already in the composer. Trainer can edit
+  // before tapping Send.
+  //
+  // The composer is for drafting outgoing messages (to a teammate over DM,
+  // or to a customer over WhatsApp), so we always request raw transcription
+  // — running the notes-cleanup pass over an outgoing message rephrases
+  // what you actually intended to say. The 📝 note mic keeps the cleanup
+  // pass (subject to the per-device pref).
+  const onComposerTranscribed = useCallback(
+    async (uri: string) => {
+      setComposerTranscribing(true);
+      try {
+        const text = await transcribeAudio(uri, { cleanup: false });
+        if (!text) {
+          Alert.alert("No speech detected", "Try recording again, closer to the mic.");
+          return;
+        }
+        setComposer((prev) => {
+          const base = (prev || "").trimEnd();
+          return base ? base + " " + text : text;
+        });
+      } catch (e) {
+        const msg = String((e as Error)?.message || e);
+        if (msg.startsWith("groq_unauthorized")) {
+          Alert.alert(
+            "Groq key was rejected",
+            "Open Settings to check or replace your Groq API key.",
+            [
+              { text: "Cancel", style: "cancel" },
+              {
+                text: "Open Settings",
+                onPress: () => navigation.navigate("Settings"),
+              },
+            ],
+          );
+        } else {
+          Alert.alert("Transcription failed", msg);
+        }
+      } finally {
+        setComposerTranscribing(false);
+      }
+    },
+    [navigation],
   );
 
   async function saveVoiceNote(text: string) {
@@ -759,11 +870,19 @@ export function ThreadScreen({ route, navigation }: Props) {
     [habitUsers, cancelledUsers, ferraIndex, contacts],
   );
 
-  // Day-divider rendering: walk the deduped list and remember the prior day.
+  // Day-divider rendering. With the v1.132 inverted FlatList, data is sorted
+  // newest → oldest. The "chronologically earlier" neighbor of any item is
+  // therefore at index + 1 (one position toward the older end of the array,
+  // which in inverted rendering sits visually ABOVE this item). We show a
+  // day divider when the earlier neighbor is in a different day (or doesn't
+  // exist — meaning this is the oldest message). The divider's JSX sits
+  // above the bubble, so visually it lands between this message and the
+  // older one — same effect as before, just computed against the other
+  // neighbor because the array order is reversed.
   const renderItem = useCallback(
     ({ item, index }: { item: Message; index: number }) => {
-      const prev = visible[index - 1];
-      const showDay = !prev || dayLabel(prev.ts) !== dayLabel(item.ts);
+      const earlier = visible[index + 1];
+      const showDay = !earlier || dayLabel(earlier.ts) !== dayLabel(item.ts);
       return (
         <View>
           {showDay && (
@@ -844,9 +963,13 @@ export function ThreadScreen({ route, navigation }: Props) {
         renderItem={renderItem}
         style={styles.list}
         contentContainerStyle={styles.listContent}
-        onContentSizeChange={() =>
-          listRef.current?.scrollToEnd({ animated: false })
-        }
+        // v1.132: inverted renders data[0] at the bottom of the screen, so
+        // the thread opens at the newest message without any scrolling.
+        // Pairs with the descending sort in the listener above. New messages
+        // arrive as data[0] and naturally appear at the bottom, scroll
+        // position is preserved when the user has scrolled up to read
+        // older messages — no manual scrollToEnd needed anywhere.
+        inverted
       />
       {/* Slash-command template picker (v1.126). Visible whenever composer
           starts with "/". Sits BETWEEN the message list and the composer so
@@ -945,7 +1068,7 @@ export function ThreadScreen({ route, navigation }: Props) {
       )}
       <View
         style={[
-          styles.composerRow,
+          styles.composerWrap,
           // Stack our base 8px composer padding on top of whatever the OS
           // reports as the bottom inset (gesture-nav pill / home indicator).
           // Phones without a gesture bar report 0 and we end up with 8px,
@@ -964,40 +1087,64 @@ export function ThreadScreen({ route, navigation }: Props) {
           },
         ]}
       >
-        <TouchableOpacity
-          style={[styles.attach, attachBusy && styles.attachBusy]}
-          onPress={onAttach}
-          disabled={attachBusy}
-        >
-          <Text style={styles.attachTxt}>📎</Text>
-        </TouchableOpacity>
-        <TextInput
-          style={styles.input}
-          value={composer}
-          onChangeText={setComposer}
-          placeholder="Type a message"
-          placeholderTextColor={colors.muted}
-          multiline
-        />
-        {/* 🎤 voice-to-note button. Only shown on customer chats (DMs skip
-            it — no use case for private notes on internal chats). Hidden if
-            expo-audio isn't loaded (older native builds). Records → /transcribe
-            → opens a preview modal where the trainer reviews and saves as a
-            private note (not sent to the customer). Same flow as the
-            webapp's composer mic. */}
-        {!isDm && audioMod && (
-          <VoiceNoteMic
-            onTranscribed={onTranscribed}
-            transcribing={transcribing}
-          />
+        {/* v1.136: voice pills row. Stacked above the text input so the
+            input gets full width — previously the two icon mics squeezed
+            the typing area on narrow phones. 📝 hidden on DMs (no notes
+            feature there), in which case 🎤 expands to fill the row. */}
+        {audioMod && (
+          <View style={styles.voiceRow}>
+            {!isDm && (
+              <VoiceMicButton
+                idleGlyph="📝"
+                label="Note"
+                accessibilityLabelIdle="Record a private note"
+                onTranscribed={onTranscribed}
+                transcribing={transcribing}
+                disabled={voiceRecordingMic === "composer"}
+                onRecordingChange={(rec) => {
+                  if (rec) setVoiceRecordingMic("note");
+                  else setVoiceRecordingMic((cur) => (cur === "note" ? null : cur));
+                }}
+              />
+            )}
+            <VoiceMicButton
+              idleGlyph="🎤"
+              label="Voice"
+              accessibilityLabelIdle="Record a voice reply"
+              onTranscribed={onComposerTranscribed}
+              transcribing={composerTranscribing}
+              disabled={voiceRecordingMic === "note"}
+              onRecordingChange={(rec) => {
+                if (rec) setVoiceRecordingMic("composer");
+                else setVoiceRecordingMic((cur) => (cur === "composer" ? null : cur));
+              }}
+            />
+          </View>
         )}
-        <TouchableOpacity
-          style={[styles.send, !composer.trim() && styles.sendDisabled]}
-          disabled={!composer.trim()}
-          onPress={send}
-        >
-          <Text style={styles.sendTxt}>➤</Text>
-        </TouchableOpacity>
+        <View style={styles.composerRow}>
+          <TextInput
+            style={styles.input}
+            value={composer}
+            onChangeText={setComposer}
+            placeholder="Type a message"
+            placeholderTextColor={colors.muted}
+            multiline
+          />
+          <TouchableOpacity
+            style={[styles.attach, attachBusy && styles.attachBusy]}
+            onPress={onAttach}
+            disabled={attachBusy}
+          >
+            <Text style={styles.attachTxt}>📎</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.send, !composer.trim() && styles.sendDisabled]}
+            disabled={!composer.trim()}
+            onPress={send}
+          >
+            <Text style={styles.sendTxt}>➤</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <NotePreviewModal
@@ -1103,29 +1250,101 @@ export function ThreadScreen({ route, navigation }: Props) {
 
 // Lightweight bottom sheet for long-press actions (Create ticket / Copy).
 // Could be a separate file, but it's tightly coupled to the thread screen.
-// 🎤 voice-note mic for the thread composer. Only mounted when expo-audio
-// loaded at module init, so React's rules-of-hooks stays clean (the hook
-// is always called from inside this component, never skipped).
-// Tap once → request mic permission → start recording (button turns red ⏹).
-// Tap again → stop recording → parent transcribes the URI.
-function VoiceNoteMic({
+// Generic voice mic button — v1.134 split the composer into two of these:
+//   📝 (left of input)  → notes flow  (caller: onNoteTranscribed)
+//   🎤 (right of input) → composer fill (caller: onComposerTranscribed)
+// Each instance owns its own expo-audio recorder; the parent passes
+// `disabled` to prevent both from recording at once (the device mic is
+// shared hardware). onRecordingChange lets the parent track which mic is
+// active so it can disable the sibling.
+//
+// Only mounted when expo-audio loaded at module init, so React's rules-of-
+// hooks stays clean (the hook is always called from inside this component,
+// never skipped).
+function VoiceMicButton({
+  idleGlyph,
+  label,
+  accessibilityLabelIdle,
   onTranscribed,
   transcribing,
+  disabled,
+  onRecordingChange,
 }: {
+  idleGlyph: string;
+  // v1.136: when present, renders as a pill (icon + label, flex:1). When
+  // omitted, renders as the smaller circular icon-only button used inline
+  // with the text input. Today every caller passes a label — the original
+  // icon-only variant is kept available for future cases (e.g. a third
+  // mic in CustomerInfoScreen's compact notes panel).
+  label?: string;
+  accessibilityLabelIdle: string;
   onTranscribed: (uri: string) => Promise<void>;
   transcribing: boolean;
+  disabled: boolean;
+  onRecordingChange: (recording: boolean) => void;
 }) {
+  const styles = useStyles(makeStyles);
+  // Whisper-tuned options: 16 kHz mono AAC @ 32 kbps. ~8× smaller upload
+  // than HIGH_QUALITY with no transcription accuracy loss (Whisper resamples
+  // to 16 kHz mono internally anyway).
   const recorder = audioMod.useAudioRecorder(
-    audioMod.RecordingPresets.HIGH_QUALITY,
+    makeVoiceNoteRecordingOptions(audioMod),
   );
   const recorderState = audioMod.useAudioRecorderState(recorder);
   const isRecording = !!recorderState?.isRecording;
+
+  // True once the recorder is prepared and ready to .record() without first
+  // having to await prepareToRecordAsync. Prepared once on mount and after
+  // each stop (in the background) so subsequent taps are instant.
+  const preparedRef = useRef(false);
+
+  // Bubble recording-state changes up so the parent can disable the
+  // sibling mic. useEffect rather than reading isRecording inside toggle()
+  // so transient state from expo-audio doesn't get out of sync.
+  useEffect(() => {
+    onRecordingChange(isRecording);
+  }, [isRecording, onRecordingChange]);
+
+  // Prepare the recorder once on mount. Permission + setAudioModeAsync are
+  // handled at the ThreadScreen level (so they don't run per-mic), but each
+  // recorder still needs its own prepareToRecordAsync. If it fails — usually
+  // because permission hasn't been granted yet or the sibling mic is in the
+  // middle of its own prepare — we silently skip; toggle() will retry on
+  // demand with the full permission flow.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const perm = await audioMod.getRecordingPermissionsAsync?.();
+        if (cancelled) return;
+        if (perm && !perm.granted) return;
+        await recorder.prepareToRecordAsync();
+        if (!cancelled) preparedRef.current = true;
+      } catch {
+        /* swallow — fall back to on-demand prepare in toggle() */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [recorder]);
 
   async function toggle() {
     if (transcribing) return;
     if (isRecording) {
       try {
         await recorder.stop();
+        // After stop() the recorder is in a "stopped" state and needs to be
+        // re-prepared before the next record(). Fire that in the background
+        // so it overlaps with the upload+transcribe round-trip instead of
+        // adding to the next tap's latency.
+        preparedRef.current = false;
+        recorder
+          .prepareToRecordAsync()
+          .then(() => {
+            preparedRef.current = true;
+          })
+          .catch(() => {});
         const uri = recorder.uri as string | undefined;
         if (uri) await onTranscribed(uri);
       } catch (e) {
@@ -1136,6 +1355,22 @@ function VoiceNoteMic({
       }
       return;
     }
+    // disabled is true when the sibling mic is currently recording. Guard
+    // here too in case the user manages to tap during a race window.
+    if (disabled) return;
+
+    // Fast path: recorder pre-prepared on mount / after last stop. Skip the
+    // permission round-trip entirely.
+    if (preparedRef.current) {
+      try {
+        recorder.record();
+        return;
+      } catch {
+        // Fall through to the full prepare path below.
+        preparedRef.current = false;
+      }
+    }
+
     try {
       const perm = await audioMod.requestRecordingPermissionsAsync();
       if (!perm.granted) {
@@ -1150,6 +1385,7 @@ function VoiceNoteMic({
         playsInSilentMode: true,
       });
       await recorder.prepareToRecordAsync();
+      preparedRef.current = true;
       recorder.record();
     } catch (e) {
       Alert.alert(
@@ -1159,17 +1395,35 @@ function VoiceNoteMic({
     }
   }
 
+  const effectivelyDisabled = transcribing || (disabled && !isRecording);
+  const isPill = !!label;
+
   return (
     <TouchableOpacity
       onPress={toggle}
-      style={[styles.mic, isRecording && styles.micRecording]}
-      disabled={transcribing}
-      accessibilityLabel={isRecording ? "Stop recording" : "Record a voice note"}
+      style={[
+        isPill ? styles.micPill : styles.mic,
+        isRecording && styles.micRecording,
+        effectivelyDisabled && styles.micDimmed,
+      ]}
+      disabled={effectivelyDisabled}
+      accessibilityLabel={isRecording ? "Stop recording" : accessibilityLabelIdle}
     >
       {transcribing ? (
         <ActivityIndicator color="white" size="small" />
+      ) : isPill ? (
+        // Pill variant: glyph and label side-by-side. While recording, the
+        // label flips to "Stop" so the affordance is unambiguous.
+        <View style={styles.micPillContent}>
+          <Text style={styles.micPillIcon}>
+            {isRecording ? "⏹" : idleGlyph}
+          </Text>
+          <Text style={styles.micPillTxt}>
+            {isRecording ? "Stop" : label}
+          </Text>
+        </View>
       ) : (
-        <Text style={styles.micTxt}>{isRecording ? "⏹" : "🎤"}</Text>
+        <Text style={styles.micTxt}>{isRecording ? "⏹" : idleGlyph}</Text>
       )}
     </TouchableOpacity>
   );
@@ -1190,6 +1444,8 @@ function NotePreviewModal({
   saving: boolean;
 }) {
   const [draft, setDraft] = useState("");
+  const { colors } = useTheme();
+  const styles = useStyles(makeStyles);
   useEffect(() => {
     if (text !== null) setDraft(text);
   }, [text]);
@@ -1260,6 +1516,7 @@ function ActionSheet({
   onTicket: () => void;
   onCopy: () => void;
 }) {
+  const styles = useStyles(makeStyles);
   const visible = !!message;
   const quote = message
     ? message.text ||
@@ -1304,7 +1561,8 @@ function ActionSheet({
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles(colors: Colors) {
+  return StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   list: { flex: 1, backgroundColor: colors.bg },
   listContent: { paddingHorizontal: 8, paddingVertical: 12 },
@@ -1321,12 +1579,23 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     overflow: "hidden",
   },
+  // v1.136: composer is now a 2-row column. composerWrap holds the column
+  // padding + background; composerRow is just the inner text+attach+send row.
+  composerWrap: {
+    paddingHorizontal: 6,
+    paddingTop: 6,
+    paddingBottom: 8,
+    backgroundColor: colors.greenDark,
+    gap: 6,
+  },
   composerRow: {
     flexDirection: "row",
     alignItems: "flex-end",
-    padding: 6,
-    paddingBottom: 8,
-    backgroundColor: colors.greenDark,
+    gap: 6,
+  },
+  voiceRow: {
+    flexDirection: "row",
+    alignItems: "center",
     gap: 6,
   },
   // Slash-command template picker (v1.126). Anchored above the composer,
@@ -1403,7 +1672,10 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     borderRadius: 8,
     marginTop: 4,
-    backgroundColor: "#fafafa",
+    // Was hardcoded #fafafa (near-white) which looked fine on a white card
+    // but turned into a bright slab once the card went dark. colors.bg
+    // gives a subtle inset that tracks the theme.
+    backgroundColor: colors.bg,
   },
   tplFormBody: {
     minHeight: 80,
@@ -1422,7 +1694,7 @@ const styles = StyleSheet.create({
   attachTxt: { color: "white", fontSize: 18 },
   input: {
     flex: 1,
-    backgroundColor: "white",
+    backgroundColor: colors.panel,
     borderRadius: 22,
     paddingHorizontal: 14,
     paddingVertical: 10,
@@ -1458,45 +1730,85 @@ const styles = StyleSheet.create({
     backgroundColor: "#dc2626",
     borderColor: "#dc2626",
   },
+  // v1.134: shown on the sibling mic while the other one is recording, so
+  // the user understands they can't tap it until the active recording stops.
+  micDimmed: { opacity: 0.35 },
   micTxt: { color: "white", fontSize: 18 },
+  // v1.136: pill variant — used for the stacked voice row above the input.
+  // flex:1 so two pills split the row 50/50 (or one fills it when 📝 is
+  // hidden in DMs). Slightly translucent on the green composer bg.
+  micPill: {
+    flex: 1,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "rgba(255,255,255,0.16)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.32)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  micPillContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  micPillIcon: { fontSize: 16 },
+  micPillTxt: { color: "white", fontSize: 14, fontWeight: "600" },
   previewBack: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.5)",
     justifyContent: "center",
     padding: 20,
   },
+  // Modal card. Was hardcoded white pre-v1.136 dark mode; that punched a
+  // bright hole through the dark theme. Pulling from colors.panel makes the
+  // card track the theme — slate in dark, white in light.
   previewCard: {
-    backgroundColor: "white",
-    borderRadius: 12,
-    padding: 16,
+    backgroundColor: colors.panel,
+    borderRadius: 14,
+    padding: 18,
     maxHeight: "80%",
-  },
-  previewHead: { marginBottom: 8 },
-  previewTitle: { fontSize: 16, fontWeight: "600", color: colors.text },
-  previewSub: { fontSize: 12, color: colors.muted, marginTop: 2 },
-  previewInput: {
-    minHeight: 80,
-    maxHeight: 240,
-    fontSize: 14,
-    color: colors.text,
-    padding: 10,
+    // Subtle border so the card edge reads against the chat background in
+    // dark mode (where panel and bg are both near-black).
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
-    borderRadius: 8,
+  },
+  previewHead: { marginBottom: 10 },
+  previewTitle: { fontSize: 17, fontWeight: "600", color: colors.text },
+  previewSub: { fontSize: 12, color: colors.muted, marginTop: 4 },
+  // Input "well" — sits inside the card, slightly different surface so it
+  // reads as editable. Was a hardcoded cream (#fff8e7) for a post-it feel
+  // that worked in light mode but looked wrong on a dark card. Using
+  // colors.bg gives a subtle inset in both themes.
+  previewInput: {
+    minHeight: 96,
+    maxHeight: 240,
+    fontSize: 15,
+    color: colors.text,
+    padding: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    borderRadius: 10,
     textAlignVertical: "top",
-    backgroundColor: "#fff8e7",
-    marginVertical: 8,
+    backgroundColor: colors.bg,
+    marginVertical: 10,
   },
   previewActions: { flexDirection: "row", alignItems: "center" },
   previewBtn: { paddingVertical: 8, paddingHorizontal: 12 },
   previewBtnTxt: { color: colors.muted, fontSize: 14 },
+  // Primary action. Was colors.greenDark which in dark mode resolves to
+  // the same near-black as the card — button vanished. colors.green is the
+  // accent in both themes (green in light, blue in dark) so it actually
+  // pops as a CTA.
   previewSave: {
-    backgroundColor: colors.greenDark,
-    paddingHorizontal: 18,
-    paddingVertical: 10,
+    backgroundColor: colors.green,
+    paddingHorizontal: 20,
+    paddingVertical: 11,
     borderRadius: 22,
   },
-  previewSaveDisabled: { backgroundColor: "#8fb3a8" },
+  // Dim the whole button (bg + label) instead of swapping to a third
+  // hardcoded color. Works in both themes.
+  previewSaveDisabled: { opacity: 0.45 },
   previewSaveTxt: { color: "white", fontWeight: "600", fontSize: 14 },
   headerBtn: {
     width: 36,
@@ -1555,4 +1867,5 @@ const styles = StyleSheet.create({
   },
   sheetItemGlyph: { fontSize: 18, width: 24, textAlign: "center" },
   sheetItemTxt: { fontSize: 15, color: colors.text },
-});
+  });
+}

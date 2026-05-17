@@ -2,7 +2,7 @@
 // Mirrors the right-side drawer on the desktop dashboard: subscription stage,
 // habit metrics, acquisition source, ticket history. Read-only for now.
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -15,17 +15,17 @@ import {
   View,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
-import * as FileSystem from "expo-file-system/legacy";
 import { onValue, push, ref, set } from "firebase/database";
 import { db } from "@/firebase";
 import { ROOT } from "@/config";
-import { colors, space } from "@/theme";
+import { space, useStyles, useTheme, type Colors } from "@/theme";
 import { useAppData, openTicketsForChat } from "@/data/AppDataContext";
 import { useAuth } from "@/auth/AuthContext";
 import { resolveDisplayName } from "@/lib/displayName";
 import { chatKeyToChatId } from "@/lib/encodeKey";
 import { getFerraUserByPhone, normalizeFerraPhone } from "@/lib/ferra";
 import { transcribeAudio } from "@/lib/worker";
+import { makeVoiceNoteRecordingOptions } from "@/lib/voiceRecording";
 import { FERRA_TAG_STAGE } from "@/config";
 import type { Ticket } from "@/types";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
@@ -61,7 +61,7 @@ interface ChatNote {
 
 type Props = NativeStackScreenProps<RootStackParamList, "CustomerInfo">;
 
-export function CustomerInfoScreen({ route }: Props) {
+export function CustomerInfoScreen({ route, navigation }: Props) {
   const { chatKey } = route.params;
   const { user } = useAuth();
   const {
@@ -167,6 +167,8 @@ export function CustomerInfoScreen({ route }: Props) {
   const [draft, setDraft] = useState("");
   const [transcribing, setTranscribing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const { colors } = useTheme();
+  const styles = useStyles(makeStyles);
 
   async function saveNote() {
     const txt = draft.trim();
@@ -196,18 +198,30 @@ export function CustomerInfoScreen({ route }: Props) {
   }
 
   // Called by the MicButton sub-component once recording stops + a URI is
-  // ready. Reads the file as base64 and POSTs to /transcribe. Appends to
-  // draft so the trainer can type + dictate together (no overwrite).
+  // ready. transcribeAudio handles the Groq-vs-Worker branching internally
+  // (v1.133). Appends to draft so the trainer can type + dictate together.
   async function onTranscribe(uri: string) {
     setTranscribing(true);
     try {
-      const b64 = await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      const text = await transcribeAudio(b64);
+      const text = await transcribeAudio(uri);
       setDraft((prev) => (prev ? prev + " " + text : text).trim());
     } catch (e) {
-      Alert.alert("Transcription failed", String((e as Error)?.message || e));
+      const msg = String((e as Error)?.message || e);
+      if (msg.startsWith("groq_unauthorized")) {
+        Alert.alert(
+          "Groq key was rejected",
+          "Open Settings to check or replace your Groq API key.",
+          [
+            { text: "Cancel", style: "cancel" },
+            {
+              text: "Open Settings",
+              onPress: () => navigation.navigate("Settings"),
+            },
+          ],
+        );
+      } else {
+        Alert.alert("Transcription failed", msg);
+      }
     } finally {
       setTranscribing(false);
     }
@@ -599,17 +613,52 @@ function MicButton({
   transcribing: boolean;
   disabled: boolean;
 }) {
+  const styles = useStyles(makeStyles);
+  // Whisper-tuned options: 16 kHz mono AAC @ 32 kbps. ~8× smaller upload
+  // than HIGH_QUALITY with no transcription accuracy loss.
   const recorder = audioMod.useAudioRecorder(
-    audioMod.RecordingPresets.HIGH_QUALITY,
+    makeVoiceNoteRecordingOptions(audioMod),
   );
   const recorderState = audioMod.useAudioRecorderState(recorder);
   const isRecording = !!recorderState?.isRecording;
+
+  // True once the recorder has been prepared and can call .record() instantly
+  // without first awaiting prepareToRecordAsync. Prepared on mount and re-
+  // prepared in the background after every stop.
+  const preparedRef = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const perm = await audioMod.getRecordingPermissionsAsync?.();
+        if (cancelled) return;
+        if (perm && !perm.granted) return;
+        await recorder.prepareToRecordAsync();
+        if (!cancelled) preparedRef.current = true;
+      } catch {
+        /* swallow — toggle() will redo the full prepare on first tap */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [recorder]);
 
   async function toggle() {
     if (transcribing || disabled) return;
     if (isRecording) {
       try {
         await recorder.stop();
+        // Re-prepare in the background so the *next* tap is instant. This
+        // overlaps with the upload/transcribe roundtrip happening below.
+        preparedRef.current = false;
+        recorder
+          .prepareToRecordAsync()
+          .then(() => {
+            preparedRef.current = true;
+          })
+          .catch(() => {});
         const uri = recorder.uri as string | undefined;
         if (uri) await onTranscribe(uri);
       } catch (e) {
@@ -620,6 +669,17 @@ function MicButton({
       }
       return;
     }
+
+    // Fast path: recorder already prepared. record() with no awaits in front.
+    if (preparedRef.current) {
+      try {
+        recorder.record();
+        return;
+      } catch {
+        preparedRef.current = false;
+      }
+    }
+
     try {
       const perm = await audioMod.requestRecordingPermissionsAsync();
       if (!perm.granted) {
@@ -634,6 +694,7 @@ function MicButton({
         playsInSilentMode: true,
       });
       await recorder.prepareToRecordAsync();
+      preparedRef.current = true;
       recorder.record();
     } catch (e) {
       Alert.alert(
@@ -660,6 +721,7 @@ function MicButton({
 }
 
 function Chip({ label, accent }: { label: string; accent?: boolean }) {
+  const styles = useStyles(makeStyles);
   return (
     <View style={[styles.chip, accent && styles.chipAccent]}>
       <Text style={[styles.chipTxt, accent && styles.chipTxtAccent]}>
@@ -670,6 +732,7 @@ function Chip({ label, accent }: { label: string; accent?: boolean }) {
 }
 
 function Row({ k, v }: { k: string; v: string }) {
+  const styles = useStyles(makeStyles);
   return (
     <View style={styles.row}>
       <Text style={styles.rowK}>{k}</Text>
@@ -678,10 +741,11 @@ function Row({ k, v }: { k: string; v: string }) {
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles(colors: Colors) {
+  return StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   section: {
-    backgroundColor: "white",
+    backgroundColor: colors.panel,
     padding: space.md,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
@@ -753,7 +817,7 @@ const styles = StyleSheet.create({
   rowK: { width: 100, fontSize: 13, color: colors.muted },
   rowV: { flex: 1, fontSize: 13, color: colors.text, flexWrap: "wrap" },
   ticketCard: {
-    backgroundColor: "#f9fafb",
+    backgroundColor: colors.bg,
     borderRadius: 6,
     padding: 10,
     marginBottom: 8,
@@ -785,9 +849,9 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontStyle: "italic",
   },
-  notesSection: { backgroundColor: "#fff8e7" },
+  notesSection: { backgroundColor: colors.panel },
   noteCard: {
-    backgroundColor: "white",
+    backgroundColor: colors.bg,
     borderRadius: 6,
     padding: 10,
     marginBottom: 6,
@@ -806,7 +870,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 12,
-    backgroundColor: colors.greenDark,
+    backgroundColor: colors.green,
   },
   addNoteBtnTxt: { color: "white", fontSize: 11, fontWeight: "600" },
   notesEmpty: {
@@ -816,12 +880,12 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   composer: {
-    backgroundColor: "white",
+    backgroundColor: colors.bg,
     borderRadius: 8,
     padding: 8,
     marginBottom: 10,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#f0e3a0",
+    borderColor: colors.border,
   },
   composerInput: {
     minHeight: 60,
@@ -843,7 +907,7 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: colors.greenDark,
+    backgroundColor: colors.green,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -866,7 +930,7 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     paddingHorizontal: 8,
     borderRadius: 4,
-    backgroundColor: "#f3f4f6",
+    backgroundColor: colors.bg,
   },
   copyBtnTxt: { fontSize: 12, color: colors.muted },
   empty: {
@@ -875,4 +939,5 @@ const styles = StyleSheet.create({
   },
   emptyTxt: { color: colors.muted, fontSize: 13, textAlign: "center" },
   bottomPad: { height: 40 },
-});
+  });
+}

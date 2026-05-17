@@ -14,7 +14,7 @@ import {
   View,
 } from "react-native";
 import { summarize } from "@/lib/worker";
-import { colors } from "@/theme";
+import { useStyles, useTheme, type Colors } from "@/theme";
 
 interface Props {
   visible: boolean;
@@ -28,6 +28,8 @@ export function SummaryModal({ visible, chatId, onClose }: Props) {
   const [sub, setSub] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const reqIdRef = useRef(0);
+  const { colors } = useTheme();
+  const styles = useStyles(makeStyles);
 
   const run = async () => {
     if (!chatId) return;
@@ -70,7 +72,7 @@ export function SummaryModal({ visible, chatId, onClose }: Props) {
           <ScrollView style={styles.body}>
             {loading && (
               <View style={styles.loading}>
-                <ActivityIndicator color={colors.greenDark} />
+                <ActivityIndicator color={colors.green} />
                 <Text style={styles.thinking}>Thinking…</Text>
               </View>
             )}
@@ -94,40 +96,42 @@ export function SummaryModal({ visible, chatId, onClose }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  back: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.5)",
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 16,
-  },
-  card: {
-    width: "100%",
-    maxWidth: 380,
-    backgroundColor: "white",
-    borderRadius: 12,
-    padding: 20,
-    maxHeight: "85%",
-  },
-  title: { fontSize: 17, fontWeight: "600", color: colors.text },
-  sub: { fontSize: 12, color: colors.muted, marginBottom: 12, marginTop: 2 },
-  body: { maxHeight: 360, marginBottom: 12 },
-  loading: { flexDirection: "row", alignItems: "center", gap: 10, padding: 12 },
-  thinking: { color: colors.muted, fontStyle: "italic" },
-  summary: { fontSize: 14, color: colors.text, lineHeight: 21 },
-  error: { color: colors.redDark, fontSize: 13 },
-  btnRow: { flexDirection: "row", justifyContent: "flex-end", gap: 8 },
-  btn: {
-    paddingVertical: 9,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    minWidth: 100,
-    alignItems: "center",
-  },
-  btnPrimary: { backgroundColor: colors.green, borderColor: colors.green },
-  btnTxt: { fontSize: 14, color: colors.text },
-  btnTxtPrimary: { color: "white", fontWeight: "500" },
-});
+function makeStyles(colors: Colors) {
+  return StyleSheet.create({
+    back: {
+      flex: 1,
+      backgroundColor: "rgba(0,0,0,0.55)",
+      justifyContent: "center",
+      alignItems: "center",
+      padding: 16,
+    },
+    card: {
+      width: "100%",
+      maxWidth: 380,
+      backgroundColor: colors.panel,
+      borderRadius: 12,
+      padding: 20,
+      maxHeight: "85%",
+    },
+    title: { fontSize: 17, fontWeight: "600", color: colors.text },
+    sub: { fontSize: 12, color: colors.muted, marginBottom: 12, marginTop: 2 },
+    body: { maxHeight: 360, marginBottom: 12 },
+    loading: { flexDirection: "row", alignItems: "center", gap: 10, padding: 12 },
+    thinking: { color: colors.muted, fontStyle: "italic" },
+    summary: { fontSize: 14, color: colors.text, lineHeight: 21 },
+    error: { color: colors.redDark, fontSize: 13 },
+    btnRow: { flexDirection: "row", justifyContent: "flex-end", gap: 8 },
+    btn: {
+      paddingVertical: 9,
+      paddingHorizontal: 16,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: colors.border,
+      minWidth: 100,
+      alignItems: "center",
+    },
+    btnPrimary: { backgroundColor: colors.green, borderColor: colors.green },
+    btnTxt: { fontSize: 14, color: colors.text },
+    btnTxtPrimary: { color: "white", fontWeight: "500" },
+  });
+}

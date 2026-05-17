@@ -19,26 +19,55 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import {
   NavigationContainer,
   getFocusedRouteNameFromRoute,
+  useNavigation,
+  type LinkingOptions,
   type RouteProp,
 } from "@react-navigation/native";
 import { createMaterialTopTabNavigator } from "@react-navigation/material-top-tabs";
-import { createNativeStackNavigator } from "@react-navigation/native-stack";
+import {
+  createNativeStackNavigator,
+  type NativeStackNavigationProp,
+} from "@react-navigation/native-stack";
 import * as Notifications from "expo-notifications";
 import * as Updates from "expo-updates";
 
 import { AuthProvider, useAuth } from "@/auth/AuthContext";
 import { AppDataProvider, useAppData } from "@/data/AppDataContext";
+import { useWidgetSync } from "@/hooks/useWidgetSync";
 import { LoginScreen } from "@/auth/LoginScreen";
 import { ChatsScreen } from "@/screens/ChatsScreen";
 import { TicketsScreen } from "@/screens/TicketsScreen";
 import { TeamScreen } from "@/screens/TeamScreen";
 import { ThreadScreen } from "@/screens/ThreadScreen";
 import { CustomerInfoScreen } from "@/screens/CustomerInfoScreen";
+import { SettingsScreen } from "@/screens/SettingsScreen";
 import { BottomTabBar } from "@/components/BottomTabBar";
 import { registerForPushAsync } from "@/notifications/registerForPush";
 import { getDisplayVersion } from "@/lib/version";
-import { colors } from "@/theme";
+import { ThemeProvider, useTheme } from "@/theme";
 import type { RootStackParamList } from "@/screens/types";
+
+// Deep links from the home-screen widget land here. The widget opens URLs
+// like `commoncomm://chats`, `commoncomm://tickets`, or `commoncomm://team`;
+// React Navigation resolves the path to the right tab inside the Tabs
+// navigator. Paths are kept lowercase to match the iOS widgetURL strings.
+const deepLinking: LinkingOptions<RootStackParamList> = {
+  prefixes: ["commoncomm://"],
+  config: {
+    screens: {
+      Tabs: {
+        screens: {
+          Chats: "chats",
+          Tickets: "tickets",
+          Team: "team",
+        },
+      },
+      Thread: "thread/:chatKey",
+      CustomerInfo: "customer/:chatKey",
+      Settings: "settings",
+    },
+  },
+};
 
 const Tabs = createMaterialTopTabNavigator();
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -80,6 +109,26 @@ function LogoutButton() {
   );
 }
 
+// v1.133: gear icon in every tab header that pushes the Settings screen onto
+// the root stack. Settings currently holds the per-user Groq API key for
+// fast voice-note transcription.
+function HeaderRight() {
+  const nav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  return (
+    <View style={styles.headerRight}>
+      <TouchableOpacity
+        accessibilityLabel="Settings"
+        onPress={() => nav.navigate("Settings")}
+        style={styles.gearBtn}
+        hitSlop={8}
+      >
+        <Text style={styles.gearTxt}>⚙</Text>
+      </TouchableOpacity>
+      <LogoutButton />
+    </View>
+  );
+}
+
 function TabsNav() {
   // Read live unread counts to keep the iOS app-icon badge in sync.
   // The tab bar itself reads from AppDataContext directly (see
@@ -94,6 +143,11 @@ function TabsNav() {
     const total = chatsUnreadCount + teamUnreadCount;
     Notifications.setBadgeCountAsync(total).catch(() => {});
   }, [chatsUnreadCount, teamUnreadCount]);
+  // Android home-screen widget dot indicators (v1.139). Pushes the same
+  // three counts above through the WidgetUpdater native module whenever
+  // they change — the widget redraws within a second with a pink dot on
+  // each tile that has activity. No-op on iOS (separate WidgetKit work).
+  useWidgetSync();
   return (
     <Tabs.Navigator
       tabBarPosition="bottom"
@@ -122,22 +176,31 @@ function TabsNav() {
 // state updates; we read the currently-focused tab name and render the
 // matching title. Chats gets the version chip alongside it, same as before
 // — trainers use it to read back the running build in support chats.
-function TabsHeaderTitle({ route }: { route: RouteProp<RootStackParamList, "Tabs"> }) {
+function TabsHeaderTitle({
+  route,
+}: {
+  route: RouteProp<RootStackParamList, "Tabs">;
+}) {
+  const { colors } = useTheme();
   const focused = getFocusedRouteNameFromRoute(route) ?? "Chats";
   const title = TAB_TITLE[focused] || focused;
+  const titleStyle = [styles.headerTitleTxt, { color: colors.headerText }];
   if (focused === "Chats") {
     return (
       <View style={styles.headerTitleRow}>
-        <Text style={styles.headerTitleTxt}>{title}</Text>
-        <Text style={styles.headerTitleVer}>{getDisplayVersion()}</Text>
+        <Text style={titleStyle}>{title}</Text>
+        <Text style={[styles.headerTitleVer, { color: colors.headerText, opacity: 0.6 }]}>
+          {getDisplayVersion()}
+        </Text>
       </View>
     );
   }
-  return <Text style={styles.headerTitleTxt}>{title}</Text>;
+  return <Text style={titleStyle}>{title}</Text>;
 }
 
 function PostAuth() {
   const { user } = useAuth();
+  const { colors } = useTheme();
   useEffect(() => {
     if (!user) return;
     registerForPushAsync(user.uid).catch((e) =>
@@ -146,11 +209,11 @@ function PostAuth() {
   }, [user]);
   return (
     <AppDataProvider>
-      <NavigationContainer>
+      <NavigationContainer linking={deepLinking}>
         <Stack.Navigator
           screenOptions={{
-            headerStyle: { backgroundColor: colors.greenDark },
-            headerTintColor: "white",
+            headerStyle: { backgroundColor: colors.header },
+            headerTintColor: colors.headerText,
           }}
         >
           <Stack.Screen
@@ -158,9 +221,9 @@ function PostAuth() {
             component={TabsNav}
             options={({ route }) => ({
               headerTitle: () => <TabsHeaderTitle route={route} />,
-              headerRight: () => <LogoutButton />,
-              headerStyle: { backgroundColor: colors.greenDark },
-              headerTintColor: "white",
+              headerRight: () => <HeaderRight />,
+              headerStyle: { backgroundColor: colors.header },
+              headerTintColor: colors.headerText,
               headerTitleStyle: { fontWeight: "600" },
             })}
           />
@@ -174,6 +237,11 @@ function PostAuth() {
             component={CustomerInfoScreen}
             options={{ title: "Customer info", headerBackTitleVisible: false }}
           />
+          <Stack.Screen
+            name="Settings"
+            component={SettingsScreen}
+            options={{ title: "Settings", headerBackTitleVisible: false }}
+          />
         </Stack.Navigator>
       </NavigationContainer>
     </AppDataProvider>
@@ -182,10 +250,11 @@ function PostAuth() {
 
 function Gate() {
   const { status } = useAuth();
+  const { colors } = useTheme();
   if (status === "loading") {
     return (
-      <View style={styles.loading}>
-        <ActivityIndicator color={colors.greenDark} />
+      <View style={[styles.loading, { backgroundColor: colors.header }]}>
+        <ActivityIndicator color={colors.green} />
       </View>
     );
   }
@@ -222,11 +291,25 @@ export default function App() {
   useOtaUpdates();
   return (
     <SafeAreaProvider>
-      <StatusBar style="light" backgroundColor={colors.greenDark} />
+      <ThemeProvider>
+        <ThemedApp />
+      </ThemeProvider>
+    </SafeAreaProvider>
+  );
+}
+
+// Inside ThemeProvider so it can read the current header color for the
+// status bar tint. The status bar is "light" content (icons + clock white)
+// in both themes since the header is always darker than the chrome behind.
+function ThemedApp() {
+  const { colors } = useTheme();
+  return (
+    <>
+      <StatusBar style="light" backgroundColor={colors.header} />
       <AuthProvider>
         <Gate />
       </AuthProvider>
-    </SafeAreaProvider>
+    </>
   );
 }
 
@@ -235,7 +318,7 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: colors.greenDark,
+    // backgroundColor injected by Gate() via inline style — depends on theme.
   },
   logoutBtn: {
     width: 36,
@@ -252,18 +335,35 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     transform: [{ rotate: "90deg" }],
   },
+  // v1.133: header right cluster — gear + logout. Wrapped in a flex row so the
+  // two buttons sit side-by-side without extra padding tricks.
+  headerRight: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  gearBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    marginRight: 4,
+    backgroundColor: "rgba(255,255,255,0.18)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  gearTxt: {
+    color: "white",
+    fontSize: 18,
+  },
   headerTitleRow: {
     flexDirection: "row",
     alignItems: "baseline",
     gap: 8,
   },
   headerTitleTxt: {
-    color: "white",
     fontSize: 17,
     fontWeight: "600",
   },
   headerTitleVer: {
-    color: "rgba(255,255,255,0.6)",
     fontSize: 11,
     fontWeight: "400",
   },

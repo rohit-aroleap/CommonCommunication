@@ -2,10 +2,10 @@
 // list. The filter rules (daily-groups hidden by default, status/stage
 // exclusions) match mobile.html exactly.
 
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { FlatList, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { colors, space } from "@/theme";
+import { space, useStyles, type Colors } from "@/theme";
 import { useAppData, isDailyGroup } from "@/data/AppDataContext";
 import { useAuth } from "@/auth/AuthContext";
 import { resolveDisplayName } from "@/lib/displayName";
@@ -16,7 +16,8 @@ import { FERRA_TAG_STAGE } from "@/config";
 import { normalizeFerraPhone } from "@/lib/ferra";
 import { shouldSuggestPin } from "@/lib/favorites";
 import { getDisplayVersion } from "@/lib/version";
-import { useNavigation } from "@react-navigation/native";
+import { getGroqKey } from "@/lib/groqKey";
+import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "@/screens/types";
 
@@ -49,6 +50,30 @@ export function ChatsScreen() {
   const [stageFilter, setStageFilter] = useState("");
   const [search, setSearch] = useState("");
   const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const styles = useStyles(makeStyles);
+
+  // v1.146: warn the user if their phone doesn't have a Groq API key set.
+  // Without it, voice-note transcription silently falls back to the slow
+  // Worker /transcribe path (~3× slower). Re-checks every time the chats
+  // tab gains focus so the banner disappears the moment the admin pastes
+  // a key into Settings. `null` = still loading; suppresses the banner so
+  // it doesn't flash on mount before the AsyncStorage read resolves.
+  const [hasGroqKey, setHasGroqKey] = useState<boolean | null>(null);
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      getGroqKey()
+        .then((k) => {
+          if (!cancelled) setHasGroqKey(!!k);
+        })
+        .catch(() => {
+          if (!cancelled) setHasGroqKey(null);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }, []),
+  );
 
   const myUid = user?.uid;
 
@@ -185,6 +210,13 @@ export function ChatsScreen() {
         onChangeSearch={setSearch}
         onChangeFavoritesOnly={setFavoritesOnly}
       />
+      {hasGroqKey === false && (
+        <View style={styles.noKeyBanner}>
+          <Text style={styles.noKeyBannerTxt}>
+            ⚠️ Voice notes are slow — talk to admin for fast transcription
+          </Text>
+        </View>
+      )}
       <FlatList
         data={listData}
         keyExtractor={(item) => item.key}
@@ -264,29 +296,47 @@ export function ChatsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.panel },
-  empty: { padding: 60, alignItems: "center" },
-  emptyTxt: { color: colors.muted, fontSize: 14 },
-  versionFooter: { paddingVertical: 16, alignItems: "center" },
-  versionTxt: { color: colors.muted, fontSize: 10 },
-  divider: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: space.md,
-    paddingVertical: 6,
-    backgroundColor: "#f6f7f8",
-    gap: space.sm,
-  },
-  dividerLine: {
-    flex: 1,
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: colors.border,
-  },
-  dividerTxt: {
-    fontSize: 11,
-    color: colors.muted,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-  },
-});
+function makeStyles(colors: Colors) {
+  return StyleSheet.create({
+    root: { flex: 1, backgroundColor: colors.bg },
+    empty: { padding: 60, alignItems: "center" },
+    emptyTxt: { color: colors.muted, fontSize: 14 },
+    versionFooter: { paddingVertical: 16, alignItems: "center" },
+    versionTxt: { color: colors.muted, fontSize: 10 },
+    // v1.146: amber strip shown when getGroqKey() returns empty. Calm
+    // enough to live persistently at the top of the chat list without
+    // becoming visual noise, loud enough that the user notices voice
+    // notes will be slow until they sort the key out.
+    noKeyBanner: {
+      backgroundColor: "#fff3cd",
+      borderLeftWidth: 3,
+      borderLeftColor: "#e0a500",
+      paddingHorizontal: space.md,
+      paddingVertical: 8,
+    },
+    noKeyBannerTxt: {
+      color: "#5c4400",
+      fontSize: 12,
+      fontWeight: "500",
+    },
+    divider: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingHorizontal: space.md,
+      paddingVertical: 6,
+      backgroundColor: colors.rowHover,
+      gap: space.sm,
+    },
+    dividerLine: {
+      flex: 1,
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: colors.border,
+    },
+    dividerTxt: {
+      fontSize: 11,
+      color: colors.muted,
+      textTransform: "uppercase",
+      letterSpacing: 0.5,
+    },
+  });
+}

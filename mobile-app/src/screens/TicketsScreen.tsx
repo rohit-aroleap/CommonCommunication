@@ -11,7 +11,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { colors, space } from "@/theme";
+import { space, useStyles, type Colors } from "@/theme";
 import { useAppData, myOpenTickets } from "@/data/AppDataContext";
 import { useAuth } from "@/auth/AuthContext";
 import { resolveDisplayName } from "@/lib/displayName";
@@ -39,6 +39,7 @@ export function TicketsScreen() {
     () => myOpenTickets(tickets, user?.uid),
     [tickets, user?.uid],
   );
+  const styles = useStyles(makeStyles);
 
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
@@ -93,29 +94,32 @@ export function TicketsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.panel },
-  row: {
-    paddingHorizontal: space.md,
-    paddingVertical: space.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-  },
-  top: {
-    flexDirection: "row",
-    alignItems: "baseline",
-    marginBottom: 4,
-    gap: 8,
-  },
-  title: { fontSize: 15, fontWeight: "500", color: colors.text, flex: 1 },
-  time: { fontSize: 11, color: colors.muted },
-  customer: {
-    fontSize: 13,
-    color: colors.greenDark,
-    fontWeight: "500",
-    marginBottom: 2,
-  },
-  from: { fontSize: 12, color: colors.muted },
-  empty: { padding: 60, alignItems: "center" },
-  emptyTxt: { color: colors.muted, fontSize: 14, textAlign: "center" },
-});
+function makeStyles(colors: Colors) {
+  return StyleSheet.create({
+    root: { flex: 1, backgroundColor: colors.bg },
+    row: {
+      paddingHorizontal: space.md,
+      paddingVertical: space.md,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+      backgroundColor: colors.panel,
+    },
+    top: {
+      flexDirection: "row",
+      alignItems: "baseline",
+      marginBottom: 4,
+      gap: 8,
+    },
+    title: { fontSize: 15, fontWeight: "500", color: colors.text, flex: 1 },
+    time: { fontSize: 11, color: colors.muted },
+    customer: {
+      fontSize: 13,
+      color: colors.green,
+      fontWeight: "500",
+      marginBottom: 2,
+    },
+    from: { fontSize: 12, color: colors.muted },
+    empty: { padding: 60, alignItems: "center" },
+    emptyTxt: { color: colors.muted, fontSize: 14, textAlign: "center" },
+  });
+}

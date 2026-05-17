@@ -42,7 +42,7 @@ export default {
         return cors(env, json({
           service: "CommonCommunication Worker",
           status: "ok",
-          endpoints: ["/health", "/send (POST)", "/webhook (POST)", "/messages?chatId=... (GET)", "/transcribe (POST)", "/register-push-token (POST)"],
+          endpoints: ["/health", "/send (POST)", "/webhook (POST)", "/messages?chatId=... (GET)", "/transcribe (POST)", "/cleanup (POST)", "/register-push-token (POST)"],
         }));
       }
       if (url.pathname === "/messages" && request.method === "GET") {
@@ -65,6 +65,9 @@ export default {
       }
       if (url.pathname === "/transcribe" && request.method === "POST") {
         return cors(env, await handleTranscribe(request, env));
+      }
+      if (url.pathname === "/cleanup" && request.method === "POST") {
+        return cors(env, await handleCleanup(request, env));
       }
       if (url.pathname === "/media" && request.method === "GET") {
         return cors(env, await handleMediaProxy(request, env));
@@ -245,6 +248,22 @@ async function handleWebhook(request, env) {
   const msg = payload?.data || payload?.message || payload;
 
   if (!msg) return json({ ok: true, skipped: "no message" });
+
+  // Tenant guard: a Periskope webhook carries the org's own WhatsApp number
+  // (the account the event belongs to). If it doesn't match PERISKOPE_PHONE,
+  // some OTHER account is posting to our endpoint — drop the message so it
+  // never lands in /commonComm/chats and leaks across accounts.
+  const expectedPhone = digitsOnly(env.PERISKOPE_PHONE);
+  const accountPhone = extractAccountPhone(payload, msg);
+  if (expectedPhone && accountPhone && accountPhone !== expectedPhone) {
+    await fbPut(env, `${ROOT}/_debug/webhook_rejected/${debugKey}`, {
+      reason: "account_phone_mismatch",
+      expected: expectedPhone,
+      got: accountPhone,
+      receivedAt: Date.now(),
+    });
+    return json({ ok: true, rejected: "account_phone_mismatch" });
+  }
 
   const rawChatId = msg.chat_id || msg.chatId;
   if (!rawChatId) return json({ ok: true, skipped: "no chat_id" });
@@ -1433,6 +1452,10 @@ Rules:
 // facts — so what the trainer sees is a clean note draft, not raw dictation.
 // Audio is NEVER sent to the customer; the frontend drops the result into
 // the notes-panel draft form.
+//
+// Body `cleanup: false` opts out of the Claude pass — used by the mobile
+// app's internal-DM composer mic, where the cleanup prompt (written for
+// trainer-notes-about-customer) is the wrong service.
 async function handleTranscribe(request, env) {
   if (!env.AI) {
     return json({ error: "workers_ai_not_bound", hint: "Add [ai] binding=\"AI\" in wrangler.toml and redeploy" }, 500);
@@ -1442,6 +1465,7 @@ async function handleTranscribe(request, env) {
   if (!audioB64 || typeof audioB64 !== "string") {
     return json({ error: "missing audio (base64 string)" }, 400);
   }
+  const cleanup = body?.cleanup !== false;
 
   // (1) Whisper transcription
   let rawText = "";
@@ -1457,25 +1481,48 @@ async function handleTranscribe(request, env) {
     return json({ text: "", raw: "", cleaned: false, reason: "no_speech" });
   }
 
-  // (2) Claude cleanup pass. If the key isn't configured, or the call fails,
-  // we fall back to the raw transcript so the feature never hard-fails.
-  if (!env.CLAUDE_API_KEY) {
-    return json({ text: rawText, raw: rawText, cleaned: false, reason: "claude_not_configured" });
+  if (!cleanup) {
+    return json({ text: rawText, raw: rawText, cleaned: false, reason: "cleanup_disabled" });
   }
 
-  const systemPrompt = `You are cleaning up a voice-dictated private note from an Aroleap fitness team member about a customer. The raw audio transcript may contain filler words ("um", "uh", "like", "you know"), false starts, repeated words, and missing punctuation.
+  // (2) Claude cleanup pass — delegated to the shared helper so /cleanup
+  // (called by the browser-direct Groq STT path) uses the exact same prompt.
+  const cleanResult = await runCleanupPass(rawText, env);
+  return json(cleanResult);
+}
+
+// System prompt for voice-transcript cleanup. Shared between the legacy
+// /transcribe route (which does Whisper + cleanup in one call) and /cleanup
+// (called by the browser/mobile after they do STT directly via Groq with
+// the user's own API key — see v1.133).
+//
+// Intentionally context-agnostic: the same transcript could be a private
+// note, an outgoing message, or a quick reminder. The prompt only cleans
+// up the text — it doesn't assume anything about where the text is going.
+const VOICE_NOTE_CLEANUP_PROMPT = `You are cleaning up a voice-dictated transcript. The raw text may contain filler words ("um", "uh", "like", "you know"), false starts, repeated words, and missing punctuation.
 
 Your job:
 - Remove fillers, false starts, and obvious stammers.
 - Fix punctuation, capitalization, and run-on sentences.
-- Preserve the trainer's voice and meaning — don't rewrite for "formality".
-- Keep ALL specifics exactly as spoken: customer names, phone numbers, dates, times, prices, body parts, injuries, medical terms, equipment/machine names, addresses.
-- Do NOT add facts, dates, or details that aren't in the transcript.
+- Preserve the speaker's voice and meaning — don't rewrite for "formality" and don't change wording beyond what's needed to make the text read cleanly.
+- Keep ALL specifics exactly as spoken: names, phone numbers, dates, times, prices, technical terms, addresses, identifiers.
+- Do NOT add facts or details that aren't in the transcript.
 - Do NOT add greetings, signoffs, headers ("Note:", "Summary:"), or bullets unless the transcript itself is clearly multi-topic.
 - If the transcript is already clean, return it as-is with only punctuation fixes.
 
-Output ONLY the cleaned note text — no preamble, no explanation, no quotes around it.`;
+Output ONLY the cleaned text — no preamble, no explanation, no quotes around it.`;
 
+// Runs the Claude cleanup pass over a raw transcript and returns a result
+// object in the same shape both /transcribe and /cleanup return. Never
+// throws — if Claude is unreachable or misconfigured, we fall back to the
+// raw text so the feature never hard-fails for the caller.
+async function runCleanupPass(rawText, env) {
+  if (!rawText) {
+    return { text: "", raw: "", cleaned: false, reason: "no_speech" };
+  }
+  if (!env.CLAUDE_API_KEY) {
+    return { text: rawText, raw: rawText, cleaned: false, reason: "claude_not_configured" };
+  }
   try {
     const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -1487,27 +1534,33 @@ Output ONLY the cleaned note text — no preamble, no explanation, no quotes aro
       body: JSON.stringify({
         model: "claude-haiku-4-5-20251001",
         max_tokens: 800,
-        system: systemPrompt,
+        system: VOICE_NOTE_CLEANUP_PROMPT,
         messages: [{ role: "user", content: rawText }],
       }),
     });
     const claudeJson = await safeJson(claudeRes);
     if (!claudeRes.ok) {
-      return json({ text: rawText, raw: rawText, cleaned: false, reason: "claude_api_failed", details: claudeJson });
+      return { text: rawText, raw: rawText, cleaned: false, reason: "claude_api_failed", details: claudeJson };
     }
     const cleaned = String(claudeJson?.content?.[0]?.text || "").trim();
     if (!cleaned) {
-      return json({ text: rawText, raw: rawText, cleaned: false, reason: "claude_empty" });
+      return { text: rawText, raw: rawText, cleaned: false, reason: "claude_empty" };
     }
-    return json({
-      text: cleaned,
-      raw: rawText,
-      cleaned: true,
-      usage: claudeJson?.usage || null,
-    });
+    return { text: cleaned, raw: rawText, cleaned: true, usage: claudeJson?.usage || null };
   } catch (e) {
-    return json({ text: rawText, raw: rawText, cleaned: false, reason: "claude_network_error", details: String(e?.message || e) });
+    return { text: rawText, raw: rawText, cleaned: false, reason: "claude_network_error", details: String(e?.message || e) };
   }
+}
+
+// ---------- /cleanup (Claude pass over already-transcribed text) ----------
+// Called by the browser/mobile after they hit Groq directly with the user's
+// own API key. Body: { text: "raw transcript from whisper" }. Response is
+// the same shape /transcribe returns: { text, raw, cleaned, ... }.
+async function handleCleanup(request, env) {
+  const body = await request.json().catch(() => null);
+  const rawText = String(body?.text || "").trim();
+  if (!rawText) return json({ error: "missing text" }, 400);
+  return json(await runCleanupPass(rawText, env));
 }
 
 async function handleFetchMessages(request, env) {
@@ -1683,6 +1736,35 @@ function phoneToChatId(phone) {
 }
 function chatIdToPhone(chatId) {
   return String(chatId || "").split("@")[0];
+}
+function digitsOnly(v) {
+  return String(v || "").replace(/\D/g, "");
+}
+// Periskope's webhook envelope isn't perfectly stable, so look in a few
+// plausible spots for the org's own phone number. Returns digits-only, or
+// "" if nothing recognizable was found (in which case the guard treats the
+// message as unverified rather than rejecting — see handleWebhook).
+function extractAccountPhone(payload, msg) {
+  const candidates = [
+    payload?.phone,
+    payload?.account_phone,
+    payload?.business_phone,
+    payload?.to,
+    payload?.data?.phone,
+    payload?.data?.account_phone,
+    payload?.data?.business_phone,
+    payload?.data?.to,
+    msg?.account_phone,
+    msg?.business_phone,
+    msg?.to,
+    msg?.to_phone,
+  ];
+  for (const c of candidates) {
+    if (!c) continue;
+    const d = digitsOnly(String(c).split("@")[0]);
+    if (d) return d;
+  }
+  return "";
 }
 // Periskope sends timestamps as ISO strings ("2026-05-14T08:17:49+00:00").
 // Older code paths might send unix seconds or millis. Handle all three.

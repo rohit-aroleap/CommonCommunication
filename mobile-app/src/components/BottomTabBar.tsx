@@ -14,7 +14,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { MaterialTopTabBarProps } from "@react-navigation/material-top-tabs";
-import { colors } from "@/theme";
+import { useTheme } from "@/theme";
 import { useAppData } from "@/data/AppDataContext";
 
 const TAB_GLYPH: Record<string, string> = {
@@ -31,6 +31,7 @@ const TAB_LABEL: Record<string, string> = {
 
 export function BottomTabBar({ state, navigation }: MaterialTopTabBarProps) {
   const insets = useSafeAreaInsets();
+  const { colors } = useTheme();
   const { chatsUnreadCount, ticketsCount, teamUnreadCount } = useAppData();
   const badgeByRoute: Record<string, number> = {
     Chats: chatsUnreadCount,
@@ -45,6 +46,8 @@ export function BottomTabBar({ state, navigation }: MaterialTopTabBarProps) {
         {
           height: 64 + insets.bottom,
           paddingBottom: 8 + insets.bottom,
+          backgroundColor: colors.panel,
+          borderTopColor: colors.border,
         },
       ]}
     >
@@ -76,7 +79,7 @@ export function BottomTabBar({ state, navigation }: MaterialTopTabBarProps) {
               <View
                 style={[
                   styles.iconWrap,
-                  focused && styles.iconWrapActive,
+                  focused && { backgroundColor: colors.pillActiveBg },
                 ]}
               >
                 <Text
@@ -86,7 +89,7 @@ export function BottomTabBar({ state, navigation }: MaterialTopTabBarProps) {
                   {TAB_GLYPH[route.name] || "•"}
                 </Text>
                 {badge > 0 && (
-                  <View style={styles.badge}>
+                  <View style={[styles.badge, { backgroundColor: colors.red }]}>
                     <Text style={styles.badgeTxt}>
                       {badge > 99 ? "99+" : String(badge)}
                     </Text>
@@ -96,7 +99,7 @@ export function BottomTabBar({ state, navigation }: MaterialTopTabBarProps) {
               <Text
                 style={[
                   styles.label,
-                  focused ? styles.labelActive : styles.labelInactive,
+                  { color: focused ? colors.green : colors.muted },
                 ]}
                 numberOfLines={1}
               >
@@ -113,9 +116,7 @@ export function BottomTabBar({ state, navigation }: MaterialTopTabBarProps) {
 const styles = StyleSheet.create({
   bar: {
     flexDirection: "row",
-    backgroundColor: colors.panel,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
     paddingTop: 6,
   },
   item: {
@@ -131,20 +132,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  iconWrapActive: {
-    backgroundColor: "#d1fae5",
-  },
   iconTxt: { fontSize: 18 },
   iconTxtActive: { fontSize: 20 },
   label: {
     fontSize: 11,
     fontWeight: "600",
   },
-  labelActive: { color: colors.greenDark },
-  labelInactive: { color: colors.muted },
-  // Red unread bubble in the top-right of the icon pill. Matches the
-  // bottom-tab navigator's default tabBarBadge placement closely enough
-  // that returning users won't notice the swap.
+  // Red unread bubble in the top-right of the icon pill. Background color
+  // is themed via inline style (light = #ef4444, dark = same red — palette
+  // sets colors.red for both).
   badge: {
     position: "absolute",
     top: -2,
@@ -153,7 +149,6 @@ const styles = StyleSheet.create({
     height: 16,
     borderRadius: 8,
     paddingHorizontal: 4,
-    backgroundColor: "#dc2626",
     alignItems: "center",
     justifyContent: "center",
   },

@@ -16,7 +16,7 @@ import {
 import { ref, update } from "firebase/database";
 import { db } from "@/firebase";
 import { ROOT } from "@/config";
-import { colors } from "@/theme";
+import { useStyles, type Colors } from "@/theme";
 import type { TeamUser, Ticket } from "@/types";
 
 interface Props {
@@ -38,6 +38,7 @@ export function ReassignModal({
 }: Props) {
   const [assignee, setAssignee] = useState<string>("");
   const [busy, setBusy] = useState(false);
+  const styles = useStyles(makeStyles);
 
   const assignees = useMemo(() => {
     const out: Array<{ uid: string; name: string }> = [];
@@ -151,57 +152,59 @@ export function ReassignModal({
   );
 }
 
-const styles = StyleSheet.create({
-  back: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.5)",
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 16,
-  },
-  card: {
-    width: "100%",
-    maxWidth: 380,
-    backgroundColor: "white",
-    borderRadius: 12,
-    padding: 20,
-    maxHeight: "85%",
-  },
-  title: { fontSize: 17, fontWeight: "600", color: colors.text },
-  sub: { fontSize: 12, color: colors.muted, marginBottom: 12, marginTop: 2 },
-  quote: {
-    backgroundColor: "#f0f2f5",
-    borderLeftWidth: 3,
-    borderLeftColor: colors.green,
-    borderRadius: 4,
-    padding: 8,
-    marginBottom: 14,
-  },
-  quoteTxt: { fontSize: 13, color: colors.muted },
-  list: { maxHeight: 280, marginBottom: 12 },
-  item: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    borderRadius: 6,
-  },
-  itemSel: { backgroundColor: "#f0f2f5" },
-  itemTxt: { fontSize: 14, color: colors.text, flex: 1 },
-  itemTxtSel: { fontWeight: "500", color: colors.greenDark },
-  check: { color: colors.greenDark, fontSize: 16 },
-  btnRow: { flexDirection: "row", justifyContent: "flex-end", gap: 8 },
-  btn: {
-    paddingVertical: 9,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    minWidth: 100,
-    alignItems: "center",
-  },
-  btnPrimary: { backgroundColor: colors.green, borderColor: colors.green },
-  btnDisabled: { opacity: 0.6 },
-  btnTxt: { fontSize: 14, color: colors.text },
-  btnTxtPrimary: { color: "white", fontWeight: "500" },
-});
+function makeStyles(colors: Colors) {
+  return StyleSheet.create({
+    back: {
+      flex: 1,
+      backgroundColor: "rgba(0,0,0,0.55)",
+      justifyContent: "center",
+      alignItems: "center",
+      padding: 16,
+    },
+    card: {
+      width: "100%",
+      maxWidth: 380,
+      backgroundColor: colors.panel,
+      borderRadius: 12,
+      padding: 20,
+      maxHeight: "85%",
+    },
+    title: { fontSize: 17, fontWeight: "600", color: colors.text },
+    sub: { fontSize: 12, color: colors.muted, marginBottom: 12, marginTop: 2 },
+    quote: {
+      backgroundColor: colors.rowHover,
+      borderLeftWidth: 3,
+      borderLeftColor: colors.green,
+      borderRadius: 4,
+      padding: 8,
+      marginBottom: 14,
+    },
+    quoteTxt: { fontSize: 13, color: colors.muted },
+    list: { maxHeight: 280, marginBottom: 12 },
+    item: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingHorizontal: 12,
+      paddingVertical: 12,
+      borderRadius: 6,
+    },
+    itemSel: { backgroundColor: colors.rowHover },
+    itemTxt: { fontSize: 14, color: colors.text, flex: 1 },
+    itemTxtSel: { fontWeight: "500", color: colors.green },
+    check: { color: colors.green, fontSize: 16 },
+    btnRow: { flexDirection: "row", justifyContent: "flex-end", gap: 8 },
+    btn: {
+      paddingVertical: 9,
+      paddingHorizontal: 16,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: colors.border,
+      minWidth: 100,
+      alignItems: "center",
+    },
+    btnPrimary: { backgroundColor: colors.green, borderColor: colors.green },
+    btnDisabled: { opacity: 0.6 },
+    btnTxt: { fontSize: 14, color: colors.text },
+    btnTxtPrimary: { color: "white", fontWeight: "500" },
+  });
+}
