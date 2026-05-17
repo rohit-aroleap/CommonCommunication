@@ -24,6 +24,7 @@ import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 
 import { AuthProvider, useAuth } from "@/auth/AuthContext";
 import { AppDataProvider, useAppData } from "@/data/AppDataContext";
+import { useWidgetSync } from "@/hooks/useWidgetSync";
 import { LoginScreen } from "@/auth/LoginScreen";
 import { ChatsScreen } from "@/screens/ChatsScreen";
 import { TicketsScreen } from "@/screens/TicketsScreen";
@@ -134,6 +135,11 @@ function TabsNav() {
     const total = chatsUnreadCount + teamUnreadCount;
     Notifications.setBadgeCountAsync(total).catch(() => {});
   }, [chatsUnreadCount, teamUnreadCount]);
+  // Android home-screen widget dot indicators (v1.139). Pushes the same
+  // three counts above through the WidgetUpdater native module whenever
+  // they change — the widget redraws within a second with a pink dot on
+  // each tile that has activity. No-op on iOS (separate WidgetKit work).
+  useWidgetSync();
   return (
     <Tabs.Navigator
       screenOptions={{
