@@ -1,0 +1,13 @@
+{
+  "type": "widget",
+  "name": "QuickNoteWidget",
+  "displayName": "Quick Note",
+  "bundleIdentifier": ".widget",
+  "deploymentTarget": "17.0",
+  "icon": "../../assets/icon.png",
+  "colors": {
+    "$accent": { "color": "#008069" },
+    "WidgetBackground": { "color": "#008069" }
+  },
+  "frameworks": ["WidgetKit", "SwiftUI"]
+}

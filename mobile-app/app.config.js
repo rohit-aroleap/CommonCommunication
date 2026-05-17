@@ -94,6 +94,15 @@ module.exports = ({ config }) => ({
     ["expo-document-picker", { iCloudContainerEnvironment: "Production" }],
     ["expo-notifications", { color: "#008069" }],
     "expo-updates",
+    // iOS WidgetKit extension target for the home-screen Quick Note widget.
+    // Files live under targets/quicknote/; @bacons/apple-targets links them
+    // into the generated Xcode project at prebuild time.
+    "@bacons/apple-targets",
+    // Android AppWidgetProvider for the same widget. Custom plugin in
+    // plugins/android-quick-note-widget/ — injects the <receiver> into
+    // AndroidManifest.xml and copies the Kotlin / XML / drawable into
+    // the prebuild output.
+    "./plugins/android-quick-note-widget",
   ],
   extra: {
     eas: { projectId: e.EAS_PROJECT_ID ?? "" },

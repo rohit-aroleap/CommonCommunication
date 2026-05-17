@@ -82,6 +82,54 @@ feature branch (or merge to main first if you've already reviewed):
 - [ ] In App Store Connect → TestFlight → Internal testing → add team
       emails. They get an email and install via the TestFlight app.
 
+## Phase H — Home-screen widgets (Quick Note)
+
+These are native (Swift + Kotlin), so they ship through `eas build`, not
+`eas update`. Follow this lane any time you change anything under
+`targets/quicknote/` or `plugins/android-quick-note-widget/`.
+
+Prerequisites:
+
+- [ ] Xcode **16** or newer on a macOS Sequoia (15) machine — required by
+      `@bacons/apple-targets` v4.
+- [ ] If you're not letting EAS manage Apple credentials, set
+      `ios.appleTeamId` in `app.config.js` so the widget extension can be
+      signed.
+
+First build (or whenever you touch the widget):
+
+- [ ] Bump `version` in `app.config.js` (e.g. `0.1.0` → `0.2.0`). The
+      `runtimeVersion: { policy: "appVersion" }` policy ties OTA bundles
+      to `version`, so a fresh version isolates phones on the new native
+      build from phones still on the old one.
+- [ ] `cd mobile-app && npx expo prebuild --clean` — generates iOS / Android
+      projects with the widget files linked in. (You usually don't need
+      to commit the `ios/` / `android/` folders; CNG regenerates them on
+      every EAS build. Local prebuild is mostly for inspection.)
+- [ ] `eas build --profile production --platform all` — produces signed
+      iOS + Android binaries containing the WidgetKit extension and the
+      AppWidgetProvider.
+- [ ] `eas submit --platform all` → TestFlight + Play Internal.
+
+Test on a real device:
+
+- [ ] iOS: long-press an empty area on the home screen → tap **+** in the
+      top-left → search "Quick Note" → tap **Add Widget**. Tap the tile,
+      mic should auto-start.
+- [ ] Android: long-press an empty area on the home screen → **Widgets**
+      → scroll to CommonCommunication → drag the Quick Note tile. Tap
+      it, mic should auto-start.
+- [ ] Worth verifying: deep link works when the app is fully killed (not
+      just backgrounded). On iOS, swipe up from app switcher to kill the
+      app, then tap the widget. Should cold-start straight into the
+      QuickNote screen.
+
+Iterating:
+
+- Pure JS / TS changes to `QuickNoteScreen.tsx` still ship via
+  `eas update` — only changes to Swift / Kotlin / config-plugin / Info.plist
+  need a fresh `eas build`.
+
 ## Troubleshooting
 
 - **`expo start` fails with "missing client ID"** — `.env` isn't being
@@ -95,3 +143,18 @@ feature branch (or merge to main first if you've already reviewed):
   `Constants.expoConfig.extra.eas.projectId` is probably unset.
 - **Typecheck fails on `npm run tsc`** — you may need to run
   `npm install` again after pulling new code.
+- **Widget doesn't show up in iOS Add Widget gallery** — prebuild didn't
+  link the target. Run `npx expo prebuild --clean -p ios`, then verify
+  the `targets/quicknote/` files show up under `ios/` in the generated
+  Xcode project's left sidebar. If `appleTeamId` isn't set on the main
+  app config, the extension target won't sign on EAS Build either.
+- **Widget shows up but tapping it does nothing** — the URL scheme isn't
+  registered. Confirm `scheme: "commoncomm"` is still in `app.config.js`
+  and that `App.tsx` still has `<NavigationContainer linking={linking}>`.
+  iOS only routes `commoncomm://` when the host app declares it in its
+  `CFBundleURLTypes` (Expo writes that automatically from `scheme`).
+- **Android widget tile is blank or only shows the launcher's default
+  preview** — `previewLayout` couldn't be inflated. Most common cause is
+  that the prebuild plugin didn't copy `ic_quick_note.xml` into
+  `res/drawable/`. Re-run `expo prebuild --clean` and check the generated
+  `android/app/src/main/res/drawable/` for the file.
