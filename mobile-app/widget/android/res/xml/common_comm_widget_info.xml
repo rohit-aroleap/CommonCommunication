@@ -1,16 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  AppWidgetProviderInfo for the home-screen widget. minWidth/minHeight are
-  sized for a 4x1 cell grid (roughly 250dp wide, 70dp tall) — the standard
-  size for a three-button row. updatePeriodMillis=0 because the widget is
-  static (no live data); changing it later for unread counts means setting
-  a value >= 30 minutes (Android won't honor anything shorter).
+  AppWidgetProviderInfo for the home-screen widget. minHeight follows
+  Android's (70*n - 30)dp cell formula: 2 cells = 110dp, enough to fit
+  the emoji + label without clipping. updatePeriodMillis=0 because the
+  widget is static (no live data); changing it later for unread counts
+  means setting a value >= 30 minutes (Android won't honor anything shorter).
 -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:minWidth="250dp"
-    android:minHeight="70dp"
+    android:minHeight="110dp"
     android:targetCellWidth="4"
-    android:targetCellHeight="1"
+    android:targetCellHeight="2"
     android:updatePeriodMillis="0"
     android:initialLayout="@layout/common_comm_widget"
     android:previewLayout="@layout/common_comm_widget"
