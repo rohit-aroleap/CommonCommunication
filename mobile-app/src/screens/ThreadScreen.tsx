@@ -396,7 +396,13 @@ export function ThreadScreen({ route, navigation }: Props) {
   }, [chatKey]);
 
   // Deduplicate by inner unique id — see lib/messageDedup for the rationale.
-  const visible = useMemo(() => dedupMessages(messages), [messages]);
+  // dedupMessages returns ascending (oldest → newest) to match the webapp's
+  // top-down renderer. The inverted FlatList below needs descending so data[0]
+  // (newest) renders at the BOTTOM of the screen.
+  const visible = useMemo(
+    () => [...dedupMessages(messages)].reverse(),
+    [messages],
+  );
 
   const banner = useMemo<Ticket[]>(
     () => (isDm ? [] : openTicketsForChat(tickets, chatKey)),
