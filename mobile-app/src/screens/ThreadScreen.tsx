@@ -55,7 +55,7 @@ import { useAuth } from "@/auth/AuthContext";
 import { resolveDisplayName } from "@/lib/displayName";
 import { dayLabel } from "@/lib/format";
 import { chatKeyToChatId } from "@/lib/encodeKey";
-import { fetchChatInfo, sendMessage, notifyDm, transcribeAudio, type STTTimings } from "@/lib/worker";
+import { fetchChatInfo, sendMessage, notifyDm, transcribeAudio } from "@/lib/worker";
 import { makeVoiceNoteRecordingOptions } from "@/lib/voiceRecording";
 import { prewarmTranscription } from "@/lib/prewarm";
 import { getGroqKey } from "@/lib/groqKey";
@@ -280,22 +280,6 @@ export function ThreadScreen({ route, navigation }: Props) {
   >(null);
   const [notePreview, setNotePreview] = useState<string | null>(null);
   const [savingNote, setSavingNote] = useState(false);
-  // v1.145: on-screen STT timings banner. Populated whenever a voice
-  // transcription completes; auto-clears after 6s. Lets the trainer (and
-  // me, debugging) see why a particular voice note felt slow without
-  // having to attach adb logcat. Remove once we've gathered enough data.
-  const [lastTimings, setLastTimings] = useState<STTTimings | null>(null);
-  const timingsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const reportTimings = useCallback((t: STTTimings) => {
-    setLastTimings(t);
-    if (timingsTimeoutRef.current) clearTimeout(timingsTimeoutRef.current);
-    timingsTimeoutRef.current = setTimeout(() => setLastTimings(null), 6000);
-  }, []);
-  useEffect(() => {
-    return () => {
-      if (timingsTimeoutRef.current) clearTimeout(timingsTimeoutRef.current);
-    };
-  }, []);
   const { colors } = useTheme();
   const styles = useStyles(makeStyles);
   const listRef = useRef<FlatList<Message>>(null);
@@ -548,7 +532,7 @@ export function ThreadScreen({ route, navigation }: Props) {
     async (uri: string) => {
       setTranscribing(true);
       try {
-        const text = await transcribeAudio(uri, { onTimings: reportTimings });
+        const text = await transcribeAudio(uri);
         if (!text) {
           Alert.alert("No speech detected", "Try recording again, closer to the mic.");
           return;
@@ -578,7 +562,7 @@ export function ThreadScreen({ route, navigation }: Props) {
         setTranscribing(false);
       }
     },
-    [navigation, reportTimings],
+    [navigation],
   );
 
   // v1.134: composer-mic flow (🎤 right of input). Same transcription pipeline
@@ -595,7 +579,7 @@ export function ThreadScreen({ route, navigation }: Props) {
     async (uri: string) => {
       setComposerTranscribing(true);
       try {
-        const text = await transcribeAudio(uri, { cleanup: false, onTimings: reportTimings });
+        const text = await transcribeAudio(uri, { cleanup: false });
         if (!text) {
           Alert.alert("No speech detected", "Try recording again, closer to the mic.");
           return;
@@ -625,7 +609,7 @@ export function ThreadScreen({ route, navigation }: Props) {
         setComposerTranscribing(false);
       }
     },
-    [navigation, reportTimings],
+    [navigation],
   );
 
   async function saveVoiceNote(text: string) {
@@ -971,13 +955,6 @@ export function ThreadScreen({ route, navigation }: Props) {
             if (t) setReassignTicket(t);
           }}
         />
-      )}
-      {lastTimings && (
-        <View style={styles.sttBanner}>
-          <Text style={styles.sttBannerTxt}>
-            STT {lastTimings.totalMs}ms · setup {lastTimings.prefsMs} · {lastTimings.path === "groq" ? "groq" : "worker"} {lastTimings.sttMs} (http {lastTimings.groqHttpMs}) · clean {lastTimings.cleanupMs} · {lastTimings.chars}ch
-          </Text>
-        </View>
       )}
       <FlatList
         ref={listRef}
@@ -1589,20 +1566,6 @@ function makeStyles(colors: Colors) {
   root: { flex: 1, backgroundColor: colors.bg },
   list: { flex: 1, backgroundColor: colors.bg },
   listContent: { paddingHorizontal: 8, paddingVertical: 12 },
-  // v1.145: STT timings debug banner — short-lived chip that shows the
-  // per-stage durations of the most recent voice transcription. Auto-hides
-  // after 6s. Compact monospace so the layout doesn't shift much when it
-  // appears.
-  sttBanner: {
-    backgroundColor: "rgba(0,0,0,0.7)",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-  },
-  sttBannerTxt: {
-    color: "#bdf",
-    fontSize: 11,
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-  },
   // v1.118: smaller, more subtle date dividers. The old teal pill drew too
   // much attention given how often these recur. Matches WhatsApp's quiet
   // grey-on-white style.

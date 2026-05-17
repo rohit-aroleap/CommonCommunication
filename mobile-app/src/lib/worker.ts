@@ -138,43 +138,9 @@ export async function registerPushToken(
 //      toggle stored under cc.voiceCleanup. When off, no path cleans up,
 //      regardless of what the caller asked for.
 // Whichever layer is more restrictive wins.
-// Per-stage timings reported to the caller via the optional `onTimings`
-// callback. Currently consumed by the on-screen STT-timings banner in
-// ThreadScreen (v1.145) so we can debug mobile-vs-laptop latency without
-// having to attach `adb logcat`.
-export interface STTTimings {
-  // Time spent loading the user prefs (Groq key + cleanup toggle) before
-  // we even touch the network.
-  prefsMs: number;
-  // For the Groq path: the whole Groq round-trip (file ready on disk +
-  // multipart upload + Whisper processing + JSON parse).
-  // For the Worker fallback: the /transcribe round-trip including base64
-  // upload + Workers-AI Whisper + cleanup.
-  sttMs: number;
-  // Inner Groq HTTP latency only — useful for separating
-  // upload+processing from FormData construction time. Same as sttMs for
-  // the Worker fallback path (we don't break it down further there).
-  groqHttpMs: number;
-  // Claude cleanup pass. 0 when cleanup was skipped (composer mic or
-  // user-disabled in Settings).
-  cleanupMs: number;
-  // End-to-end transcribeAudio() duration, prefsMs + sttMs + cleanupMs.
-  totalMs: number;
-  // Length of the cleaned transcript — gives a rough sense of how much
-  // audio was in the recording.
-  chars: number;
-  // Which path actually ran. "groq" = direct browser→Groq (preferred);
-  // "worker" = legacy /transcribe via Cloudflare Workers AI.
-  path: "groq" | "worker";
-}
-
 export async function transcribeAudio(
   uri: string,
-  options?: {
-    mimeType?: string;
-    cleanup?: boolean;
-    onTimings?: (t: STTTimings) => void;
-  },
+  options?: { mimeType?: string; cleanup?: boolean },
 ): Promise<string> {
   const tIn = Date.now();
   const callerCleanup = options?.cleanup ?? true;
@@ -189,41 +155,15 @@ export async function transcribeAudio(
   const cleanup = callerCleanup && prefAllowsCleanup;
   const tPrefsReady = Date.now();
   console.log("[stt]", "prefs-ready", { ms: tPrefsReady - tIn, groqKey: !!groqKey, cleanup });
-  const report = (extras: Omit<STTTimings, "prefsMs" | "totalMs">) => {
-    if (!options?.onTimings) return;
-    const totalMs = Date.now() - tIn;
-    options.onTimings({
-      prefsMs: tPrefsReady - tIn,
-      totalMs,
-      ...extras,
-    });
-  };
   if (groqKey) {
-    const { text: raw, httpMs } = await transcribeWithGroq(
-      uri,
-      groqKey,
-      options?.mimeType,
-    );
+    const raw = await transcribeWithGroq(uri, groqKey, options?.mimeType);
     const tGroqDone = Date.now();
     console.log("[stt]", "groq-done", { ms: tGroqDone - tPrefsReady, chars: raw.length });
-    if (!raw) {
-      report({ sttMs: tGroqDone - tPrefsReady, groqHttpMs: httpMs, cleanupMs: 0, chars: 0, path: "groq" });
-      return "";
-    }
-    if (!cleanup) {
-      report({ sttMs: tGroqDone - tPrefsReady, groqHttpMs: httpMs, cleanupMs: 0, chars: raw.length, path: "groq" });
-      return raw;
-    }
+    if (!raw) return "";
+    if (!cleanup) return raw;
     const cleaned = await cleanupTranscript(raw);
     const tCleanDone = Date.now();
     console.log("[stt]", "cleanup-done", { ms: tCleanDone - tGroqDone, total_ms: tCleanDone - tIn });
-    report({
-      sttMs: tGroqDone - tPrefsReady,
-      groqHttpMs: httpMs,
-      cleanupMs: tCleanDone - tGroqDone,
-      chars: cleaned.length,
-      path: "groq",
-    });
     return cleaned;
   }
   // Legacy path: base64-encode the file for the Worker's JSON-body endpoint.
@@ -233,15 +173,7 @@ export async function transcribeAudio(
   const tB64 = Date.now();
   console.log("[stt]", "b64-ready", { ms: tB64 - tPrefsReady, bytes: audioB64.length });
   const text = await transcribeViaWorker(audioB64, cleanup);
-  const tWorkerDone = Date.now();
-  console.log("[stt]", "worker-done", { ms: tWorkerDone - tB64, total_ms: tWorkerDone - tIn });
-  report({
-    sttMs: tWorkerDone - tPrefsReady,
-    groqHttpMs: tWorkerDone - tB64,
-    cleanupMs: 0,
-    chars: text.length,
-    path: "worker",
-  });
+  console.log("[stt]", "worker-done", { ms: Date.now() - tB64, total_ms: Date.now() - tIn });
   return text;
 }
 
@@ -252,7 +184,7 @@ async function transcribeWithGroq(
   uri: string,
   apiKey: string,
   mimeType?: string,
-): Promise<{ text: string; httpMs: number }> {
+): Promise<string> {
   const mt = mimeType || guessMimeFromUri(uri);
   const ext = mt.includes("mp4") || mt.includes("aac") || mt.includes("m4a") ? "m4a"
             : mt.includes("webm") ? "webm"
@@ -272,8 +204,7 @@ async function transcribeWithGroq(
     headers: { Authorization: "Bearer " + apiKey },
     body: form as any,
   });
-  const httpMs = Date.now() - tReq;
-  console.log("[stt]", "groq-http", { ms: httpMs, status: res.status });
+  console.log("[stt]", "groq-http", { ms: Date.now() - tReq, status: res.status });
   const j = (await res.json().catch(() => ({}))) as {
     text?: string;
     error?: { message?: string } | string;
@@ -290,7 +221,7 @@ async function transcribeWithGroq(
     if (res.status === 401) throw new Error("groq_unauthorized: " + errMsg);
     throw new Error(errMsg);
   }
-  return { text: String(j?.text || "").trim(), httpMs };
+  return String(j?.text || "").trim();
 }
 
 // Worker-side Claude cleanup pass. Best-effort: on any failure, returns the
