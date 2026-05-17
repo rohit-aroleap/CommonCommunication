@@ -2,7 +2,7 @@
 // list. The filter rules (daily-groups hidden by default, status/stage
 // exclusions) match mobile.html exactly.
 
-import React, { useCallback, useLayoutEffect, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { FlatList, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { space, useStyles, type Colors } from "@/theme";
@@ -74,21 +74,6 @@ export function ChatsScreen() {
       };
     }, []),
   );
-
-  // Render "Chats" with the version chip beside it in the green topbar.
-  // Tab navigator headers default to plain text from the tab name;
-  // overriding headerTitle with a component lets us add the version next
-  // to it so trainers can read it back without scrolling to the footer.
-  useLayoutEffect(() => {
-    navigation.setOptions({
-      headerTitle: () => (
-        <View style={styles.headerTitleRow}>
-          <Text style={styles.headerTitleTxt}>Chats</Text>
-          <Text style={styles.headerTitleVer}>{getDisplayVersion()}</Text>
-        </View>
-      ),
-    });
-  }, [navigation, styles]);
 
   const myUid = user?.uid;
 
@@ -313,60 +298,45 @@ export function ChatsScreen() {
 
 function makeStyles(colors: Colors) {
   return StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.bg },
-  empty: { padding: 60, alignItems: "center" },
-  emptyTxt: { color: colors.muted, fontSize: 14 },
-  versionFooter: { paddingVertical: 16, alignItems: "center" },
-  versionTxt: { color: colors.muted, fontSize: 10 },
-  // v1.146: amber strip shown when getGroqKey() returns empty. Calm
-  // enough to live persistently at the top of the chat list without
-  // becoming visual noise, loud enough that the user notices voice
-  // notes will be slow until they sort the key out.
-  noKeyBanner: {
-    backgroundColor: "#fff3cd",
-    borderLeftWidth: 3,
-    borderLeftColor: "#e0a500",
-    paddingHorizontal: space.md,
-    paddingVertical: 8,
-  },
-  noKeyBannerTxt: {
-    color: "#5c4400",
-    fontSize: 12,
-    fontWeight: "500",
-  },
-  headerTitleRow: {
-    flexDirection: "row",
-    alignItems: "baseline",
-    gap: 8,
-  },
-  headerTitleTxt: {
-    color: colors.headerText,
-    fontSize: 17,
-    fontWeight: "600",
-  },
-  headerTitleVer: {
-    color: "rgba(255,255,255,0.6)",
-    fontSize: 11,
-    fontWeight: "400",
-  },
-  divider: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: space.md,
-    paddingVertical: 6,
-    backgroundColor: colors.rowHover,
-    gap: space.sm,
-  },
-  dividerLine: {
-    flex: 1,
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: colors.border,
-  },
-  dividerTxt: {
-    fontSize: 11,
-    color: colors.muted,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-  },
+    root: { flex: 1, backgroundColor: colors.bg },
+    empty: { padding: 60, alignItems: "center" },
+    emptyTxt: { color: colors.muted, fontSize: 14 },
+    versionFooter: { paddingVertical: 16, alignItems: "center" },
+    versionTxt: { color: colors.muted, fontSize: 10 },
+    // v1.146: amber strip shown when getGroqKey() returns empty. Calm
+    // enough to live persistently at the top of the chat list without
+    // becoming visual noise, loud enough that the user notices voice
+    // notes will be slow until they sort the key out.
+    noKeyBanner: {
+      backgroundColor: "#fff3cd",
+      borderLeftWidth: 3,
+      borderLeftColor: "#e0a500",
+      paddingHorizontal: space.md,
+      paddingVertical: 8,
+    },
+    noKeyBannerTxt: {
+      color: "#5c4400",
+      fontSize: 12,
+      fontWeight: "500",
+    },
+    divider: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingHorizontal: space.md,
+      paddingVertical: 6,
+      backgroundColor: colors.rowHover,
+      gap: space.sm,
+    },
+    dividerLine: {
+      flex: 1,
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: colors.border,
+    },
+    dividerTxt: {
+      fontSize: 11,
+      color: colors.muted,
+      textTransform: "uppercase",
+      letterSpacing: 0.5,
+    },
   });
 }
