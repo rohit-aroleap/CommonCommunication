@@ -1,5 +1,8 @@
-// App root: auth gate → bottom tabs (Chats / Tickets) with a stack on top
-// for the Thread screen. Registers for push notifications once on sign-in.
+// App root: auth gate → bottom tabs (Chats / Tickets / Team) with a stack on
+// top for the Thread screen. Registers for push notifications once on
+// sign-in. The tab navigator is material-top-tabs with tabBarPosition
+// "bottom" so the trainer can swipe horizontally between tabs (WhatsApp
+// pattern) while the bottom bar still drives tap-to-tab.
 
 import React, { useEffect } from "react";
 import {
@@ -12,9 +15,13 @@ import {
   View,
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
-import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
-import { NavigationContainer } from "@react-navigation/native";
-import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+import { SafeAreaProvider } from "react-native-safe-area-context";
+import {
+  NavigationContainer,
+  getFocusedRouteNameFromRoute,
+  type RouteProp,
+} from "@react-navigation/native";
+import { createMaterialTopTabNavigator } from "@react-navigation/material-top-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import * as Notifications from "expo-notifications";
 import * as Updates from "expo-updates";
@@ -27,12 +34,20 @@ import { TicketsScreen } from "@/screens/TicketsScreen";
 import { TeamScreen } from "@/screens/TeamScreen";
 import { ThreadScreen } from "@/screens/ThreadScreen";
 import { CustomerInfoScreen } from "@/screens/CustomerInfoScreen";
+import { BottomTabBar } from "@/components/BottomTabBar";
 import { registerForPushAsync } from "@/notifications/registerForPush";
+import { getDisplayVersion } from "@/lib/version";
 import { colors } from "@/theme";
 import type { RootStackParamList } from "@/screens/types";
 
-const Tabs = createBottomTabNavigator();
+const Tabs = createMaterialTopTabNavigator();
 const Stack = createNativeStackNavigator<RootStackParamList>();
+
+const TAB_TITLE: Record<string, string> = {
+  Chats: "Chats",
+  Tickets: "My tickets",
+  Team: "Team",
+};
 
 function LogoutButton() {
   const { signOut, user } = useAuth();
@@ -66,17 +81,10 @@ function LogoutButton() {
 }
 
 function TabsNav() {
-  // Read live unread counts. AppDataProvider wraps PostAuth (above this
-  // navigator) so useAppData is safe to call here. React Navigation
-  // re-evaluates options on every render of this component, so the badge
-  // number stays in sync with the listeners.
-  const { chatsUnreadCount, teamUnreadCount, ticketsCount } = useAppData();
-  // Same safe-area pattern the composer uses (v1.117). Setting an explicit
-  // tabBarStyle.height overrides React Navigation's default safe-area
-  // handling, so we add insets.bottom back in manually. Without this, the
-  // bottom tab icons get clipped by the gesture-nav pill on Androids and
-  // by the home indicator on iPhones.
-  const insets = useSafeAreaInsets();
+  // Read live unread counts to keep the iOS app-icon badge in sync.
+  // The tab bar itself reads from AppDataContext directly (see
+  // BottomTabBar.tsx), so we don't have to pass them down.
+  const { chatsUnreadCount, teamUnreadCount } = useAppData();
   // iOS app-icon badge count. Android handles this automatically via the
   // notification tray; iOS only shows a number if the app explicitly sets
   // it. Sum the unread Chats + Team counts (NOT ticketsCount — that's a
@@ -88,72 +96,44 @@ function TabsNav() {
   }, [chatsUnreadCount, teamUnreadCount]);
   return (
     <Tabs.Navigator
+      tabBarPosition="bottom"
+      tabBar={(props) => <BottomTabBar {...props} />}
+      // Pager-view swipe is enabled by default. Keep all three screens
+      // mounted (lazy: false) so the swipe-in animation slides the real
+      // content in instead of a blank pane that then mounts mid-gesture.
+      // Trainers will use all three tabs in a session anyway, so the
+      // memory cost is fine.
       screenOptions={{
-        tabBarActiveTintColor: colors.greenDark,
-        tabBarInactiveTintColor: colors.muted,
-        headerStyle: { backgroundColor: colors.greenDark },
-        headerTintColor: "white",
-        headerTitleStyle: { fontWeight: "600" },
-        headerRight: () => <LogoutButton />,
-        tabBarBadgeStyle: { fontSize: 10, fontWeight: "600" },
-        // Bold active label so the active tab also reads strongly via text.
-        tabBarLabelStyle: { fontSize: 11, fontWeight: "600" },
-        // Slightly taller tab bar to fit the pill background comfortably,
-        // plus safe-area inset so it clears the gesture bar.
-        tabBarStyle: {
-          height: 64 + insets.bottom,
-          paddingTop: 6,
-          paddingBottom: 8 + insets.bottom,
-        },
+        swipeEnabled: true,
+        lazy: false,
+        // Hide the default top indicator bar — BottomTabBar handles the
+        // active-state visual entirely.
+        tabBarIndicatorStyle: { height: 0 },
       }}
     >
-      <Tabs.Screen
-        name="Chats"
-        component={ChatsScreen}
-        options={{
-          tabBarIcon: ({ focused }) => <TabIcon glyph="💬" focused={focused} />,
-          tabBarBadge: chatsUnreadCount > 0 ? chatsUnreadCount : undefined,
-        }}
-      />
-      <Tabs.Screen
-        name="Tickets"
-        component={TicketsScreen}
-        options={{
-          title: "My tickets",
-          tabBarLabel: "My tickets",
-          tabBarIcon: ({ focused }) => <TabIcon glyph="🎫" focused={focused} />,
-          tabBarBadge: ticketsCount > 0 ? ticketsCount : undefined,
-        }}
-      />
-      <Tabs.Screen
-        name="Team"
-        component={TeamScreen}
-        options={{
-          title: "Team",
-          tabBarLabel: "Team",
-          tabBarIcon: ({ focused }) => <TabIcon glyph="👥" focused={focused} />,
-          tabBarBadge: teamUnreadCount > 0 ? teamUnreadCount : undefined,
-        }}
-      />
+      <Tabs.Screen name="Chats" component={ChatsScreen} />
+      <Tabs.Screen name="Tickets" component={TicketsScreen} />
+      <Tabs.Screen name="Team" component={TeamScreen} />
     </Tabs.Navigator>
   );
 }
 
-// TabIcon — wraps the emoji in a pill background when the tab is focused.
-// Emojis ignore the `color` prop (they render in their native colors), so
-// we can't rely on tint to show active vs inactive. The pill + scale-up +
-// label color difference together give a strong visual signal.
-function TabIcon({ glyph, focused }: { glyph: string; focused: boolean }) {
-  return (
-    <View style={[styles.tabIconWrap, focused && styles.tabIconWrapActive]}>
-      <Text
-        style={[styles.tabIconTxt, focused && styles.tabIconTxtActive]}
-        accessibilityElementsHidden
-      >
-        {glyph}
-      </Text>
-    </View>
-  );
+// TabsHeaderTitle — Stack header re-renders on tab change because the route
+// state updates; we read the currently-focused tab name and render the
+// matching title. Chats gets the version chip alongside it, same as before
+// — trainers use it to read back the running build in support chats.
+function TabsHeaderTitle({ route }: { route: RouteProp<RootStackParamList, "Tabs"> }) {
+  const focused = getFocusedRouteNameFromRoute(route) ?? "Chats";
+  const title = TAB_TITLE[focused] || focused;
+  if (focused === "Chats") {
+    return (
+      <View style={styles.headerTitleRow}>
+        <Text style={styles.headerTitleTxt}>{title}</Text>
+        <Text style={styles.headerTitleVer}>{getDisplayVersion()}</Text>
+      </View>
+    );
+  }
+  return <Text style={styles.headerTitleTxt}>{title}</Text>;
 }
 
 function PostAuth() {
@@ -176,7 +156,13 @@ function PostAuth() {
           <Stack.Screen
             name="Tabs"
             component={TabsNav}
-            options={{ headerShown: false }}
+            options={({ route }) => ({
+              headerTitle: () => <TabsHeaderTitle route={route} />,
+              headerRight: () => <LogoutButton />,
+              headerStyle: { backgroundColor: colors.greenDark },
+              headerTintColor: "white",
+              headerTitleStyle: { fontWeight: "600" },
+            })}
           />
           <Stack.Screen
             name="Thread"
@@ -266,18 +252,19 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     transform: [{ rotate: "90deg" }],
   },
-  // Active-tab pill behind the icon. Light green wash against the bottom
-  // tab bar's white so it reads at a glance without being loud.
-  tabIconWrap: {
-    width: 56,
-    height: 30,
-    borderRadius: 15,
-    alignItems: "center",
-    justifyContent: "center",
+  headerTitleRow: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    gap: 8,
   },
-  tabIconWrapActive: {
-    backgroundColor: "#d1fae5",
+  headerTitleTxt: {
+    color: "white",
+    fontSize: 17,
+    fontWeight: "600",
   },
-  tabIconTxt: { fontSize: 18 },
-  tabIconTxtActive: { fontSize: 20 },
+  headerTitleVer: {
+    color: "rgba(255,255,255,0.6)",
+    fontSize: 11,
+    fontWeight: "400",
+  },
 });
