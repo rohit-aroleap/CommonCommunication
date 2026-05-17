@@ -31,6 +31,7 @@ import { TeamScreen } from "@/screens/TeamScreen";
 import { ThreadScreen } from "@/screens/ThreadScreen";
 import { CustomerInfoScreen } from "@/screens/CustomerInfoScreen";
 import { SettingsScreen } from "@/screens/SettingsScreen";
+import { QuickNoteScreen } from "@/screens/QuickNoteScreen";
 import { registerForPushAsync } from "@/notifications/registerForPush";
 import { ThemeProvider, useTheme } from "@/theme";
 import type { RootStackParamList } from "@/screens/types";
@@ -191,6 +192,19 @@ function TabIcon({ glyph, focused }: { glyph: string; focused: boolean }) {
   );
 }
 
+// Deep-link map. The Phase-2 home-screen widgets will fire an OS-level
+// intent for `commoncomm://quick-note`, and this routes it straight to
+// the QuickNote screen. Today the FAB on Chats/Tickets reaches the same
+// route in-process — both entry points share the screen.
+const linking = {
+  prefixes: ["commoncomm://"],
+  config: {
+    screens: {
+      QuickNote: "quick-note",
+    },
+  },
+};
+
 function PostAuth() {
   const { user } = useAuth();
   const { colors } = useTheme();
@@ -202,7 +216,7 @@ function PostAuth() {
   }, [user]);
   return (
     <AppDataProvider>
-      <NavigationContainer>
+      <NavigationContainer linking={linking}>
         <Stack.Navigator
           screenOptions={{
             headerStyle: { backgroundColor: colors.header },
@@ -228,6 +242,11 @@ function PostAuth() {
             name="Settings"
             component={SettingsScreen}
             options={{ title: "Settings", headerBackTitleVisible: false }}
+          />
+          <Stack.Screen
+            name="QuickNote"
+            component={QuickNoteScreen}
+            options={{ headerShown: false, presentation: "modal" }}
           />
         </Stack.Navigator>
       </NavigationContainer>

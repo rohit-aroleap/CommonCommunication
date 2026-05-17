@@ -12,4 +12,9 @@ export type RootStackParamList = {
   Thread: { chatKey: string; initialTitle?: string };
   CustomerInfo: { chatKey: string };
   Settings: undefined;
+  // Voice-first quick-note capture. Auto-starts the mic on mount, then
+  // asks for a customer. Reached via the FAB on the Chats / Tickets tabs
+  // today, and by the upcoming home-screen widget via the `commoncomm://
+  // quick-note` deep link.
+  QuickNote: undefined;
 };

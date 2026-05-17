@@ -11,6 +11,7 @@ import { useAuth } from "@/auth/AuthContext";
 import { resolveDisplayName } from "@/lib/displayName";
 import { ChatRowItem } from "@/components/ChatRow";
 import { FilterBar } from "@/components/FilterBar";
+import { QuickNoteFab } from "@/components/QuickNoteFab";
 import { DAILY_SENTINEL } from "@/types";
 import { FERRA_TAG_STAGE } from "@/config";
 import { normalizeFerraPhone } from "@/lib/ferra";
@@ -276,6 +277,7 @@ export function ChatsScreen() {
           </View>
         }
       />
+      <QuickNoteFab />
     </SafeAreaView>
   );
 }

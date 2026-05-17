@@ -20,6 +20,7 @@ import { encodeKey } from "@/lib/encodeKey";
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "@/screens/types";
+import { QuickNoteFab } from "@/components/QuickNoteFab";
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -90,6 +91,7 @@ export function TicketsScreen() {
           </View>
         }
       />
+      <QuickNoteFab />
     </SafeAreaView>
   );
 }
