@@ -3,13 +3,9 @@
 // Native app via the `commoncomm://` scheme. React Navigation's `linking`
 // config resolves the path to the matching tab.
 //
-// v1.139: each tile now shows an unread-indicator dot when there's
-// activity in that category. The counts come from the React Native app
-// via the WidgetUpdater Expo module, which writes them to a shared
-// SharedPreferences file and broadcasts an APPWIDGET_UPDATE so this
-// provider re-runs. Counts are read once per onUpdate — if SharedPrefs
-// is empty (very first install, before the app has had a chance to push
-// any counts) all three dots stay hidden.
+// Static widget — no data, no AppWidgetService — so onUpdate just rebuilds
+// the RemoteViews with the right PendingIntents and pushes it to every
+// active widget instance.
 
 package com.aroleap.commoncomm.widget
 
@@ -19,18 +15,8 @@ import android.appwidget.AppWidgetProvider
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.view.View
 import android.widget.RemoteViews
 import com.aroleap.commoncomm.R
-
-// Must match the keys written by WidgetUpdaterModule.kt. Out-of-band
-// coupling — there is no shared Kotlin source file between the widget
-// (copied via with-widget config plugin) and the Expo module, so the
-// two sides agree on names by convention.
-private const val PREFS_NAME = "commoncomm_widget"
-private const val KEY_CHATS = "chats"
-private const val KEY_TICKETS = "tickets"
-private const val KEY_TEAM = "team"
 
 class CommonCommWidgetProvider : AppWidgetProvider() {
 
@@ -39,13 +25,6 @@ class CommonCommWidgetProvider : AppWidgetProvider() {
         appWidgetManager: AppWidgetManager,
         appWidgetIds: IntArray
     ) {
-        // Read once; reuse across all widget instances in this update pass.
-        // (Multiple widgets is rare on home screens but supported by the API.)
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val chatsCount = prefs.getInt(KEY_CHATS, 0)
-        val ticketsCount = prefs.getInt(KEY_TICKETS, 0)
-        val teamCount = prefs.getInt(KEY_TEAM, 0)
-
         for (appWidgetId in appWidgetIds) {
             val views = RemoteViews(context.packageName, R.layout.common_comm_widget)
 
@@ -60,23 +39,6 @@ class CommonCommWidgetProvider : AppWidgetProvider() {
             views.setOnClickPendingIntent(
                 R.id.widget_btn_team,
                 deepLinkIntent(context, "commoncomm://team", appWidgetId * 10 + 3)
-            )
-
-            // Show a dot per tile only when there's unread activity in that
-            // category. RemoteViews' setViewVisibility is the only knob we
-            // get from the widget host — we can't conditionally render
-            // child views or update text values without a full re-inflate.
-            views.setViewVisibility(
-                R.id.widget_dot_chat,
-                if (chatsCount > 0) View.VISIBLE else View.GONE
-            )
-            views.setViewVisibility(
-                R.id.widget_dot_tickets,
-                if (ticketsCount > 0) View.VISIBLE else View.GONE
-            )
-            views.setViewVisibility(
-                R.id.widget_dot_team,
-                if (teamCount > 0) View.VISIBLE else View.GONE
             )
 
             appWidgetManager.updateAppWidget(appWidgetId, views)

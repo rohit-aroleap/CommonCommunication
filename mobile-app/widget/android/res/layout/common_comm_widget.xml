@@ -4,11 +4,6 @@
   matching the in-app bottom tab order: Chats, My tickets, Team. The
   outer LinearLayout uses the brand green background; tiles use a
   semi-transparent white overlay so taps still feel like buttons.
-
-  v1.139: each tile is now wrapped in a FrameLayout so we can float an
-  unread-dot indicator in the top-right corner. The dot starts hidden;
-  CommonCommWidgetProvider reads SharedPreferences (written by the
-  WidgetUpdater native module) and toggles visibility on each onUpdate.
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
@@ -17,131 +12,86 @@
     android:background="@drawable/widget_bg"
     android:padding="8dp">
 
-    <FrameLayout
+    <LinearLayout
+        android:id="@+id/widget_btn_chat"
         android:layout_width="0dp"
         android:layout_height="match_parent"
         android:layout_weight="1"
-        android:layout_marginEnd="6dp">
+        android:layout_marginEnd="6dp"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:background="@drawable/widget_tile_bg"
+        android:padding="8dp"
+        android:contentDescription="Open Chats">
 
-        <LinearLayout
-            android:id="@+id/widget_btn_chat"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:orientation="vertical"
-            android:gravity="center"
-            android:background="@drawable/widget_tile_bg"
-            android:padding="8dp"
-            android:contentDescription="Open Chats">
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="💬"
+            android:textSize="22sp" />
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="💬"
-                android:textSize="22sp" />
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Chat"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+    </LinearLayout>
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="Chat"
-                android:textColor="#FFFFFF"
-                android:textSize="12sp"
-                android:textStyle="bold" />
-        </LinearLayout>
-
-        <View
-            android:id="@+id/widget_dot_chat"
-            android:layout_width="10dp"
-            android:layout_height="10dp"
-            android:layout_gravity="top|end"
-            android:layout_marginTop="6dp"
-            android:layout_marginEnd="6dp"
-            android:background="@drawable/widget_dot"
-            android:visibility="gone" />
-    </FrameLayout>
-
-    <FrameLayout
+    <LinearLayout
+        android:id="@+id/widget_btn_tickets"
         android:layout_width="0dp"
         android:layout_height="match_parent"
         android:layout_weight="1"
-        android:layout_marginEnd="6dp">
+        android:layout_marginEnd="6dp"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:background="@drawable/widget_tile_bg"
+        android:padding="8dp"
+        android:contentDescription="Open My tickets">
 
-        <LinearLayout
-            android:id="@+id/widget_btn_tickets"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:orientation="vertical"
-            android:gravity="center"
-            android:background="@drawable/widget_tile_bg"
-            android:padding="8dp"
-            android:contentDescription="Open My tickets">
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="🎫"
+            android:textSize="22sp" />
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="🎫"
-                android:textSize="22sp" />
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="My tickets"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+    </LinearLayout>
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="My tickets"
-                android:textColor="#FFFFFF"
-                android:textSize="12sp"
-                android:textStyle="bold" />
-        </LinearLayout>
-
-        <View
-            android:id="@+id/widget_dot_tickets"
-            android:layout_width="10dp"
-            android:layout_height="10dp"
-            android:layout_gravity="top|end"
-            android:layout_marginTop="6dp"
-            android:layout_marginEnd="6dp"
-            android:background="@drawable/widget_dot"
-            android:visibility="gone" />
-    </FrameLayout>
-
-    <FrameLayout
+    <LinearLayout
+        android:id="@+id/widget_btn_team"
         android:layout_width="0dp"
         android:layout_height="match_parent"
-        android:layout_weight="1">
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:background="@drawable/widget_tile_bg"
+        android:padding="8dp"
+        android:contentDescription="Open Team">
 
-        <LinearLayout
-            android:id="@+id/widget_btn_team"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:orientation="vertical"
-            android:gravity="center"
-            android:background="@drawable/widget_tile_bg"
-            android:padding="8dp"
-            android:contentDescription="Open Team">
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="👥"
+            android:textSize="22sp" />
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="👥"
-                android:textSize="22sp" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="Team"
-                android:textColor="#FFFFFF"
-                android:textSize="12sp"
-                android:textStyle="bold" />
-        </LinearLayout>
-
-        <View
-            android:id="@+id/widget_dot_team"
-            android:layout_width="10dp"
-            android:layout_height="10dp"
-            android:layout_gravity="top|end"
-            android:layout_marginTop="6dp"
-            android:layout_marginEnd="6dp"
-            android:background="@drawable/widget_dot"
-            android:visibility="gone" />
-    </FrameLayout>
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Team"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+    </LinearLayout>
 </LinearLayout>
