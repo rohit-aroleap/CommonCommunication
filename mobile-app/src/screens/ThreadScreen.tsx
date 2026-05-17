@@ -1584,7 +1584,10 @@ function makeStyles(colors: Colors) {
     borderColor: colors.border,
     borderRadius: 8,
     marginTop: 4,
-    backgroundColor: "#fafafa",
+    // Was hardcoded #fafafa (near-white) which looked fine on a white card
+    // but turned into a bright slab once the card went dark. colors.bg
+    // gives a subtle inset that tracks the theme.
+    backgroundColor: colors.bg,
   },
   tplFormBody: {
     minHeight: 80,
@@ -1669,38 +1672,55 @@ function makeStyles(colors: Colors) {
     justifyContent: "center",
     padding: 20,
   },
+  // Modal card. Was hardcoded white pre-v1.136 dark mode; that punched a
+  // bright hole through the dark theme. Pulling from colors.panel makes the
+  // card track the theme — slate in dark, white in light.
   previewCard: {
-    backgroundColor: "white",
-    borderRadius: 12,
-    padding: 16,
+    backgroundColor: colors.panel,
+    borderRadius: 14,
+    padding: 18,
     maxHeight: "80%",
-  },
-  previewHead: { marginBottom: 8 },
-  previewTitle: { fontSize: 16, fontWeight: "600", color: colors.text },
-  previewSub: { fontSize: 12, color: colors.muted, marginTop: 2 },
-  previewInput: {
-    minHeight: 80,
-    maxHeight: 240,
-    fontSize: 14,
-    color: colors.text,
-    padding: 10,
+    // Subtle border so the card edge reads against the chat background in
+    // dark mode (where panel and bg are both near-black).
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
-    borderRadius: 8,
+  },
+  previewHead: { marginBottom: 10 },
+  previewTitle: { fontSize: 17, fontWeight: "600", color: colors.text },
+  previewSub: { fontSize: 12, color: colors.muted, marginTop: 4 },
+  // Input "well" — sits inside the card, slightly different surface so it
+  // reads as editable. Was a hardcoded cream (#fff8e7) for a post-it feel
+  // that worked in light mode but looked wrong on a dark card. Using
+  // colors.bg gives a subtle inset in both themes.
+  previewInput: {
+    minHeight: 96,
+    maxHeight: 240,
+    fontSize: 15,
+    color: colors.text,
+    padding: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    borderRadius: 10,
     textAlignVertical: "top",
-    backgroundColor: "#fff8e7",
-    marginVertical: 8,
+    backgroundColor: colors.bg,
+    marginVertical: 10,
   },
   previewActions: { flexDirection: "row", alignItems: "center" },
   previewBtn: { paddingVertical: 8, paddingHorizontal: 12 },
   previewBtnTxt: { color: colors.muted, fontSize: 14 },
+  // Primary action. Was colors.greenDark which in dark mode resolves to
+  // the same near-black as the card — button vanished. colors.green is the
+  // accent in both themes (green in light, blue in dark) so it actually
+  // pops as a CTA.
   previewSave: {
-    backgroundColor: colors.greenDark,
-    paddingHorizontal: 18,
-    paddingVertical: 10,
+    backgroundColor: colors.green,
+    paddingHorizontal: 20,
+    paddingVertical: 11,
     borderRadius: 22,
   },
-  previewSaveDisabled: { backgroundColor: "#8fb3a8" },
+  // Dim the whole button (bg + label) instead of swapping to a third
+  // hardcoded color. Works in both themes.
+  previewSaveDisabled: { opacity: 0.45 },
   previewSaveTxt: { color: "white", fontWeight: "600", fontSize: 14 },
   headerBtn: {
     width: 36,
