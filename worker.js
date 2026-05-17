@@ -90,6 +90,9 @@ export default {
       if (url.pathname === "/backfill-resolution-notes" && request.method === "POST") {
         return cors(env, await handleBackfillResolutionNotes(request, env));
       }
+      if (url.pathname === "/backfill-chats-index" && request.method === "POST") {
+        return cors(env, await handleBackfillChatsIndex(request, env));
+      }
       return cors(env, json({ error: "not_found" }, 404));
     } catch (err) {
       return cors(env, json({ error: String(err && err.message || err) }, 500));
@@ -194,7 +197,7 @@ async function handleSend(request, env) {
             : `📎 ${name || "Attachment"}`;
     preview = preview.slice(0, 120);
   }
-  await fbPatch(env, `${ROOT}/chats/${encodeKey(resolvedChatId)}/meta`, {
+  await patchChatMeta(env, encodeKey(resolvedChatId), {
     phone: resolvedPhone,
     chatId: resolvedChatId,
     lastMsgAt: ts,
@@ -313,7 +316,7 @@ async function handleWebhook(request, env) {
   if (!isGroup && !isFromMe && senderName) {
     metaUpdate.contactName = senderName;
   }
-  await fbPatch(env, `${ROOT}/chats/${encodeKey(chatId)}/meta`, metaUpdate);
+  await patchChatMeta(env, encodeKey(chatId), metaUpdate);
 
   // Record every group sender's phone in contacts/, even when sender_name is
   // missing (Periskope only knows the name if the org's WhatsApp has the
@@ -341,7 +344,7 @@ async function handleWebhook(request, env) {
           const cj = await safeJson(cr);
           const chat = cj?.chat || cj;
           if (chat?.chat_name) {
-            await fbPatch(env, `${ROOT}/chats/${encodeKey(chatId)}/meta`, { groupName: chat.chat_name });
+            await patchChatMeta(env, encodeKey(chatId), { groupName: chat.chat_name });
           }
         }
       }
@@ -623,7 +626,7 @@ async function triageInbound(env, { chatId, text, media, messageType }) {
   const body = (text || "").trim() || (media ? `[${messageType || "media"}: ${media.fileName || ""}]` : "");
   const result = await classifyTriage(env, body);
   if (!result) return;
-  await fbPatch(env, `${ROOT}/chats/${chatKey}/meta`, {
+  await patchChatMeta(env, chatKey, {
     triageUrgency: result.urgency,
     triageIntent: result.intent,
     triageAt: Date.now(),
@@ -681,7 +684,7 @@ async function handleTriageBackfill(request, env) {
       triaged.push({ chatKey, error: "classify_failed" });
       continue;
     }
-    await fbPatch(env, `${ROOT}/chats/${chatKey}/meta`, {
+    await patchChatMeta(env, chatKey, {
       triageUrgency: result.urgency,
       triageIntent: result.intent,
       triageAt: Date.now(),
@@ -697,6 +700,68 @@ async function handleTriageBackfill(request, env) {
     nextOffset: done ? null : nextOffset,
     done,
     triaged,
+  });
+}
+
+// ---------- /backfill-chats-index (one-shot migration) ----------
+// Copies every existing /chats/{k}/meta into /chatsIndex/{k} so the phone app
+// can subscribe to the meta-only index path on cold start (instead of pulling
+// every message of every chat through the /chats subtree). Run once after
+// deploying the dual-write change; idempotent — safe to re-run, and only
+// writes when the index entry is missing or out of date.
+//
+// Chunked the same way /triage-backfill is: caller passes { offset, limit },
+// loops until done=true. We sort chatKeys deterministically so chunks line up
+// across requests.
+async function handleBackfillChatsIndex(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const offset = Math.max(0, Number(body.offset) || 0);
+  const limit = Math.min(500, Math.max(1, Number(body.limit) || 200));
+
+  const chats = await fbGet(env, `${ROOT}/chats`);
+  if (!chats || typeof chats !== "object") {
+    return json({ processed: 0, total: 0, nextOffset: null, done: true, written: 0 });
+  }
+  const existingIndex = (await fbGet(env, `${ROOT}/chatsIndex`)) || {};
+
+  const chatKeys = Object.keys(chats).sort();
+  const slice = chatKeys.slice(offset, offset + limit);
+
+  const updates = {};
+  let written = 0;
+  for (const chatKey of slice) {
+    const meta = chats[chatKey]?.meta;
+    if (!meta || typeof meta !== "object") continue;
+    const existing = existingIndex[chatKey];
+    // Skip when the index already has equal-or-newer lastMsgAt — a concurrent
+    // dual-write may have moved ahead of the /chats snapshot we read; we must
+    // never downgrade the index with stale data.
+    const metaTs = meta.lastMsgAt || 0;
+    const existingTs = (existing && existing.lastMsgAt) || 0;
+    if (existing && existingTs >= metaTs) {
+      continue;
+    }
+    // Field-level paths (not a subtree replacement) so a concurrent live
+    // dual-write that adds a NEW field to chatsIndex/{k} doesn't get clobbered
+    // by this write.
+    for (const [field, value] of Object.entries(meta)) {
+      updates[`${ROOT}/chatsIndex/${chatKey}/${field}`] = value;
+    }
+    written++;
+  }
+
+  if (Object.keys(updates).length > 0) {
+    await fbPatchRoot(env, updates);
+  }
+
+  const nextOffset = offset + slice.length;
+  const done = nextOffset >= chatKeys.length;
+  return json({
+    processed: slice.length,
+    total: chatKeys.length,
+    nextOffset: done ? null : nextOffset,
+    done,
+    written,
   });
 }
 
@@ -962,8 +1027,12 @@ async function backfillOneChat(env, chat, msgsPerChat) {
     updates[`${ROOT}/chats/${chatKey}/meta/lastMsgDirection`] = latestDir;
   }
 
-  // (4) Atomic multi-path PATCH at root - one subrequest for all writes
+  // (4) Atomic multi-path PATCH at root - one subrequest for all writes.
+  // Mirror any chats/{k}/meta/* fields to chatsIndex/{k}/* in the same patch
+  // so the phone app's list listener sees the latest meta without diving
+  // into the messages subtree.
   if (Object.keys(updates).length > 0) {
+    mirrorChatsMetaToIndex(updates);
     await fbPatchRoot(env, updates);
   }
 
@@ -1020,6 +1089,7 @@ async function handleFetchChatInfo(request, env) {
       membersWritten++;
     }
   }
+  mirrorChatsMetaToIndex(updates);
   await fbPatchRoot(env, updates);
   return json({ ok: true, chatId, chatName, isGroup, membersWritten });
 }
@@ -1745,6 +1815,34 @@ async function fbPatchRoot(env, updates) {
   const url = `${env.FIREBASE_DB_URL}/.json?auth=${env.FIREBASE_DB_SECRET}`;
   const r = await fetch(url, { method: "PATCH", body: JSON.stringify(updates) });
   return safeJson(r);
+}
+
+// Dual-write chat meta to /chats/{k}/meta/* AND /chatsIndex/{k}/*. The phone
+// app subscribes to /chatsIndex (meta-only, no messages subtree) so it can
+// render the chat list without downloading every message of every chat —
+// /chats keeps the full tree the web app's listener still uses. Both paths
+// stay in sync via this single atomic multi-path PATCH.
+async function patchChatMeta(env, chatKey, fields) {
+  const updates = {};
+  for (const [k, v] of Object.entries(fields)) {
+    updates[`${ROOT}/chats/${chatKey}/meta/${k}`] = v;
+    updates[`${ROOT}/chatsIndex/${chatKey}/${k}`] = v;
+  }
+  return fbPatchRoot(env, updates);
+}
+
+// Inject chatsIndex mirror keys for any chats/{k}/meta/* paths in an updates
+// map. Used by callers that already build a multi-path update object (e.g.
+// /import-chat, /fetch-chat-info) — they call this once before fbPatchRoot.
+function mirrorChatsMetaToIndex(updates) {
+  for (const [path, value] of Object.entries(updates)) {
+    // Match exactly the meta-field paths we want mirrored. Sub-keys like
+    // /meta/lastMsgAt are mirrored to /chatsIndex/{k}/lastMsgAt; we
+    // deliberately don't mirror /messages/* or /tickets/*.
+    const m = path.match(/^commonComm\/chats\/([^/]+)\/meta\/(.+)$/);
+    if (!m) continue;
+    updates[`${ROOT}/chatsIndex/${m[1]}/${m[2]}`] = value;
+  }
 }
 
 // Firebase keys can't contain . # $ [ ] /  -> replace

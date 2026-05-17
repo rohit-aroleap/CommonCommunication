@@ -7,8 +7,12 @@
 
     "commonComm": {
       "chats": {
-        "_comment": "indexOn on meta/lastMsgAt lets the mobile app server-side limitToLast(N) instead of pulling every chat ever. Without it Firebase falls back to client-side sorting (loading the whole tree to the device), which is exactly the cold-start tax we're avoiding.",
+        "_comment": "indexOn on meta/lastMsgAt lets the web app server-side limitToLast(N) instead of pulling every chat ever. Without it Firebase falls back to client-side sorting (loading the whole tree to the device), which is exactly the cold-start tax we're avoiding.",
         ".indexOn": ["meta/lastMsgAt"]
+      },
+      "chatsIndex": {
+        "_comment": "Meta-only mirror of /chats/{k}/meta. The phone app subscribes here so its chat list doesn't have to pull every message of every chat through the /chats subtree — payload drops from MBs to KBs on cold start. Worker and web app dual-write to /chats/.../meta and here; backfill via worker /backfill-chats-index. lastMsgAt index pairs with limitToLast(N) for server-side slicing.",
+        ".indexOn": ["lastMsgAt"]
       },
       "dms": {
         "_comment_indexOn": "Same reason as /chats — mobile queries the recent slice by meta/lastMsgAt.",
