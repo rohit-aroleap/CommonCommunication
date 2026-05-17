@@ -119,9 +119,12 @@ export const isDailyGroup = _isDailyGroup;
 export function AppDataProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
 
-  const [chatsRaw, setChatsRaw] = useState<Record<string, { meta?: ChatMeta }>>(
-    {},
-  );
+  // chatsIndex is the meta-only mirror at /commonComm/chatsIndex/{chatKey} —
+  // the worker and web app dual-write to it whenever they touch a chat's meta
+  // so we can subscribe here without dragging the messages subtree along on
+  // every snapshot. Each value is the meta object directly (no `meta` wrapper
+  // like the old /chats payload had).
+  const [chatsIndex, setChatsIndex] = useState<Record<string, ChatMeta>>({});
   const [tickets, setTickets] = useState<Record<string, Ticket>>({});
   const [teamUsers, setTeamUsers] = useState<Record<string, TeamUser>>({});
   const [teamMembers, setTeamMembers] = useState<Record<string, TeamMember>>({});
@@ -160,9 +163,9 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     //    last-known data instead of waiting for the network. Each key runs
     //    independently — if one cache entry is missing or corrupt, the rest
     //    still load. Live listeners below overwrite as snapshots arrive.
-    cacheGet<Record<string, { meta?: ChatMeta }>>(uid, "chatsRaw").then((v) => {
+    cacheGet<Record<string, ChatMeta>>(uid, "chatsIndex").then((v) => {
       if (cancelled) return;
-      if (v) setChatsRaw(v);
+      if (v) setChatsIndex(v);
       // Cache hit OR cache miss both unblock the loading state: a miss
       // means no prior session, so the live listener is the only source
       // and we want screens to show their normal empty UX rather than a
@@ -207,17 +210,19 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     const attachTier1 = () => {
       // Recent chats only. orderByChild + limitToLast pushes the slicing to
       // the server; without it Firebase ships every chat ever to the client.
-      // Requires .indexOn "meta/lastMsgAt" under /chats in database.rules.json.
+      // Requires .indexOn "lastMsgAt" under /chatsIndex in database.rules.json.
+      // chatsIndex is the meta-only mirror — subscribing here avoids pulling
+      // the messages subtree (MBs per chat) just to render the chat list.
       const chatsQuery = query(
-        ref(db, `${ROOT}/chats`),
-        orderByChild("meta/lastMsgAt"),
+        ref(db, `${ROOT}/chatsIndex`),
+        orderByChild("lastMsgAt"),
         limitToLast(CHATS_LIMIT),
       );
       unsubs.push(
         onValue(chatsQuery, (s) => {
-          const v = (s.val() || {}) as Record<string, { meta?: ChatMeta }>;
-          setChatsRaw(v);
-          cacheSet(uid, "chatsRaw", v);
+          const v = (s.val() || {}) as Record<string, ChatMeta>;
+          setChatsIndex(v);
+          cacheSet(uid, "chatsIndex", v);
           setDataReady(true);
         }),
       );
@@ -342,20 +347,19 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
 
   const chatMetaByKey = useMemo(() => {
     const out: Record<string, ChatMeta> = {};
-    for (const [chatKey, val] of Object.entries(chatsRaw)) {
-      const rawMeta = val.meta || {};
-      const chatId = rawMeta.chatId || chatKeyToChatId(chatKey);
+    for (const [chatKey, rawMeta] of Object.entries(chatsIndex)) {
+      const chatId = rawMeta?.chatId || chatKeyToChatId(chatKey);
       const derivedPhone =
-        String(chatId || "").split("@")[0] || rawMeta.phone || chatKey;
+        String(chatId || "").split("@")[0] || rawMeta?.phone || chatKey;
       out[chatKey] = { ...rawMeta, chatId, phone: derivedPhone };
     }
     return out;
-  }, [chatsRaw]);
+  }, [chatsIndex]);
 
   const chatRows = useMemo<ChatRow[]>(() => {
     const rows: ChatRow[] = [];
-    for (const [chatKey, val] of Object.entries(chatsRaw)) {
-      const rawMeta = val.meta || {};
+    for (const [chatKey, rawMeta] of Object.entries(chatsIndex)) {
+      if (!rawMeta) continue;
       const chatId = rawMeta.chatId || chatKeyToChatId(chatKey);
       const derivedPhone =
         String(chatId || "").split("@")[0] || rawMeta.phone || chatKey;
@@ -382,7 +386,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     }
     rows.sort((a, b) => (b.lastMsgAt || 0) - (a.lastMsgAt || 0));
     return rows;
-  }, [chatsRaw]);
+  }, [chatsIndex]);
 
   const ferraIndex = useMemo(
     () => buildFerraIndex(habitUsers, cancelledUsers),

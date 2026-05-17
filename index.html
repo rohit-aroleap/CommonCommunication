@@ -2886,6 +2886,13 @@ async function syncAllFerraCustomersToChats() {
   _lastSyncSummary = { added, ranAt: Date.now() };
   if (added > 0) {
     try {
+      // Mirror each chats/{k}/meta/* into chatsIndex/{k}/* so the phone app's
+      // chat-list listener (subscribed to chatsIndex) sees these Ferra-seeded
+      // rows alongside the real ones.
+      for (const [path, value] of Object.entries({ ...updates })) {
+        const m = path.match(/^commonComm\/chats\/([^/]+)\/meta\/(.+)$/);
+        if (m) updates[`${ROOT}/chatsIndex/${m[1]}/${m[2]}`] = value;
+      }
       await update(ref(db), updates);
       console.log(`[CommonComm] Auto-added ${added} Ferra customers to chats (habit + subs feed)`);
     } catch (e) {
@@ -2922,6 +2929,21 @@ async function pingWorker() {
     if (r.ok) workerStatus.textContent = "● worker online";
     else workerStatus.textContent = "● worker err " + r.status;
   } catch (e) { workerStatus.textContent = "● worker offline"; }
+}
+
+// Dual-write chat meta to /chats/{k}/meta AND /chatsIndex/{k}. The phone app
+// subscribes to /chatsIndex (meta-only, no messages subtree) so it can render
+// the chat list without downloading every message of every chat. Web app's
+// listener still reads /chats/.../meta, so both stay in sync. One multi-path
+// update.value is atomic across both writes. Use this wherever you'd
+// previously have called update(ref(db, `${ROOT}/chats/${k}/meta`), fields).
+function updateChatMeta(chatKey, fields) {
+  const updates = {};
+  for (const [k, v] of Object.entries(fields)) {
+    updates[`${ROOT}/chats/${chatKey}/meta/${k}`] = v;
+    updates[`${ROOT}/chatsIndex/${chatKey}/${k}`] = v;
+  }
+  return update(ref(db), updates);
 }
 
 // ====== CHAT LIST ======
@@ -5365,7 +5387,7 @@ privateToggleBtn.onclick = async () => {
     ? "Make this chat visible to all team members?"
     : "Mark this chat as private (only admins will see it)?";
   if (!confirm(action)) return;
-  await update(ref(db, `${ROOT}/chats/${currentChatId}/meta`), {
+  await updateChatMeta(currentChatId, {
     private: isPrivate ? null : true,
   });
 };
@@ -5383,7 +5405,7 @@ editNameBtn.onclick = async () => {
   const input = prompt(`Customer name for ${meta.phone || currentChatId}:\n(leave empty to clear)${ctx}`, current);
   if (input === null) return; // cancelled
   const trimmed = input.trim();
-  await update(ref(db, `${ROOT}/chats/${currentChatId}/meta`), {
+  await updateChatMeta(currentChatId, {
     contactName: trimmed || null,
   });
   // Live listener on chats will fire — list + header re-render automatically.
@@ -5410,7 +5432,7 @@ function listenMessages(chatKey) {
       const latestTs = latest.ts || 0;
       const meta = chatsCache[chatKey] || {};
       if (latestTs > (meta.lastMsgAt || 0)) {
-        update(ref(db, `${ROOT}/chats/${chatKey}/meta`), {
+        updateChatMeta(chatKey, {
           lastMsgAt: latestTs,
           lastMsgPreview: (latest.text || `[${latest.messageType || "media"}]`).slice(0, 120),
           lastMsgDirection: latest.direction || "in",
@@ -6457,7 +6479,7 @@ async function doSendMedia(media) {
     media: { mimeType: media.mimetype, fileName: media.filename },
     messageType: media.type,
   });
-  await update(ref(db, `${ROOT}/chats/${currentChatId}/meta`), {
+  await updateChatMeta(currentChatId, {
     chatId, phone,
     lastMsgAt: ts,
     lastMsgPreview: caption || (media.type === "image" ? `📷 ${media.filename}` :
@@ -6520,7 +6542,7 @@ async function doSend() {
   };
   if (mentionUids.length > 0) optimisticRec.mentions = mentionUids;
   await set(msgRef, optimisticRec);
-  await update(ref(db, `${ROOT}/chats/${currentChatId}/meta`), {
+  await updateChatMeta(currentChatId, {
     chatId, phone,
     lastMsgAt: ts, lastMsgPreview: text.slice(0,120),
     lastMsgDirection: "out", lastMsgSentByName: currentUser.displayName || currentUser.email,
@@ -6633,7 +6655,7 @@ newChatGo.onclick = async () => {
   const chatId = `${digits}@c.us`;
   const chatKey = chatId.replace(/[.#$\[\]\/]/g, "_");
   const name = newChatNameEl.value.trim() || null;
-  await update(ref(db, `${ROOT}/chats/${chatKey}/meta`), {
+  await updateChatMeta(chatKey, {
     chatId, phone: digits,
     displayName: name,
     contactName: name,
