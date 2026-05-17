@@ -21,6 +21,10 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { space, useStyles, useTheme, type Colors } from "@/theme";
 import { getGroqKey, setGroqKey, testGroqKey } from "@/lib/groqKey";
+import {
+  getVoiceCleanupEnabled,
+  setVoiceCleanupEnabled,
+} from "@/lib/voiceCleanupPref";
 
 export function SettingsScreen() {
   const [key, setKey] = useState("");
@@ -30,6 +34,7 @@ export function SettingsScreen() {
   const [status, setStatus] = useState<
     { kind: "idle" | "ok" | "error"; msg: string }
   >({ kind: "idle", msg: "" });
+  const [cleanupOn, setCleanupOn] = useState(true);
   const { colors, mode, setMode } = useTheme();
   const styles = useStyles(makeStyles);
 
@@ -38,7 +43,14 @@ export function SettingsScreen() {
       setKey(k);
       setSavedKey(k);
     });
+    getVoiceCleanupEnabled().then(setCleanupOn);
   }, []);
+
+  function toggleCleanup() {
+    const next = !cleanupOn;
+    setCleanupOn(next);
+    setVoiceCleanupEnabled(next);
+  }
 
   const dirty = key.trim() !== savedKey;
   const hasSaved = savedKey.length > 0;
@@ -244,6 +256,38 @@ export function SettingsScreen() {
           Your key is stored on this phone only. It's never uploaded to our
           Worker or shared with other teammates.
         </Text>
+
+        <View style={styles.divider} />
+
+        {/* Transcript-cleanup toggle. Whisper output is usually already
+            accurate enough; flipping this off skips the Claude tidy-up
+            pass everywhere voice-to-text is used and surfaces the raw
+            transcript directly. */}
+        <Text style={styles.section}>TRANSCRIPT CLEANUP</Text>
+        <TouchableOpacity
+          style={styles.toggleRow}
+          onPress={toggleCleanup}
+          activeOpacity={0.7}
+          accessibilityRole="switch"
+          accessibilityState={{ checked: cleanupOn }}
+          accessibilityLabel="Clean up voice transcripts"
+        >
+          <View style={styles.toggleLabelCol}>
+            <Text style={styles.toggleLabel}>Clean up voice transcripts</Text>
+            <Text style={styles.toggleSub}>
+              When on, an AI pass strips filler words and fixes punctuation
+              after every voice recording. Turn off if you'd rather see the
+              raw transcription.
+            </Text>
+          </View>
+          <View
+            style={[styles.toggleTrack, cleanupOn && styles.toggleTrackOn]}
+          >
+            <View
+              style={[styles.toggleThumb, cleanupOn && styles.toggleThumbOn]}
+            />
+          </View>
+        </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );
@@ -371,5 +415,35 @@ function makeStyles(colors: Colors) {
       marginTop: space.md,
       fontStyle: "italic",
     },
+    toggleRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: space.md,
+      paddingVertical: space.sm,
+    },
+    toggleLabelCol: { flex: 1 },
+    toggleLabel: { fontSize: 14, fontWeight: "600", color: colors.text },
+    toggleSub: {
+      fontSize: 12,
+      color: colors.muted,
+      lineHeight: 17,
+      marginTop: 2,
+    },
+    toggleTrack: {
+      width: 44,
+      height: 26,
+      borderRadius: 13,
+      backgroundColor: colors.border,
+      padding: 3,
+      justifyContent: "center",
+    },
+    toggleTrackOn: { backgroundColor: colors.green },
+    toggleThumb: {
+      width: 20,
+      height: 20,
+      borderRadius: 10,
+      backgroundColor: "white",
+    },
+    toggleThumbOn: { transform: [{ translateX: 18 }] },
   });
 }

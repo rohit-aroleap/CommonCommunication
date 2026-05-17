@@ -1436,6 +1436,10 @@ Rules:
 // facts — so what the trainer sees is a clean note draft, not raw dictation.
 // Audio is NEVER sent to the customer; the frontend drops the result into
 // the notes-panel draft form.
+//
+// Body `cleanup: false` opts out of the Claude pass — used by the mobile
+// app's internal-DM composer mic, where the cleanup prompt (written for
+// trainer-notes-about-customer) is the wrong service.
 async function handleTranscribe(request, env) {
   if (!env.AI) {
     return json({ error: "workers_ai_not_bound", hint: "Add [ai] binding=\"AI\" in wrangler.toml and redeploy" }, 500);
@@ -1445,6 +1449,7 @@ async function handleTranscribe(request, env) {
   if (!audioB64 || typeof audioB64 !== "string") {
     return json({ error: "missing audio (base64 string)" }, 400);
   }
+  const cleanup = body?.cleanup !== false;
 
   // (1) Whisper transcription
   let rawText = "";
@@ -1460,28 +1465,36 @@ async function handleTranscribe(request, env) {
     return json({ text: "", raw: "", cleaned: false, reason: "no_speech" });
   }
 
+  if (!cleanup) {
+    return json({ text: rawText, raw: rawText, cleaned: false, reason: "cleanup_disabled" });
+  }
+
   // (2) Claude cleanup pass — delegated to the shared helper so /cleanup
   // (called by the browser-direct Groq STT path) uses the exact same prompt.
   const cleanResult = await runCleanupPass(rawText, env);
   return json(cleanResult);
 }
 
-// System prompt for voice-note cleanup. Shared between the legacy /transcribe
-// route (which does Whisper + cleanup in one call) and /cleanup (called by
-// the browser/mobile after they do STT directly via Groq with the user's
-// own API key — see v1.133).
-const VOICE_NOTE_CLEANUP_PROMPT = `You are cleaning up a voice-dictated private note from an Aroleap fitness team member about a customer. The raw audio transcript may contain filler words ("um", "uh", "like", "you know"), false starts, repeated words, and missing punctuation.
+// System prompt for voice-transcript cleanup. Shared between the legacy
+// /transcribe route (which does Whisper + cleanup in one call) and /cleanup
+// (called by the browser/mobile after they do STT directly via Groq with
+// the user's own API key — see v1.133).
+//
+// Intentionally context-agnostic: the same transcript could be a private
+// note, an outgoing message, or a quick reminder. The prompt only cleans
+// up the text — it doesn't assume anything about where the text is going.
+const VOICE_NOTE_CLEANUP_PROMPT = `You are cleaning up a voice-dictated transcript. The raw text may contain filler words ("um", "uh", "like", "you know"), false starts, repeated words, and missing punctuation.
 
 Your job:
 - Remove fillers, false starts, and obvious stammers.
 - Fix punctuation, capitalization, and run-on sentences.
-- Preserve the trainer's voice and meaning — don't rewrite for "formality".
-- Keep ALL specifics exactly as spoken: customer names, phone numbers, dates, times, prices, body parts, injuries, medical terms, equipment/machine names, addresses.
-- Do NOT add facts, dates, or details that aren't in the transcript.
+- Preserve the speaker's voice and meaning — don't rewrite for "formality" and don't change wording beyond what's needed to make the text read cleanly.
+- Keep ALL specifics exactly as spoken: names, phone numbers, dates, times, prices, technical terms, addresses, identifiers.
+- Do NOT add facts or details that aren't in the transcript.
 - Do NOT add greetings, signoffs, headers ("Note:", "Summary:"), or bullets unless the transcript itself is clearly multi-topic.
 - If the transcript is already clean, return it as-is with only punctuation fixes.
 
-Output ONLY the cleaned note text — no preamble, no explanation, no quotes around it.`;
+Output ONLY the cleaned text — no preamble, no explanation, no quotes around it.`;
 
 // Runs the Claude cleanup pass over a raw transcript and returns a result
 // object in the same shape both /transcribe and /cleanup return. Never
