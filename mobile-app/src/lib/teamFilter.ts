@@ -14,6 +14,43 @@
 import { BOOTSTRAP_ADMINS } from "@/config";
 import type { TeamUser, TeamMember } from "@/types";
 
+// v1.195: shared name resolver used everywhere we display a teammate's
+// label. Priority:
+//   1. Admin-curated name in /config/teamMembers/{emailKey}/name (set
+//      via the desktop Team modal). Authoritative — if an admin set
+//      it, that's the name we want.
+//   2. /users/{uid}/name from Firebase Auth (displayName at sign-in
+//      time, falls back to email itself when no displayName set).
+//   3. Raw email.
+//   4. uid as last resort.
+//
+// Trims whitespace and treats empty/whitespace-only strings as unset.
+// teamMembers keys aren't predictable by uid → email lookup is by
+// email scan, but the map is small (single-digit teammates) so this
+// stays O(n) trivially.
+export function resolveTeammateName(
+  uid: string,
+  email: string | undefined | null,
+  teamUsers: Record<string, TeamUser>,
+  teamMembers: Record<string, TeamMember>,
+): string {
+  const emailLower = (email || "").toLowerCase();
+  if (emailLower) {
+    for (const m of Object.values(teamMembers || {})) {
+      if (!m?.email) continue;
+      if (m.email.toLowerCase() !== emailLower) continue;
+      const n = (m.name || "").trim();
+      if (n) return n;
+      break;
+    }
+  }
+  const u = teamUsers[uid];
+  const authName = (u?.name || "").trim();
+  if (authName) return authName;
+  if (email) return email;
+  return uid || "(unknown)";
+}
+
 export function buildAllowedEmailSet(
   teamMembers: Record<string, TeamMember>,
 ): Set<string> {

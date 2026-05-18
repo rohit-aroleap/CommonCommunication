@@ -16,8 +16,9 @@ import {
 import { ref, update } from "firebase/database";
 import { db } from "@/firebase";
 import { ROOT } from "@/config";
+import { resolveTeammateName } from "@/lib/teamFilter";
 import { useStyles, type Colors } from "@/theme";
-import type { TeamUser, Ticket } from "@/types";
+import type { TeamMember, TeamUser, Ticket } from "@/types";
 
 interface Props {
   visible: boolean;
@@ -25,6 +26,8 @@ interface Props {
   currentUid: string;
   currentName: string;
   teamUsers: Record<string, TeamUser>;
+  // v1.195: teamMembers for admin name override (same as CreateTicketModal).
+  teamMembers: Record<string, TeamMember>;
   onClose: () => void;
 }
 
@@ -34,6 +37,7 @@ export function ReassignModal({
   currentUid,
   currentName,
   teamUsers,
+  teamMembers,
   onClose,
 }: Props) {
   const [assignee, setAssignee] = useState<string>("");
@@ -50,10 +54,14 @@ export function ReassignModal({
     for (const [uid, u] of Object.entries(teamUsers || {})) {
       if (seen.has(uid) || !u) continue;
       seen.add(uid);
-      out.push({ uid, name: u.name || u.email || uid });
+      // v1.195: admin-curated name override from /config/teamMembers.
+      out.push({
+        uid,
+        name: resolveTeammateName(uid, u.email, teamUsers, teamMembers),
+      });
     }
     return out.sort((a, b) => a.name.localeCompare(b.name));
-  }, [teamUsers, currentUid, currentName]);
+  }, [teamUsers, teamMembers, currentUid, currentName]);
 
   useEffect(() => {
     if (!visible || !ticket) return;

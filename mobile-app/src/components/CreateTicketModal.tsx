@@ -19,8 +19,9 @@ import { push, ref, update } from "firebase/database";
 import { db } from "@/firebase";
 import { ROOT } from "@/config";
 import { encodeKey } from "@/lib/encodeKey";
+import { resolveTeammateName } from "@/lib/teamFilter";
 import { space, useStyles, type Colors } from "@/theme";
-import type { Message, TeamUser } from "@/types";
+import type { Message, TeamMember, TeamUser } from "@/types";
 
 interface Props {
   visible: boolean;
@@ -29,6 +30,10 @@ interface Props {
   currentUid: string;
   currentName: string;
   teamUsers: Record<string, TeamUser>;
+  // v1.195: teamMembers is needed so the assignee picker applies the
+  // admin-curated name override from the desktop Team modal — same rule
+  // as the Team tab list.
+  teamMembers: Record<string, TeamMember>;
   onClose: () => void;
 }
 
@@ -39,6 +44,7 @@ export function CreateTicketModal({
   currentUid,
   currentName,
   teamUsers,
+  teamMembers,
   onClose,
 }: Props) {
   const [title, setTitle] = useState("");
@@ -56,10 +62,14 @@ export function CreateTicketModal({
     for (const [uid, u] of Object.entries(teamUsers || {})) {
       if (seen.has(uid) || !u) continue;
       seen.add(uid);
-      out.push({ uid, name: u.name || u.email || uid });
+      // v1.195: respect admin name override from the desktop Team modal.
+      out.push({
+        uid,
+        name: resolveTeammateName(uid, u.email, teamUsers, teamMembers),
+      });
     }
     return out.sort((a, b) => a.name.localeCompare(b.name));
-  }, [teamUsers, currentUid, currentName]);
+  }, [teamUsers, teamMembers, currentUid, currentName]);
 
   useEffect(() => {
     if (!visible || !message) return;

@@ -1902,6 +1902,7 @@ export function ThreadScreen({ route, navigation }: Props) {
         currentUid={user?.uid ?? ""}
         currentName={user?.displayName || user?.email || ""}
         teamUsers={teamUsersAllowed}
+        teamMembers={teamMembers}
         onClose={() => setTicketCreateFor(null)}
       />
 
@@ -1911,6 +1912,7 @@ export function ThreadScreen({ route, navigation }: Props) {
         currentUid={user?.uid ?? ""}
         currentName={user?.displayName || user?.email || ""}
         teamUsers={teamUsersAllowed}
+        teamMembers={teamMembers}
         onClose={() => setReassignTicket(null)}
       />
 

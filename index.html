@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.194</title>
+<title>CommonCommunication v1.195</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -1606,7 +1606,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.194</div>
+    <div class="login-version">v1.195</div>
   </div>
 </div>
 
@@ -1614,7 +1614,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.194</span>
+    <span class="ver">v1.195</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -2060,7 +2060,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.194";
+const APP_VERSION = "v1.195";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -2585,7 +2585,7 @@ function renderAllowedList() {
       </div>
       <div class="name-row">
         <label>Name</label>
-        <input class="name-input" data-key="${escapeHtml(key)}" value="${escapeHtml(nameVal)}" placeholder="e.g. Ashima — used by @mentions" />
+        <input class="name-input" data-key="${escapeHtml(key)}" value="${escapeHtml(nameVal)}" placeholder="e.g. Ashima — shown in Team list, DMs, @mentions, ticket pickers" />
       </div>
       <div class="phones">${phonePills || `<i style="color:var(--muted); font-size:11px;">No phones mapped — customer-inbox rows for this teammate's number will still show as customers.</i>`}</div>
       <div class="add-phone">
@@ -3474,6 +3474,10 @@ function listenTeamMembers() {
         if (m.phones[ph]) teamPhones.add(normalizePhone(ph));
       }
     }
+    // v1.195: dmRows store the resolved teammate name at build-time, so a
+    // name edit in the Team modal needs us to rebuild them. Without this
+    // the Team tab keeps showing the old name until the next /dms write.
+    rebuildDmRows();
     // Customer list filtering and the team picker both depend on this.
     renderChatList(lastChatRows);
     // Live-refresh the open Team modal so newly-added phones appear immediately.
@@ -3513,6 +3517,28 @@ function listenDms() {
   });
 }
 
+// v1.195: shared name resolver. Priority is the admin-curated name in
+// /config/teamMembers, then the Firebase Auth displayName at
+// /users/{uid}/name, then the raw email. Setting "Name" in the desktop
+// Team modal propagates here so every list label uses the same name.
+function resolveTeammateName(uid, email) {
+  const emailLower = String(email || "").toLowerCase();
+  if (emailLower) {
+    for (const m of Object.values(teamMembersCache || {})) {
+      if (!m?.email) continue;
+      if (m.email.toLowerCase() !== emailLower) continue;
+      const n = String(m.name || "").trim();
+      if (n) return n;
+      break;
+    }
+  }
+  const u = teamUsers[uid];
+  const authName = String(u?.name || "").trim();
+  if (authName) return authName;
+  if (email) return email;
+  return uid || "(unknown)";
+}
+
 function rebuildDmRows() {
   dmRows = [];
   if (!currentUser) return;
@@ -3528,7 +3554,8 @@ function rebuildDmRows() {
       chatKey: chatKeyFromPairKey(pairKey),
       pairKey,
       otherUid,
-      name: otherUser.name || otherUser.email || "(unknown teammate)",
+      // v1.195: apply admin-curated name override.
+      name: resolveTeammateName(otherUid, otherUser.email),
       email: otherUser.email || "",
       photoURL: otherUser.photoURL || null,
       lastMsgAt: meta.lastMsgAt || 0,
@@ -3927,7 +3954,8 @@ function openTicketPicker(anchorEl, msgOrTicket, mode) {
     if (emailLower && seenEmails.has(emailLower)) continue;
     if (emailLower) seenEmails.add(emailLower);
     seen.add(uid);
-    team.push({ uid, name: u.name || u.email || "(unknown)" });
+    // v1.195: admin name override applies in the ticket popover too.
+    team.push({ uid, name: resolveTeammateName(uid, u.email) });
   }
 
   pop.innerHTML = team.map(t => `
@@ -4630,7 +4658,8 @@ function renderTeamChatList() {
     rows.push({
       kind: "new-active",
       otherUid: uid,
-      name: u?.name || u?.email || "(unknown)",
+      // v1.195: admin name override (teamMembersCache → users.name → email).
+      name: resolveTeammateName(uid, u?.email),
       email: u?.email || "",
       lastMsgAt: 0,
       preview: "",
@@ -5206,7 +5235,8 @@ function openDmPicker() {
     if (emailLower) seenEmails.add(emailLower);
     candidates.push({
       uid,
-      name: u?.name || u?.email || "(unknown)",
+      // v1.195: admin name override for the DM picker too.
+      name: resolveTeammateName(uid, u?.email),
       email: u?.email || "",
       photoURL: u?.photoURL || null,
       active: true,

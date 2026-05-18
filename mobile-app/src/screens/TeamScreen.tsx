@@ -27,6 +27,7 @@ import {
   buildAllowedEmailSet,
   filterAllowedTeamUsers,
   isAllowedTeamEmail,
+  resolveTeammateName,
 } from "@/lib/teamFilter";
 import { space, useStyles, useTheme, type Colors } from "@/theme";
 import {
@@ -94,7 +95,9 @@ export function TeamScreen() {
         kind: "existing",
         otherUid: r.otherUid,
         chatKey: r.chatKey,
-        name: r.name,
+        // v1.195: apply admin-curated name override from /config/teamMembers
+        // so a name set in the desktop Team modal propagates here.
+        name: resolveTeammateName(r.otherUid, r.email, teamUsers, teamMembers),
         email: r.email,
         lastMsgAt: r.lastMsgAt,
         preview: r.preview,
@@ -119,7 +122,8 @@ export function TeamScreen() {
         kind: "new-active",
         otherUid: uid,
         chatKey: null,
-        name: u?.name || u?.email || "(unknown)",
+        // v1.195: apply admin-curated name override.
+        name: resolveTeammateName(uid, u?.email || null, teamUsers, teamMembers),
         email: u?.email || "",
         lastMsgAt: 0,
         preview: "",

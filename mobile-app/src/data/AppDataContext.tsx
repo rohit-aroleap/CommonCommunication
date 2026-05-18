@@ -28,6 +28,7 @@ import { encodeKey, chatKeyToChatId } from "@/lib/encodeKey";
 import { buildFerraIndex, type FerraIndex } from "@/lib/ferra";
 import { isDailyGroup as _isDailyGroup } from "@/lib/chats";
 import { nextSendActivity } from "@/lib/favorites";
+import { resolveTeammateName } from "@/lib/teamFilter";
 import { cacheGet, cacheSet } from "@/data/cache";
 import type {
   ChatMeta,
@@ -424,7 +425,11 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
         pairKey,
         chatKey,
         otherUid,
-        name: otherUser.name || otherUser.email || "(teammate)",
+        // v1.195: admin name override from /config/teamMembers takes
+        // priority. resolveTeammateName falls back to otherUser.name then
+        // email, so behavior matches the previous default when no admin
+        // override exists.
+        name: resolveTeammateName(otherUid, otherUser.email, teamUsers, teamMembers),
         email: otherUser.email || "",
         photoURL: otherUser.photoURL || null,
         lastMsgAt: meta.lastMsgAt || 0,
@@ -438,7 +443,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     }
     out.sort((a, b) => (b.lastMsgAt || 0) - (a.lastMsgAt || 0));
     return out;
-  }, [dmsByKey, teamUsers, user, myLastSeen]);
+  }, [dmsByKey, teamUsers, teamMembers, user, myLastSeen]);
 
   // Tab badge counts. Match the worker's push targeting rules so what you
   // see on the icon matches what you'd get pinged for. Recomputed on every
