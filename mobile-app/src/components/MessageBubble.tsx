@@ -1,7 +1,9 @@
 // Single message bubble.
 //   • Single tap     → onPress (parent opens "Create ticket" flow)
-//   • Long-press     → onLongPress (parent copies text to clipboard)
+//   • Long-press     → onLongPress (parent shows action menu / copies)
 // Mirrors the webapp's click-to-ticket / long-press-to-copy split.
+// v1.152: reactions render as a pill below the bubble; aggregated by
+// emoji (👍 ×2, ❤️ ×1, etc.) with WhatsApp-style placement.
 // Media is rendered through the Worker's /media proxy because Periskope-
 // hosted URLs require auth headers we can't attach to a plain <Image>.
 
@@ -87,6 +89,52 @@ export function MessageBubble({
           {out && !isDeleted && <Status status={m.status} />}
         </View>
       </TouchableOpacity>
+      {/* v1.152 reactions pill — rendered OUTSIDE the bubble's
+          TouchableOpacity so tapping a reaction doesn't fire the
+          create-ticket flow. Aligned to the same side as the bubble
+          (right for outbound, left for inbound). */}
+      <ReactionsPill reactions={m.reactions} out={out} />
+    </View>
+  );
+}
+
+// Group reactions by emoji and render a compact pill. Shows up to 4
+// distinct emojis with their counts; if the customer was one of the
+// reactors, their emoji shows first (matches WhatsApp's "most recent"
+// emphasis). Returns null if no reactions — keeps the bubble tight.
+function ReactionsPill({
+  reactions,
+  out,
+}: {
+  reactions: Message["reactions"];
+  out: boolean;
+}) {
+  const styles = useStyles(makeStyles);
+  if (!reactions) return null;
+  const entries = Object.values(reactions || {});
+  if (entries.length === 0) return null;
+  const grouped = new Map<string, number>();
+  for (const e of entries) {
+    if (!e?.emoji) continue;
+    grouped.set(e.emoji, (grouped.get(e.emoji) || 0) + 1);
+  }
+  if (grouped.size === 0) return null;
+  const top = Array.from(grouped.entries()).slice(0, 4);
+  return (
+    <View
+      style={[
+        styles.reactionsPillRow,
+        out ? styles.reactionsPillRowOut : styles.reactionsPillRowIn,
+      ]}
+    >
+      <View style={styles.reactionsPill}>
+        {top.map(([emoji, count], i) => (
+          <Text key={i} style={styles.reactionsPillTxt}>
+            {emoji}
+            {count > 1 ? ` ${count}` : ""}
+          </Text>
+        ))}
+      </View>
     </View>
   );
 }
@@ -232,6 +280,25 @@ function makeStyles(colors: Colors) {
       color: colors.muted,
       fontStyle: "italic",
     },
+    // v1.152 reaction pill. Sits just under the bubble corner on the
+    // same side as the bubble's tail (right for outbound, left for
+    // inbound). The negative top margin slightly overlaps the bubble's
+    // bottom edge, matching WhatsApp's tight placement.
+    reactionsPillRow: { marginTop: -2 },
+    reactionsPillRowOut: { alignItems: "flex-end", paddingRight: 6 },
+    reactionsPillRowIn: { alignItems: "flex-start", paddingLeft: 6 },
+    reactionsPill: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 4,
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      borderRadius: 12,
+      backgroundColor: colors.panel,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+    },
+    reactionsPillTxt: { fontSize: 12, color: colors.text },
     image: {
       width: 220,
       height: 220,

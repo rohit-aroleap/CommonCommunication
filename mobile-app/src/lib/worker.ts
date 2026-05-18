@@ -77,6 +77,42 @@ export async function editMessage(body: EditMessageBody): Promise<{
 // Same pattern as editMessage — worker calls Periskope, patches Firebase
 // to tombstone the record (sets deleted: true + deletedAt), and the UI
 // renders a "Message deleted" placeholder in place of the original.
+// v1.152: react to a message (👍 ❤️ 😂 etc.). Empty emoji = remove the
+// caller's existing reaction. WhatsApp model — one reaction per person
+// per message; sending a new one replaces the prior. Worker calls
+// Periskope's reaction endpoint then patches Firebase with the result.
+export interface ReactToMessageBody {
+  chatKey: string;
+  msgKey: string;
+  periskopeMsgId: string;
+  emoji: string; // empty string to remove
+  reactedByUid: string;
+  reactedByName: string;
+}
+export async function reactToMessage(body: ReactToMessageBody): Promise<{
+  ok: boolean;
+  status: number;
+  error?: string;
+  details?: unknown;
+}> {
+  let res: Response;
+  try {
+    res = await fetch(`${WORKER_URL}/react-to-message`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    return { ok: false, status: 0, error: String((e as Error)?.message || e) };
+  }
+  const j = (await res.json().catch(() => ({}))) as {
+    error?: string;
+    details?: unknown;
+  };
+  if (!res.ok) return { ok: false, status: res.status, error: j?.error, details: j?.details };
+  return { ok: true, status: res.status };
+}
+
 export interface DeleteMessageBody {
   chatKey: string;
   msgKey: string;

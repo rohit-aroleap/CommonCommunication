@@ -99,6 +99,9 @@ export default {
       if (url.pathname === "/delete-message" && request.method === "POST") {
         return cors(env, await handleDeleteMessage(request, env));
       }
+      if (url.pathname === "/react-to-message" && request.method === "POST") {
+        return cors(env, await handleReactToMessage(request, env));
+      }
       return cors(env, json({ error: "not_found" }, 404));
     } catch (err) {
       return cors(env, json({ error: String(err && err.message || err) }, 500));
@@ -397,6 +400,72 @@ async function handleDeleteMessage(request, env) {
   return json({ ok: true, deletedAt });
 }
 
+// ---------- /react-to-message ----------
+// Adds (or replaces) a reaction on a previously-exchanged WhatsApp message.
+// WhatsApp's model is one-reaction-per-person-per-message — sending a new
+// reaction REPLACES the prior one from that user. Sending an empty string
+// REMOVES the user's reaction.
+//
+// Body: {
+//   chatKey, msgKey, periskopeMsgId
+//   emoji                — the reaction. Empty string ("") removes our reaction.
+//   reactedByUid, reactedByName
+// }
+//
+// Firebase model: commonComm/chats/{k}/messages/{m}/reactions/{uid} =
+//   { emoji, ts, byName, source: "trainer" | "customer" }
+// Keyed by uid for trainers, by customer phone for inbound reactions
+// (those come in via the webhook — see handleWebhook). One-reaction-per-
+// person enforced by the key.
+async function handleReactToMessage(request, env) {
+  const body = await request.json();
+  const { chatKey, msgKey, periskopeMsgId, emoji, reactedByUid, reactedByName } = body || {};
+
+  if (!periskopeMsgId) return json({ error: "missing periskopeMsgId" }, 400);
+  if (!chatKey || !msgKey) return json({ error: "missing chatKey/msgKey" }, 400);
+  if (!reactedByUid) return json({ error: "missing reactedByUid" }, 400);
+  // Allow empty emoji as the "remove my reaction" signal.
+  const emojiTrimmed = String(emoji || "");
+
+  // Periskope's react endpoint. The MCP tool signature is { message_id,
+  // reaction } so the REST body uses the same field names. If their REST
+  // path differs (POST /v1/message/react vs /v1/message/{id}/react), we'll
+  // see a 404/405 here and can adjust.
+  let periskopeRes;
+  try {
+    periskopeRes = await fetch(
+      `${PERISKOPE_BASE}/message/${encodeURIComponent(periskopeMsgId)}/react`,
+      {
+        method: "POST",
+        headers: periskopeHeaders(env),
+        body: JSON.stringify({ reaction: emojiTrimmed }),
+      },
+    );
+  } catch (e) {
+    return json({ error: "periskope_unreachable", details: String(e) }, 502);
+  }
+  const periskopeJson = await safeJson(periskopeRes);
+  if (!periskopeRes.ok) {
+    return json({ error: "periskope_react_failed", details: periskopeJson, status: periskopeRes.status }, periskopeRes.status);
+  }
+
+  // Patch Firebase to reflect the reaction (or its removal). null = delete
+  // the key entirely, which is how RTDB's PATCH semantics handle "unreact".
+  const reactionPath = `${ROOT}/chats/${chatKey}/messages/${msgKey}/reactions/${reactedByUid}`;
+  if (!emojiTrimmed) {
+    await fbPut(env, reactionPath, null);
+  } else {
+    await fbPut(env, reactionPath, {
+      emoji: emojiTrimmed,
+      ts: Date.now(),
+      byName: reactedByName || null,
+      source: "trainer",
+    });
+  }
+
+  return json({ ok: true });
+}
+
 // ---------- /webhook (inbound from Periskope) ----------
 async function handleWebhook(request, env) {
   const payload = await request.json();
@@ -431,6 +500,72 @@ async function handleWebhook(request, env) {
   if (!rawChatId) return json({ ok: true, skipped: "no chat_id" });
   const chatId = String(rawChatId);
   const isGroup = chatId.endsWith("@g.us");
+
+  // v1.152: detect reaction events and route them to the reactions
+  // updater instead of storing as a regular message. Periskope's event
+  // shape isn't documented for reactions specifically, so we look at
+  // several plausible signals (event type, message_type, presence of a
+  // reaction body) and parse defensively. If we recognize it as a
+  // reaction, write to the parent message's reactions/{phone} entry and
+  // return — never let a reaction become its own message bubble.
+  const isReactionEvent =
+    /reaction/i.test(String(evtType)) ||
+    /reaction/i.test(String(msg.message_type || "")) ||
+    !!msg.reaction ||
+    !!msg.reacted_message_id;
+  if (isReactionEvent) {
+    try {
+      const parentMsgId =
+        msg.reacted_message_id ||
+        msg.parent_message_id ||
+        msg.in_reply_to_message_id ||
+        msg.reply_to_message_id ||
+        null;
+      const emojiRaw =
+        (typeof msg.reaction === "string" ? msg.reaction : null) ||
+        msg.reaction?.emoji ||
+        msg.reaction?.text ||
+        msg.body ||
+        msg.message ||
+        "";
+      const reactorPhone = msg.sender_phone
+        ? String(msg.sender_phone).split("@")[0].replace(/\D/g, "")
+        : chatIdToPhone(chatId).replace(/\D/g, "");
+      // Stash the raw payload so we can iterate on the parser without
+      // losing data; the next paragraph attempts the actual patch.
+      await fbPut(env, `${ROOT}/_debug/reactions/${debugKey}`, {
+        evtType,
+        parentMsgId,
+        emoji: emojiRaw,
+        reactorPhone,
+        isFromMe: msg.from_me === true || msg.fromMe === true,
+        receivedAt: Date.now(),
+      });
+      if (parentMsgId && reactorPhone) {
+        const parentRef = await fbGet(
+          env,
+          `${ROOT}/byPeriskopeId/${encodeKey(parentMsgId)}`,
+        );
+        if (parentRef?.chatId && parentRef?.msgKey) {
+          const reactionPath = `${ROOT}/chats/${encodeKey(parentRef.chatId)}/messages/${parentRef.msgKey}/reactions/${reactorPhone}`;
+          if (!emojiRaw) {
+            // Empty reaction == customer removed their reaction.
+            await fbPut(env, reactionPath, null);
+          } else {
+            await fbPut(env, reactionPath, {
+              emoji: emojiRaw,
+              ts: parseTs(msg.timestamp),
+              byName: msg.sender_name || msg.contact_name || null,
+              source: "customer",
+            });
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[reaction-event] failed:", e);
+    }
+    return json({ ok: true, kind: "reaction" });
+  }
 
   const isFromMe = msg.from_me === true || msg.fromMe === true;
   const text = msg.body || msg.message || msg.text || "";

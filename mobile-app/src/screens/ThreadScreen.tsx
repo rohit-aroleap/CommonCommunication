@@ -63,6 +63,7 @@ import {
   transcribeAudio,
   editMessage,
   deleteMessage,
+  reactToMessage,
 } from "@/lib/worker";
 import { makeVoiceNoteRecordingOptions } from "@/lib/voiceRecording";
 import { prewarmTranscription } from "@/lib/prewarm";
@@ -81,6 +82,12 @@ import { ActivityIndicator } from "react-native";
 import type { Message, Ticket } from "@/types";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "./types";
+
+// v1.152: default emoji row for the long-press React menu. Matches
+// WhatsApp's six built-in reactions. A "+" affordance for the full
+// emoji keyboard is a follow-up (the system emoji keyboard works
+// inside a TextInput but doesn't expose a one-tap picker without it).
+const REACT_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 
 // Lazy require for expo-audio so older native builds (pre v1.115) don't
 // crash on import. Mic button is conditionally rendered only when this
@@ -668,6 +675,47 @@ export function ThreadScreen({ route, navigation }: Props) {
     Alert.alert("Copied");
   }, []);
 
+  // v1.152: send a reaction emoji on a message. Empty string removes
+  // the caller's existing reaction. Worker handles dedup + Periskope
+  // call + Firebase patch. Optimistic UI is not necessary — the listener
+  // refreshes the message within a beat once the worker patches the
+  // record.
+  const handleReact = useCallback(
+    async (m: Message, emoji: string) => {
+      setMessageMenuFor(null);
+      if (!user) return;
+      const periskopeMsgId = m.periskopeMsgId;
+      if (!periskopeMsgId) {
+        Alert.alert(
+          "Can't react",
+          "This message isn't tracked by Periskope yet — try again in a moment.",
+        );
+        return;
+      }
+      // If the user already reacted with this exact emoji, tapping it
+      // again sends an empty emoji = "unreact" (WhatsApp pattern).
+      const myExisting = m.reactions?.[user.uid]?.emoji;
+      const next = myExisting === emoji ? "" : emoji;
+      const result = await reactToMessage({
+        chatKey,
+        msgKey: m.id,
+        periskopeMsgId,
+        emoji: next,
+        reactedByUid: user.uid,
+        reactedByName: user.displayName || user.email || "",
+      });
+      if (!result.ok) {
+        Alert.alert(
+          "Couldn't react",
+          typeof result.details === "string"
+            ? result.details
+            : result.error || `HTTP ${result.status}`,
+        );
+      }
+    },
+    [chatKey, user],
+  );
+
   const handleStartEdit = useCallback((m: Message) => {
     setMessageMenuFor(null);
     // Pre-fill with the current text — falls back to caption if this is
@@ -1033,13 +1081,11 @@ export function ThreadScreen({ route, navigation }: Props) {
               setTicketCreateFor(m);
             }}
             onLongPress={async (m) => {
-              // v1.151: own outbound messages get the action menu
-              // (Copy / Edit / Delete). Inbound + deleted messages still
-              // long-press → copy directly (matches v1.118 behavior; no
-              // point showing Edit/Delete on something we can't modify).
-              const canEditOrDelete =
-                m.direction === "out" && !m.deleted && !!m.periskopeMsgId;
-              if (canEditOrDelete) {
+              // v1.152: any message with a periskopeMsgId gets the action
+              // sheet — Copy + React for everyone; Edit + Delete only for
+              // your own outbound. Messages without an ID (the brief
+              // optimistic-send window) fall back to direct copy.
+              if (m.periskopeMsgId && !m.deleted) {
                 setMessageMenuFor(m);
                 return;
               }
@@ -1318,8 +1364,9 @@ export function ThreadScreen({ route, navigation }: Props) {
         onClose={() => setSummaryOpen(false)}
       />
 
-      {/* v1.151: long-press action menu for own outbound messages.
-          Bottom sheet with Copy / Edit / Delete / Cancel — WhatsApp pattern. */}
+      {/* v1.151+1.152: long-press action menu. Emoji-react row on top
+          (everyone, mirrors WhatsApp's tap-to-react). Below: Copy
+          (everyone); Edit + Delete only for own outbound messages. */}
       <Modal
         visible={!!messageMenuFor}
         transparent
@@ -1334,6 +1381,27 @@ export function ThreadScreen({ route, navigation }: Props) {
             style={styles.actionSheetCard}
             onPress={(e) => e.stopPropagation()}
           >
+            {/* v1.152 emoji-react row. WhatsApp's 6 defaults. Tapping an
+                emoji also closes the sheet (handleReact resets the state). */}
+            <View style={styles.reactRow}>
+              {REACT_EMOJIS.map((emoji) => {
+                const mine =
+                  user && messageMenuFor?.reactions?.[user.uid]?.emoji === emoji;
+                return (
+                  <TouchableOpacity
+                    key={emoji}
+                    style={[
+                      styles.reactBtn,
+                      mine && styles.reactBtnActive,
+                    ]}
+                    onPress={() => messageMenuFor && handleReact(messageMenuFor, emoji)}
+                    activeOpacity={0.6}
+                  >
+                    <Text style={styles.reactBtnTxt}>{emoji}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
             <TouchableOpacity
               style={styles.actionSheetRow}
               onPress={() => messageMenuFor && handleCopyMessage(messageMenuFor)}
@@ -1341,22 +1409,26 @@ export function ThreadScreen({ route, navigation }: Props) {
               <Text style={styles.actionSheetIcon}>📋</Text>
               <Text style={styles.actionSheetTxt}>Copy</Text>
             </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.actionSheetRow}
-              onPress={() => messageMenuFor && handleStartEdit(messageMenuFor)}
-            >
-              <Text style={styles.actionSheetIcon}>✏️</Text>
-              <Text style={styles.actionSheetTxt}>Edit</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.actionSheetRow}
-              onPress={() => messageMenuFor && handleDeleteMessage(messageMenuFor)}
-            >
-              <Text style={styles.actionSheetIcon}>🗑️</Text>
-              <Text style={[styles.actionSheetTxt, styles.actionSheetTxtDestructive]}>
-                Delete
-              </Text>
-            </TouchableOpacity>
+            {messageMenuFor?.direction === "out" && (
+              <>
+                <TouchableOpacity
+                  style={styles.actionSheetRow}
+                  onPress={() => messageMenuFor && handleStartEdit(messageMenuFor)}
+                >
+                  <Text style={styles.actionSheetIcon}>✏️</Text>
+                  <Text style={styles.actionSheetTxt}>Edit</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.actionSheetRow}
+                  onPress={() => messageMenuFor && handleDeleteMessage(messageMenuFor)}
+                >
+                  <Text style={styles.actionSheetIcon}>🗑️</Text>
+                  <Text style={[styles.actionSheetTxt, styles.actionSheetTxtDestructive]}>
+                    Delete
+                  </Text>
+                </TouchableOpacity>
+              </>
+            )}
             <TouchableOpacity
               style={[styles.actionSheetRow, styles.actionSheetCancelRow]}
               onPress={() => setMessageMenuFor(null)}
@@ -2122,6 +2194,27 @@ function makeStyles(colors: Colors) {
     marginTop: 4,
   },
   actionSheetCancelTxt: { color: colors.muted, fontSize: 15, fontWeight: "600" },
+  // v1.152 emoji-react row at the top of the action sheet. Tappable
+  // glyphs sized to be thumb-friendly; the active state (the user's
+  // current reaction) gets a subtle filled pill so they can see what
+  // they've already chosen and tap again to remove it.
+  reactRow: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  reactBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  reactBtnActive: { backgroundColor: colors.bg },
+  reactBtnTxt: { fontSize: 24 },
   headerBtn: {
     width: 36,
     height: 36,

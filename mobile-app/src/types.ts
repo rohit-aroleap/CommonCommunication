@@ -68,6 +68,18 @@ export interface Message {
   // UI doesn't show this today but the dashboard or a future history view
   // can surface it.
   originalText?: string | null;
+  // v1.152 reactions. Keyed by uid (trainer reaction) or customer phone
+  // (inbound reaction via webhook). One entry per person — the worker
+  // overwrites on subsequent reactions and writes null for "unreact".
+  reactions?: Record<
+    string,
+    {
+      emoji: string;
+      ts: number;
+      byName?: string | null;
+      source?: "trainer" | "customer";
+    }
+  > | null;
 }
 
 export interface Ticket {
