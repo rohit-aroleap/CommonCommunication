@@ -63,7 +63,10 @@ export function ChatRowItem({
   // open ticket on the chat (so the auto-route hasn't fired yet OR a
   // ticket was resolved and the customer messaged again). Tells the
   // trainer "this is sitting unanswered and unowned, do something."
-  const needsTriage = row.direction === "in" && !hasOpenTicket;
+  // v1.173: groups excluded — every group has frequent inbound traffic
+  // from various members that doesn't represent a customer waiting for
+  // a reply. The badge would just flash constantly and lose meaning.
+  const needsTriage = row.direction === "in" && !hasOpenTicket && !isGroup;
 
   const time = formatTime(row.lastMsgAt);
 
