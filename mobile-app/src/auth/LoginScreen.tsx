@@ -1,16 +1,24 @@
-// Sign-in screen. Two paths:
-//   1. Google sign-in via expo-auth-session (id_token flow). Works in many
-//      environments but Google has been hostile to native custom-URI-scheme
-//      flows on Android since 2022 — it may show "Custom URI scheme not
-//      enabled" errors. When that happens, fall through to:
-//   2. Email/password sign-in via Firebase Auth — same accounts as the
-//      desktop dashboard. Admin creates accounts in Firebase Console →
-//      Authentication → Users → Add user.
+// Sign-in screen — email/password only.
+//
+// v1.168: Google sign-in via expo-auth-session was removed. Native
+// Google sign-in on Android requires a SHA-1 fingerprint registered
+// against a specific OAuth client ID in Google Cloud, and the
+// id_token flow from expo-auth-session also hits Google's hostility
+// toward custom-URI-scheme flows since 2022. Both combined to make
+// the button crash the Android app whenever a trainer tapped it. We
+// never had a working Google path on either mobile platform, so the
+// clean fix is to drop it and route everyone through email/password
+// — same accounts as the desktop dashboard (Firebase Auth →
+// Authentication → Users). Admin can create new users from the
+// Firebase Console.
+//
+// The signInWithGoogleIdToken function is kept on AuthContext for
+// any future re-enable (desktop still uses Google sign-in), this
+// screen just no longer triggers it.
 
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import {
   ActivityIndicator,
-  Image,
   KeyboardAvoidingView,
   Platform,
   StyleSheet,
@@ -19,67 +27,18 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import * as Google from "expo-auth-session/providers/google";
-import * as WebBrowser from "expo-web-browser";
 import { useAuth } from "./AuthContext";
-import { GOOGLE_OAUTH } from "@/config";
 import { useStyles, useTheme, type Colors } from "@/theme";
 import { getDisplayVersion } from "@/lib/version";
 
-WebBrowser.maybeCompleteAuthSession();
-
 export function LoginScreen() {
-  const {
-    signInWithGoogleIdToken,
-    signInWithEmailPassword,
-    status,
-    unauthorizedEmail,
-  } = useAuth();
+  const { signInWithEmailPassword, status, unauthorizedEmail } = useAuth();
   const { colors } = useTheme();
   const styles = useStyles(makeStyles);
   const [error, setError] = useState<string | null>(null);
-  const [signingIn, setSigningIn] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [emailSigningIn, setEmailSigningIn] = useState(false);
-
-  const [request, response, promptAsync] = Google.useIdTokenAuthRequest({
-    iosClientId: GOOGLE_OAUTH.iosClientId,
-    androidClientId: GOOGLE_OAUTH.androidClientId,
-    webClientId: GOOGLE_OAUTH.webClientId,
-  });
-
-  useEffect(() => {
-    if (!response) return;
-    if (response.type === "success") {
-      const idToken = response.params?.id_token;
-      if (!idToken) {
-        setError("Sign-in returned no id_token");
-        setSigningIn(false);
-        return;
-      }
-      signInWithGoogleIdToken(idToken).catch((e) => {
-        setError(`Firebase sign-in failed: ${e?.message ?? e}`);
-        setSigningIn(false);
-      });
-    } else if (response.type === "error") {
-      setError(response.error?.message ?? "Sign-in failed");
-      setSigningIn(false);
-    } else if (response.type === "dismiss" || response.type === "cancel") {
-      setSigningIn(false);
-    }
-  }, [response, signInWithGoogleIdToken]);
-
-  const onGooglePress = async () => {
-    setError(null);
-    setSigningIn(true);
-    try {
-      await promptAsync();
-    } catch (e: any) {
-      setError(e?.message ?? "Sign-in failed");
-      setSigningIn(false);
-    }
-  };
 
   const onEmailPress = async () => {
     if (!email.trim() || !password) return;
@@ -116,32 +75,6 @@ export function LoginScreen() {
         <Text style={styles.title}>CommonCommunication</Text>
         <Text style={styles.sub}>Aroleap shared customer inbox</Text>
 
-        <TouchableOpacity
-          style={[styles.btnGoogle, (!request || signingIn) && styles.btnDisabled]}
-          onPress={onGooglePress}
-          disabled={!request || signingIn}
-        >
-          {signingIn || status === "checking-allowlist" ? (
-            <ActivityIndicator color={colors.text} />
-          ) : (
-            <>
-              <Image
-                source={{
-                  uri: "https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg",
-                }}
-                style={styles.googleIcon}
-              />
-              <Text style={styles.btnGoogleText}>Sign in with Google</Text>
-            </>
-          )}
-        </TouchableOpacity>
-
-        <View style={styles.divider}>
-          <View style={styles.dividerLine} />
-          <Text style={styles.dividerText}>or sign in with email</Text>
-          <View style={styles.dividerLine} />
-        </View>
-
         <TextInput
           style={styles.input}
           value={email}
@@ -172,7 +105,7 @@ export function LoginScreen() {
           onPress={onEmailPress}
           disabled={emailSigningIn || !email.trim() || !password}
         >
-          {emailSigningIn ? (
+          {emailSigningIn || status === "checking-allowlist" ? (
             <ActivityIndicator color="white" />
           ) : (
             <Text style={styles.btnEmailText}>Sign in</Text>
@@ -186,6 +119,10 @@ export function LoginScreen() {
           </Text>
         )}
         {error && <Text style={styles.error}>{error}</Text>}
+        <Text style={styles.hint}>
+          Need access? Ask an admin to create a Firebase Auth user for your
+          email.
+        </Text>
         <Text style={styles.version}>{getDisplayVersion()}</Text>
       </View>
     </KeyboardAvoidingView>
@@ -211,32 +148,7 @@ function makeStyles(colors: Colors) {
     },
     title: { fontSize: 20, fontWeight: "600", color: colors.text, marginBottom: 4 },
     sub: { fontSize: 13, color: colors.muted, marginBottom: 24 },
-    btnGoogle: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 10,
-      backgroundColor: colors.panel,
-      borderColor: colors.border,
-      borderWidth: 1,
-      borderRadius: 8,
-      paddingVertical: 12,
-      paddingHorizontal: 20,
-      justifyContent: "center",
-      width: "100%",
-      minHeight: 48,
-    },
     btnDisabled: { opacity: 0.6 },
-    btnGoogleText: { fontSize: 14, fontWeight: "500", color: colors.text },
-    googleIcon: { width: 18, height: 18 },
-    divider: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 10,
-      width: "100%",
-      marginVertical: 16,
-    },
-    dividerLine: { flex: 1, height: 1, backgroundColor: colors.border },
-    dividerText: { fontSize: 11, color: colors.muted },
     input: {
       width: "100%",
       borderColor: colors.border,
@@ -261,6 +173,13 @@ function makeStyles(colors: Colors) {
     },
     btnEmailText: { color: "white", fontWeight: "600", fontSize: 14 },
     error: { color: colors.redDark, fontSize: 12, marginTop: 12, textAlign: "center" },
+    hint: {
+      color: colors.muted,
+      fontSize: 11,
+      marginTop: 14,
+      textAlign: "center",
+      lineHeight: 16,
+    },
     version: { color: colors.muted, fontSize: 11, marginTop: 18 },
   });
 }
