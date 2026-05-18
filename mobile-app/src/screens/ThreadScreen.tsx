@@ -1764,46 +1764,6 @@ export function ThreadScreen({ route, navigation }: Props) {
             </TouchableOpacity>
           </View>
         )}
-        {/* v1.184: contextual formatting toolbar. Appears the moment the
-            composer has a non-empty selection (mirrors WhatsApp Android's
-            action-mode bar with Bold/Italic/Strikethrough). Disappears
-            when selection collapses. Tap a button → wraps the selected
-            text with the marker and keeps the selection active for chained
-            formatting. */}
-        {hasComposerSelection && (
-          <View style={styles.fmtToolbar}>
-            <TouchableOpacity
-              style={styles.fmtBtn}
-              onPress={() => wrapComposerSelection("*")}
-              hitSlop={8}
-            >
-              <Text style={[styles.fmtBtnTxt, { fontWeight: "700" }]}>B</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.fmtBtn}
-              onPress={() => wrapComposerSelection("_")}
-              hitSlop={8}
-            >
-              <Text style={[styles.fmtBtnTxt, { fontStyle: "italic" }]}>I</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.fmtBtn}
-              onPress={() => wrapComposerSelection("~")}
-              hitSlop={8}
-            >
-              <Text style={[styles.fmtBtnTxt, { textDecorationLine: "line-through" }]}>S</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.fmtBtn}
-              onPress={() => wrapComposerSelection("`")}
-              hitSlop={8}
-            >
-              <Text style={[styles.fmtBtnTxt, { fontFamily: "Courier", fontSize: 13 }]}>
-                {"</>"}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        )}
         <View style={styles.composerRow}>
           <TextInput
             ref={composerInputRef}
@@ -1851,6 +1811,48 @@ export function ThreadScreen({ route, navigation }: Props) {
             <Text style={styles.sendTxt}>➤</Text>
           </TouchableOpacity>
         </View>
+        {/* v1.184: contextual formatting toolbar (Bold/Italic/Strike/Code).
+            v1.189: moved BELOW the composer row instead of above. Android's
+            system text-selection action bar (Cut/Copy/Share/Select all) is
+            anchored above the input — putting our toolbar above the input
+            meant the system bar covered it. Below the input, our toolbar
+            sits between input and keyboard so both can coexist. Appears
+            when there's a non-empty selection, wraps it on tap, and keeps
+            the range selected for chained formatting. */}
+        {hasComposerSelection && (
+          <View style={styles.fmtToolbar}>
+            <TouchableOpacity
+              style={styles.fmtBtn}
+              onPress={() => wrapComposerSelection("*")}
+              hitSlop={8}
+            >
+              <Text style={[styles.fmtBtnTxt, { fontWeight: "700" }]}>B</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.fmtBtn}
+              onPress={() => wrapComposerSelection("_")}
+              hitSlop={8}
+            >
+              <Text style={[styles.fmtBtnTxt, { fontStyle: "italic" }]}>I</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.fmtBtn}
+              onPress={() => wrapComposerSelection("~")}
+              hitSlop={8}
+            >
+              <Text style={[styles.fmtBtnTxt, { textDecorationLine: "line-through" }]}>S</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.fmtBtn}
+              onPress={() => wrapComposerSelection("`")}
+              hitSlop={8}
+            >
+              <Text style={[styles.fmtBtnTxt, { fontFamily: "Courier", fontSize: 13 }]}>
+                {"</>"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
 
       <NotePreviewModal
@@ -2726,11 +2728,11 @@ function makeStyles(colors: Colors) {
     fontWeight: "500",
     fontStyle: "italic",
   },
-  // v1.184: contextual formatting bar that appears above the composer
-  // row when there's a non-empty text selection. Visual analog of
-  // WhatsApp's system action-mode bar (Cut/Copy/Bold/Italic/Strike) —
-  // we can't extend the system menu in Expo managed, so we show our
-  // own strip in the same vertical zone (just above the input).
+  // v1.184: contextual formatting bar. Shows when the composer has a
+  // non-empty selection. v1.189: positioned BELOW the composer row (not
+  // above) so the Android system action bar (Cut/Copy/etc.) doesn't
+  // cover it — system bar floats above the input, our toolbar floats
+  // below. Both visible at the same time.
   fmtToolbar: {
     flexDirection: "row",
     alignSelf: "flex-start",
@@ -2738,7 +2740,7 @@ function makeStyles(colors: Colors) {
     borderRadius: 12,
     paddingHorizontal: 4,
     paddingVertical: 2,
-    marginBottom: 6,
+    marginTop: 6,
     gap: 2,
   },
   fmtBtn: {
