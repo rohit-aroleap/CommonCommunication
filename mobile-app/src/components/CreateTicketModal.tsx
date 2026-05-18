@@ -63,8 +63,13 @@ export function CreateTicketModal({
 
   useEffect(() => {
     if (!visible || !message) return;
-    const src = msgQuoteText(message);
-    setTitle(src.slice(0, 80));
+    // v1.164: title used to auto-fill with msgQuoteText(message).slice(0, 80)
+    // — but that meant trainers were always editing pre-filled text
+    // they didn't write, or just submitting the message body verbatim
+    // as the ticket title. Now the field starts blank and the
+    // placeholder ("Short summary") shows. The message body is already
+    // visible in the quote card above, so context is preserved.
+    setTitle("");
     setAssignee(currentUid);
   }, [visible, message, currentUid]);
 
@@ -72,7 +77,11 @@ export function CreateTicketModal({
   const quote = msgQuoteText(message);
 
   const submit = async () => {
-    if (!title.trim()) return;
+    // v1.164: empty title is fine — the existing fallback in the
+    // ticket-write block uses the quoted message text as the title
+    // when none is typed. Only bail when BOTH are empty (which
+    // shouldn't happen since the modal opens with a selected message).
+    if (!title.trim() && !quote.trim()) return;
     const selected = assignees.find((a) => a.uid === assignee);
     if (!selected) return;
     setBusy(true);
