@@ -27,6 +27,7 @@ import {
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import * as ImagePicker from "expo-image-picker";
+import * as ImageManipulator from "expo-image-manipulator";
 import * as DocumentPicker from "expo-document-picker";
 // expo-file-system 18+ split into "new" and "legacy" APIs. We still use the
 // legacy patterns (getInfoAsync with size, readAsStringAsync with base64),
@@ -1269,17 +1270,32 @@ export function ThreadScreen({ route, navigation }: Props) {
         if (!uri) return;
         // v1.186: HEIC guard. iPhones default to HEIC for new photos but
         // HEIC bytes don't render on Android, Chrome, Firefox, or Edge.
-        // expo-image-picker's `quality: 0.85` is supposed to re-encode to
-        // JPEG on iOS, but it doesn't always — newer PHPicker mode and
-        // some library assets slip through as HEIC. Detect here and bail
-        // out with a tip to the trainer instead of uploading a file that
-        // will look broken to half the team.
+        // v1.192: instead of alerting and bailing, convert HEIC → JPEG
+        // silently via expo-image-manipulator. Works on both iOS and
+        // Android (manipulator handles HEIC decode → JPEG re-encode
+        // natively). Falls back to the warning alert if conversion ever
+        // throws — better a clear error than a corrupted upload.
         if (isHeicFile(name, mimeType)) {
-          Alert.alert(
-            "iPhone HEIC photo",
-            "iPhone HEIC photos don't show on Android or in most browsers — they'd appear broken to other trainers.\n\nQuick fix on your iPhone:\nSettings → Camera → Formats → Most Compatible\n\nNew photos will save as JPEG and work for everyone. For this particular photo, open it in Photos, tap the Share icon → Save as JPEG (or take a screenshot), and re-attach.",
-          );
-          return;
+          try {
+            const out = await ImageManipulator.manipulateAsync(
+              uri,
+              [], // no resize/rotate — just re-encode
+              {
+                compress: 0.9,
+                format: ImageManipulator.SaveFormat.JPEG,
+              },
+            );
+            uri = out.uri;
+            mimeType = "image/jpeg";
+            name = name.replace(/\.(heic|heif)$/i, ".jpg");
+            if (!/\.jpe?g$/i.test(name)) name = `${name}.jpg`;
+          } catch (e) {
+            Alert.alert(
+              "Couldn't convert HEIC",
+              "This photo is in iPhone HEIC format and conversion failed. Try a different photo, or change your iPhone setting:\n\nSettings → Camera → Formats → Most Compatible",
+            );
+            return;
+          }
         }
         // SDK 53+ returns size by default; the explicit { size: true } option
         // was removed. Read info.size as before if it's present.
