@@ -140,9 +140,15 @@ export function ThreadScreen({ route, navigation }: Props) {
 
   // v1.188: orphan-free teamUsers for assignee pickers. See lib/teamFilter
   // for the rule.
+  // v1.191: pass preferUid so duplicate-email entries (same email under
+  // two Firebase UIDs from auth-account-delete-then-recreate) collapse
+  // to the current user's record, not the leftover orphan.
   const teamUsersAllowed = useMemo(
-    () => filterAllowedTeamUsers(teamUsers, teamMembers),
-    [teamUsers, teamMembers],
+    () =>
+      filterAllowedTeamUsers(teamUsers, teamMembers, {
+        preferUid: user?.uid,
+      }),
+    [teamUsers, teamMembers, user?.uid],
   );
 
   // DM mode: the chatKey is "dm:" + pairKey, not a customer chatKey. Branch
@@ -254,14 +260,18 @@ export function ThreadScreen({ route, navigation }: Props) {
     // removed teammates out of the @-mention picker. Without this the
     // picker showed stale /users/{uid} records (e.g. two "Rohit Patel"
     // entries after an admin demote).
-    const allowedEmails = buildAllowedEmailSet(teamMembers);
+    // v1.191: filter via the shared helper, which now also collapses
+    // duplicate-email orphans (e.g. when a Firebase Auth user was
+    // deleted+recreated and both UIDs sit in /users/).
+    const deduped = filterAllowedTeamUsers(teamUsers, teamMembers, {
+      preferUid: me,
+    });
     const byUid = new Map<
       string,
       { uid: string; name: string; active: boolean }
     >();
-    for (const [uid, u] of Object.entries(teamUsers || {})) {
+    for (const [uid, u] of Object.entries(deduped)) {
       if (!u || uid === me) continue;
-      if (!isAllowedTeamEmail(u.email || "", allowedEmails)) continue;
       const emailLower = (u.email || "").toLowerCase();
       const override = memberByEmail.get(emailLower);
       const displayName =

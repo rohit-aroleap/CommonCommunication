@@ -23,7 +23,11 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { ref, set, update, get } from "firebase/database";
 import { db } from "@/firebase";
 import { ROOT } from "@/config";
-import { buildAllowedEmailSet, isAllowedTeamEmail } from "@/lib/teamFilter";
+import {
+  buildAllowedEmailSet,
+  filterAllowedTeamUsers,
+  isAllowedTeamEmail,
+} from "@/lib/teamFilter";
 import { space, useStyles, useTheme, type Colors } from "@/theme";
 import {
   useAppData,
@@ -101,10 +105,15 @@ export function TeamScreen() {
     }
 
     // B: signed-in teammates without a DM thread yet
-    for (const [uid, u] of Object.entries(teamUsers)) {
+    // v1.191: use the shared helper so the email-dedup logic (which
+    // collapses Firebase-Auth-recreated-user orphans) runs here too.
+    const teamUsersDeduped = filterAllowedTeamUsers(teamUsers, teamMembers, {
+      preferUid: me,
+    });
+    for (const [uid, u] of Object.entries(teamUsersDeduped)) {
       if (uid === me || seenUids.has(uid)) continue;
       const emailLower = String(u?.email || "").toLowerCase();
-      if (!isAllowed(u?.email || "")) continue;
+      if (emailLower && seenEmails.has(emailLower)) continue;
       if (emailLower) seenEmails.add(emailLower);
       out.push({
         kind: "new-active",

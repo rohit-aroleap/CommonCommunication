@@ -36,16 +36,55 @@ export function isAllowedTeamEmail(
   return allowed.has(String(email).toLowerCase());
 }
 
-// Returns a new teamUsers record with orphan entries removed.
+// Returns a new teamUsers record with orphan entries removed AND duplicate
+// emails collapsed (v1.191).
+//
+// Why dedupe by email: when a Firebase Auth user is deleted then recreated
+// with the same email, you end up with two /users/{uid} records sharing an
+// email. Both pass the allowlist check, so both showed in the assignee
+// pickers (trainer reported "Rohit Patel + rohit@aroleap.com (me)" for
+// what should have been a single self-entry).
+//
+// Tiebreaker for duplicates:
+//   1. preferUid wins (so the currently-signed-in user's record always
+//      survives over its own orphan)
+//   2. Otherwise the entry with a non-empty trimmed name wins (assumed to
+//      be the "real" record vs. a half-initialized one)
+//   3. Otherwise the lexicographically-smaller uid wins (stable arbitrary)
 export function filterAllowedTeamUsers(
   teamUsers: Record<string, TeamUser>,
   teamMembers: Record<string, TeamMember>,
+  options?: { preferUid?: string },
 ): Record<string, TeamUser> {
   const allowed = buildAllowedEmailSet(teamMembers);
-  const out: Record<string, TeamUser> = {};
+  const preferUid = options?.preferUid;
+
+  // First pass — drop orphans (records whose email is no longer allowlisted).
+  const filtered: Array<[string, TeamUser]> = [];
   for (const [uid, u] of Object.entries(teamUsers || {})) {
     if (!u) continue;
-    if (isAllowedTeamEmail(u.email || "", allowed)) out[uid] = u;
+    if (isAllowedTeamEmail(u.email || "", allowed)) filtered.push([uid, u]);
+  }
+
+  // Sort so the preferred entries come first — first-seen-email then wins.
+  filtered.sort(([uidA, uA], [uidB, uB]) => {
+    if (uidA === preferUid && uidB !== preferUid) return -1;
+    if (uidB === preferUid && uidA !== preferUid) return 1;
+    const aHasName = !!(uA.name && uA.name.trim());
+    const bHasName = !!(uB.name && uB.name.trim());
+    if (aHasName !== bHasName) return aHasName ? -1 : 1;
+    return uidA.localeCompare(uidB);
+  });
+
+  const seenEmails = new Set<string>();
+  const out: Record<string, TeamUser> = {};
+  for (const [uid, u] of filtered) {
+    const email = (u.email || "").toLowerCase();
+    if (email) {
+      if (seenEmails.has(email)) continue;
+      seenEmails.add(email);
+    }
+    out[uid] = u;
   }
   return out;
 }
