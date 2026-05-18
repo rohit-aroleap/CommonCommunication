@@ -196,8 +196,13 @@ export function ChatsScreen() {
     return items;
   }, [filtered, myFavorites, myTicketChatKeys, favoritesOnly]);
 
+  // v1.163: edges={[]} — was edges={["top"]} which double-counted the
+  // status-bar inset on Android. The React Navigation Stack header
+  // above this screen already consumes the top inset, so adding it
+  // again here painted a gray strip between the header and the search
+  // input. iOS hid the strip because its inset is 0 below the header.
   return (
-    <SafeAreaView style={styles.root} edges={["top"]}>
+    <SafeAreaView style={styles.root} edges={[]}>
       <FilterBar
         rows={chatRows}
         phoneToStatus={ferraIndex.phoneToStatus}

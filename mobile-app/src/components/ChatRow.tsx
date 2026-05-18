@@ -94,21 +94,16 @@ export function ChatRowItem({
                 <Text style={styles.ticketDotTxt}>🎫</Text>
               </View>
             )}
-            {subscriptionStatus === "ACTIVE" && (
-              <Pill bg={colors.pillActiveBg} fg={colors.pillActiveFg} styles={styles}>
-                Active
-              </Pill>
-            )}
-            {subscriptionStatus === "CANCELLED" && (
-              <Pill bg={colors.pillCancelledBg} fg={colors.pillCancelledFg} styles={styles}>
-                Cancelled
-              </Pill>
-            )}
-            {subscriptionStatus === "PAUSED" && (
-              <Pill bg={colors.pillPausedBg} fg={colors.pillPausedFg} styles={styles}>
-                Paused
-              </Pill>
-            )}
+            {/* v1.163: customer-status pill (Active / Cancelled / Paused)
+                removed — the same info lives one tap deeper in the
+                Customer Info screen, and the chat list felt cluttered
+                with two pills per row. The journey-stage pill below
+                stays since it conveys "where are they in onboarding?"
+                which isn't visible elsewhere at a glance.
+                The `subscriptionStatus` prop is intentionally kept on
+                the interface (still passed by ChatsScreen) so any
+                future need to bring back the pill is a one-line
+                addition. */}
             {stage && stage !== "active" && (
               <StagePill stage={stage} colors={colors} styles={styles} />
             )}

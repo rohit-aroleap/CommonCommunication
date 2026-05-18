@@ -42,7 +42,7 @@ export function TicketsScreen() {
   const styles = useStyles(makeStyles);
 
   return (
-    <SafeAreaView style={styles.root} edges={["top"]}>
+    <SafeAreaView style={styles.root} edges={[]}>
       <FlatList
         data={mine}
         keyExtractor={(t) => t.id}

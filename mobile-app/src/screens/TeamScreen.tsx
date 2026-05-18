@@ -186,7 +186,7 @@ export function TeamScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.root} edges={["top"]}>
+    <SafeAreaView style={styles.root} edges={[]}>
       <View style={styles.searchRow}>
         <View style={styles.searchWrap}>
           <Text style={styles.searchIcn}>🔍</Text>
