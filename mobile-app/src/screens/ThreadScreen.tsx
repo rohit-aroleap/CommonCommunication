@@ -370,9 +370,13 @@ export function ThreadScreen({ route, navigation }: Props) {
                   onPress={() =>
                     navigation.navigate("CustomerInfo", { chatKey })
                   }
-                  style={styles.headerBtn}
+                  // Pill shape (icon + "Details" label) so it reads as a
+                  // real button at a glance rather than a mystery icon.
+                  // Matches the Note / Voice pills in the composer.
+                  style={styles.headerPillBtn}
                 >
-                  <Text style={styles.headerBtnTxt}>👤</Text>
+                  <Text style={styles.headerPillIcon}>👤</Text>
+                  <Text style={styles.headerPillTxt}>Details</Text>
                 </TouchableOpacity>
               )}
               <TouchableOpacity
@@ -1820,6 +1824,21 @@ function makeStyles(colors: Colors) {
     marginRight: 4,
   },
   headerBtnTxt: { color: "white", fontSize: 16 },
+  // Pill-shaped header button — used for the Customer Details affordance so
+  // the trainer reads "Details" alongside the 👤 glyph without having to
+  // guess what the icon means. Matches the composer's Note / Voice pills.
+  headerPillBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    height: 36,
+    paddingHorizontal: 12,
+    borderRadius: 18,
+    backgroundColor: "rgba(255,255,255,0.18)",
+    marginRight: 4,
+    gap: 6,
+  },
+  headerPillIcon: { fontSize: 16 },
+  headerPillTxt: { color: "white", fontSize: 13, fontWeight: "600" },
   headerRightWrap: {
     flexDirection: "row",
     alignItems: "center",
