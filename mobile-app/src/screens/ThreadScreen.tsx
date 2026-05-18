@@ -721,14 +721,41 @@ export function ThreadScreen({ route, navigation }: Props) {
   }, []);
 
   // v1.152: send a reaction emoji on a message. Empty string removes
-  // the caller's existing reaction. Worker handles dedup + Periskope
-  // call + Firebase patch. Optimistic UI is not necessary — the listener
-  // refreshes the message within a beat once the worker patches the
-  // record.
+  // the caller's existing reaction. v1.169 adds the DM path — DMs
+  // don't round-trip through Periskope, so we write directly to the
+  // dms/{pairKey}/messages/{msgKey}/reactions/{uid} record. The
+  // MessageBubble's reaction pill already reads from `reactions` so
+  // both surfaces render identically.
   const handleReact = useCallback(
     async (m: Message, emoji: string) => {
       setMessageMenuFor(null);
       if (!user) return;
+      // If the user already reacted with this exact emoji, tapping it
+      // again sends an empty emoji = "unreact" (WhatsApp pattern).
+      const myExisting = m.reactions?.[user.uid]?.emoji;
+      const next = myExisting === emoji ? "" : emoji;
+
+      if (isDm) {
+        // Pure-Firebase write; no Periskope involvement for DMs.
+        const reactionPath = `${ROOT}/dms/${pairKey}/messages/${m.id}/reactions/${user.uid}`;
+        try {
+          if (!next) {
+            await set(ref(db, reactionPath), null);
+          } else {
+            await set(ref(db, reactionPath), {
+              emoji: next,
+              ts: Date.now(),
+              byName: user.displayName || user.email || null,
+              source: "trainer",
+            });
+          }
+        } catch (e) {
+          Alert.alert("Couldn't react", String((e as Error)?.message || e));
+        }
+        return;
+      }
+
+      // Customer chat path (existing v1.152 behaviour).
       const periskopeMsgId = m.periskopeMsgId;
       if (!periskopeMsgId) {
         Alert.alert(
@@ -737,10 +764,6 @@ export function ThreadScreen({ route, navigation }: Props) {
         );
         return;
       }
-      // If the user already reacted with this exact emoji, tapping it
-      // again sends an empty emoji = "unreact" (WhatsApp pattern).
-      const myExisting = m.reactions?.[user.uid]?.emoji;
-      const next = myExisting === emoji ? "" : emoji;
       const result = await reactToMessage({
         chatKey,
         msgKey: m.id,
@@ -758,7 +781,7 @@ export function ThreadScreen({ route, navigation }: Props) {
         );
       }
     },
-    [chatKey, user],
+    [chatKey, user, isDm, pairKey],
   );
 
   const handleStartEdit = useCallback((m: Message) => {
@@ -782,6 +805,43 @@ export function ThreadScreen({ route, navigation }: Props) {
       setEditFor(null);
       return;
     }
+
+    // v1.169: DM edit path. No Periskope, no edit window — DMs are
+    // pure-Firebase so the edit is just an update on the message's
+    // text + editedAt fields. Original text stashed on first edit
+    // for audit, same shape as the worker writes for customer chats.
+    if (isDm) {
+      setEditFor({ ...editFor, saving: true });
+      try {
+        const msgPath = `${ROOT}/dms/${pairKey}/messages/${editFor.message.id}`;
+        const patch: Record<string, unknown> = {
+          text: trimmed,
+          editedAt: Date.now(),
+          editedByUid: user.uid,
+          editedByName: user.displayName || user.email || null,
+        };
+        // Stash originalText on the first edit only — subsequent
+        // edits preserve the truly-original text rather than
+        // overwriting with the second-most-recent.
+        if (!editFor.message.originalText && editFor.message.text) {
+          patch.originalText = editFor.message.text;
+        }
+        await update(ref(db, msgPath), patch);
+        // If this WAS the latest DM message, refresh the meta preview.
+        if (dmRow?.lastMsgAt === editFor.message.ts) {
+          await update(ref(db, `${ROOT}/dms/${pairKey}/meta`), {
+            lastMsgPreview: trimmed.slice(0, 120),
+          });
+        }
+        setEditFor(null);
+      } catch (e) {
+        Alert.alert("Couldn't edit", String((e as Error)?.message || e));
+        setEditFor((prev) => (prev ? { ...prev, saving: false } : prev));
+      }
+      return;
+    }
+
+    // Customer chat path — goes through Periskope via the worker.
     const periskopeMsgId = editFor.message.periskopeMsgId;
     if (!periskopeMsgId) {
       Alert.alert("Can't edit", "This message wasn't tracked by Periskope yet — try again in a moment.");
@@ -812,7 +872,7 @@ export function ThreadScreen({ route, navigation }: Props) {
           "\n\nWhatsApp typically only allows edits within 15 minutes of sending.",
     );
     setEditFor((prev) => (prev ? { ...prev, saving: false } : prev));
-  }, [editFor, user, chatKey]);
+  }, [editFor, user, chatKey, isDm, pairKey, dmRow]);
 
   // v1.154: forward the held forwardTarget to a teammate's DM thread.
   // Direct Firebase write (DMs are pure-Firebase, no Periskope) + a
@@ -829,33 +889,43 @@ export function ThreadScreen({ route, navigation }: Props) {
         Alert.alert("Nothing to forward", "This message has no text to forward.");
         return;
       }
-      const pairKey = getPairKey(user.uid, toUid);
+      // v1.169: source-label logic now branches on isDm. For customer
+      // chats the source is the customer (headerName / meta). For DMs
+      // the source is the OTHER teammate in this thread — use the dmRow
+      // name, fall back to headerName.
+      const targetPairKey = getPairKey(user.uid, toUid);
       const ts = Date.now();
       const fromName = user.displayName || user.email || "(team)";
-      const customerName =
-        headerName ||
-        meta.contactName ||
-        meta.displayName ||
-        meta.groupName ||
-        meta.phone ||
-        "customer";
+      const sourceLabel = isDm
+        ? (dmRow?.name || headerName || "teammate")
+        : (headerName ||
+            meta.contactName ||
+            meta.displayName ||
+            meta.groupName ||
+            meta.phone ||
+            "customer");
       try {
-        const msgRef = push(ref(db, `${ROOT}/dms/${pairKey}/messages`));
+        const msgRef = push(ref(db, `${ROOT}/dms/${targetPairKey}/messages`));
         await set(msgRef, {
           text: srcText,
           ts,
           fromUid: user.uid,
           fromName,
           forwardedFrom: {
-            chatId: meta.chatId || null,
-            customerName,
-            customerPhone: meta.phone || null,
+            // For DM-to-DM forwards there's no customer chatId/phone —
+            // those fields stay null; the customerName field carries
+            // the teammate's name instead (field name is a back-compat
+            // misnomer kept so MessageBubble's render path works
+            // unchanged).
+            chatId: isDm ? null : meta.chatId || null,
+            customerName: sourceLabel,
+            customerPhone: isDm ? null : meta.phone || null,
             originalText: srcText.slice(0, 500),
             originalTs: src.ts || 0,
             originalDirection: src.direction,
           },
         });
-        await update(ref(db, `${ROOT}/dms/${pairKey}/meta`), {
+        await update(ref(db, `${ROOT}/dms/${targetPairKey}/meta`), {
           participants: { [user.uid]: true, [toUid]: true },
           lastMsgAt: ts,
           lastMsgPreview: `↪️ ${srcText.slice(0, 100)}`,
@@ -864,11 +934,11 @@ export function ThreadScreen({ route, navigation }: Props) {
         });
         // Push fan-out — fire-and-forget, same pattern as sendDm.
         notifyDm({
-          pairKey,
+          pairKey: targetPairKey,
           fromUid: user.uid,
           fromName,
           toUid,
-          text: `↪️ Forwarded from ${customerName}: ${srcText.slice(0, 140)}`,
+          text: `↪️ Forwarded from ${sourceLabel}: ${srcText.slice(0, 140)}`,
         });
         setForwardTarget(null);
         Alert.alert("Forwarded");
@@ -876,12 +946,58 @@ export function ThreadScreen({ route, navigation }: Props) {
         Alert.alert("Couldn't forward", String((e as Error)?.message || e));
       }
     },
-    [forwardTarget, user, headerName, meta],
+    [forwardTarget, user, headerName, meta, isDm, dmRow],
   );
 
   const handleDeleteMessage = useCallback(
     (m: Message) => {
       setMessageMenuFor(null);
+      if (!user) return;
+
+      // v1.169: DM delete path. Tombstone the DM record directly in
+      // Firebase — no Periskope round-trip needed. The listener
+      // re-renders the bubble as "Message deleted" via the existing
+      // m.deleted handling in MessageBubble.
+      if (isDm) {
+        Alert.alert(
+          "Delete this message?",
+          "Your teammate will see a 'Message deleted' placeholder where this used to be.",
+          [
+            { text: "Cancel", style: "cancel" },
+            {
+              text: "Delete",
+              style: "destructive",
+              onPress: async () => {
+                try {
+                  const msgPath = `${ROOT}/dms/${pairKey}/messages/${m.id}`;
+                  const patch: Record<string, unknown> = {
+                    deleted: true,
+                    deletedAt: Date.now(),
+                    deletedByUid: user.uid,
+                    deletedByName: user.displayName || user.email || null,
+                  };
+                  if (!m.originalText && m.text) patch.originalText = m.text;
+                  await update(ref(db, msgPath), patch);
+                  // Refresh the DM thread's preview if this was the
+                  // latest message — so the Team list doesn't keep
+                  // showing the deleted text as the preview.
+                  if (dmRow?.lastMsgAt === m.ts) {
+                    await update(ref(db, `${ROOT}/dms/${pairKey}/meta`), {
+                      lastMsgPreview: "🚫 Message deleted",
+                    });
+                  }
+                } catch (e) {
+                  Alert.alert("Couldn't delete", String((e as Error)?.message || e));
+                }
+              },
+            },
+          ],
+        );
+        return;
+      }
+
+      // Customer chat path — goes through Periskope so the customer's
+      // WhatsApp also shows the message as deleted.
       const periskopeMsgId = m.periskopeMsgId;
       if (!periskopeMsgId) {
         Alert.alert(
@@ -890,7 +1006,6 @@ export function ThreadScreen({ route, navigation }: Props) {
         );
         return;
       }
-      if (!user) return;
       Alert.alert(
         "Delete this message?",
         "It'll be removed from the customer's WhatsApp too. WhatsApp typically only allows this within ~2 days of sending.",
@@ -907,7 +1022,7 @@ export function ThreadScreen({ route, navigation }: Props) {
                 deletedByUid: user.uid,
                 deletedByName: user.displayName || user.email || "",
               });
-              if (result.ok) return; // listener will re-render the bubble as deleted
+              if (result.ok) return;
               Alert.alert(
                 "Couldn't delete",
                 typeof result.details === "string"
@@ -919,7 +1034,7 @@ export function ThreadScreen({ route, navigation }: Props) {
         ],
       );
     },
-    [chatKey, user],
+    [chatKey, user, isDm, pairKey, dmRow],
   );
 
   // v1.129: save a new template to commonComm/config/templates. The listener
@@ -1191,11 +1306,14 @@ export function ThreadScreen({ route, navigation }: Props) {
               setTicketCreateFor(m);
             }}
             onLongPress={async (m) => {
-              // v1.152: any message with a periskopeMsgId gets the action
-              // sheet — Copy + React for everyone; Edit + Delete only for
-              // your own outbound. Messages without an ID (the brief
-              // optimistic-send window) fall back to direct copy.
-              if (m.periskopeMsgId && !m.deleted) {
+              // v1.169: gate now opens the menu for DM messages too.
+              // - Customer chats: need a periskopeMsgId (otherwise edit/
+              //   delete/react can't round-trip through Periskope).
+              // - DMs: no periskopeMsgId needed — DM actions go direct
+              //   to Firebase. Anything with id + not deleted qualifies.
+              // Deleted messages fall through to copy regardless.
+              const canOpenMenu = !m.deleted && (m.periskopeMsgId || isDm);
+              if (canOpenMenu) {
                 setMessageMenuFor(m);
                 return;
               }
@@ -1554,23 +1672,23 @@ export function ThreadScreen({ route, navigation }: Props) {
               <Text style={styles.actionSheetIcon}>↩️</Text>
               <Text style={styles.actionSheetTxt}>Reply</Text>
             </TouchableOpacity>
-            {/* v1.154: Forward only makes sense from a customer thread.
-                In a DM, "forward this message to another teammate" isn't
-                a use case the user described — skip the action there. */}
-            {!isDm && (
-              <TouchableOpacity
-                style={styles.actionSheetRow}
-                onPress={() => {
-                  if (messageMenuFor) {
-                    setForwardTarget(messageMenuFor);
-                    setMessageMenuFor(null);
-                  }
-                }}
-              >
-                <Text style={styles.actionSheetIcon}>↪️</Text>
-                <Text style={styles.actionSheetTxt}>Forward to teammate</Text>
-              </TouchableOpacity>
-            )}
+            {/* v1.154 + v1.169: Forward works from both customer threads
+                (forward customer message to a teammate's DM) and from
+                DM threads (forward this DM line to a different
+                teammate's DM). Both paths write to /dms/{pairKey}/...
+                with a "forwardedFrom" snapshot — see executeForward. */}
+            <TouchableOpacity
+              style={styles.actionSheetRow}
+              onPress={() => {
+                if (messageMenuFor) {
+                  setForwardTarget(messageMenuFor);
+                  setMessageMenuFor(null);
+                }
+              }}
+            >
+              <Text style={styles.actionSheetIcon}>↪️</Text>
+              <Text style={styles.actionSheetTxt}>Forward to teammate</Text>
+            </TouchableOpacity>
             <TouchableOpacity
               style={styles.actionSheetRow}
               onPress={() => messageMenuFor && handleCopyMessage(messageMenuFor)}
