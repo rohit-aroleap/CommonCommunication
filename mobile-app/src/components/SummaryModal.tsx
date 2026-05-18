@@ -6,11 +6,11 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Modal,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   View,
 } from "react-native";
 import { summarize } from "@/lib/worker";
@@ -58,6 +58,14 @@ export function SummaryModal({ visible, chatId, onClose }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, chatId]);
 
+  // v1.179: scroll-fix. Previously the card was wrapped in a Pressable
+  // (with stopPropagation) so backdrop-taps wouldn't dismiss it. On iOS
+  // that outer Pressable claimed the touch responder before the inner
+  // ScrollView could grab the pan, so the summary text never scrolled.
+  // New shape: a non-touch View for the layout root, a sibling
+  // TouchableWithoutFeedback covering only the backdrop area for the
+  // tap-to-close gesture, and a plain View for the card. ScrollView
+  // gets its touches uncontested.
   return (
     <Modal
       transparent
@@ -65,11 +73,19 @@ export function SummaryModal({ visible, chatId, onClose }: Props) {
       animationType="fade"
       onRequestClose={onClose}
     >
-      <Pressable style={styles.back} onPress={onClose}>
-        <Pressable style={styles.card} onPress={(e) => e.stopPropagation()}>
+      <View style={styles.back}>
+        <TouchableWithoutFeedback onPress={onClose}>
+          <View style={StyleSheet.absoluteFill} />
+        </TouchableWithoutFeedback>
+        <View style={styles.card}>
           <Text style={styles.title}>Chat summary</Text>
           <Text style={styles.sub}>{sub}</Text>
-          <ScrollView style={styles.body}>
+          <ScrollView
+            style={styles.body}
+            contentContainerStyle={styles.bodyContent}
+            showsVerticalScrollIndicator
+            keyboardShouldPersistTaps="handled"
+          >
             {loading && (
               <View style={styles.loading}>
                 <ActivityIndicator color={colors.green} />
@@ -90,8 +106,8 @@ export function SummaryModal({ visible, chatId, onClose }: Props) {
               <Text style={[styles.btnTxt, styles.btnTxtPrimary]}>Close</Text>
             </TouchableOpacity>
           </View>
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
     </Modal>
   );
 }
@@ -112,10 +128,20 @@ function makeStyles(colors: Colors) {
       borderRadius: 12,
       padding: 20,
       maxHeight: "85%",
+      // v1.179: stop the card from sitting flush against the screen edges
+      // on small devices, and make sure the ScrollView inside has a hard
+      // height to scroll inside rather than flex-growing.
+      flexShrink: 1,
     },
     title: { fontSize: 17, fontWeight: "600", color: colors.text },
     sub: { fontSize: 12, color: colors.muted, marginBottom: 12, marginTop: 2 },
-    body: { maxHeight: 360, marginBottom: 12 },
+    // v1.179: drop maxHeight on the ScrollView. flexShrink:1 lets the body
+    // claim whatever height the card has left after title/sub/buttons, so
+    // longer summaries scroll inside that bounded region. The previous
+    // fixed 360 worked on most screens but capped tall iPhones at ~half
+    // the modal even when there was room for more.
+    body: { flexShrink: 1, marginBottom: 12 },
+    bodyContent: { paddingRight: 4 },
     loading: { flexDirection: "row", alignItems: "center", gap: 10, padding: 12 },
     thinking: { color: colors.muted, fontStyle: "italic" },
     summary: { fontSize: 14, color: colors.text, lineHeight: 21 },
