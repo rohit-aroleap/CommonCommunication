@@ -2013,35 +2013,39 @@ function VoiceMicButton({
     };
   }, [recorder]);
 
-  // Reset recorder state on AppState transitions away from "active".
+  // Reset recorder state on EVERY AppState transition.
   //
-  // Why: on iOS, when the app backgrounds while a recorder is in the
-  // "prepared but idle" state (our fast-path optimization), the audio
-  // session can get into a weird state where foregrounding the app auto-
-  // resumes recording without any user tap. Trainers were seeing the mic
-  // light up on its own after switching apps and coming back.
+  // Why: on iOS, AVAudioSession's interruption / restore cycle can
+  // leave the recorder in a "recording" state when the app foregrounds,
+  // even if we explicitly stopped it on the way out. The original
+  // v1.150 fix only handled the way OUT (force-stop + preparedRef=false);
+  // trainers reported the 📝 Notes mic auto-starting on iOS when they
+  // switched back to a customer chat from another app. That's the
+  // way-IN side of the same problem — the iOS audio session re-armed
+  // a previously-prepared recorder.
   //
-  // Fix: when we transition out of "active", force-stop any active
-  // recording AND mark the recorder as unprepared. Next tap goes through
-  // the full prepare+permission flow — adds ~200ms latency on that one
-  // tap but eliminates the auto-record bug entirely. Normal in-foreground
-  // taps still use the pre-prepared fast path.
+  // v1.170 fix: also force-stop on the "active" transition. .stop() is
+  // idempotent (no-op / harmless throw when not recording) so we can
+  // call it unconditionally. Combined with preparedRef=false, this
+  // guarantees the recorder is in a clean idle state every time the
+  // user comes back to the app — they need to tap the mic to start
+  // recording, never get it for free.
+  //
+  // Trade-off accepted (same as v1.150): if a trainer was mid-recording
+  // and the app went briefly inactive (notification center, control
+  // center, app switcher), the recording is dropped on return. Better
+  // than spurious recordings.
   useEffect(() => {
-    const sub = AppState.addEventListener("change", (next) => {
-      if (next === "active") return;
-      // Best-effort stop — if we're not recording, this is a no-op or
-      // throws an "already stopped" we can swallow.
-      if (isRecording) {
-        recorder.stop().catch(() => {
-          /* swallow — recorder may be in a transitional state */
-        });
-      }
+    const sub = AppState.addEventListener("change", () => {
+      // Always best-effort stop — swallow errors so a "not recording"
+      // throw doesn't propagate.
+      recorder.stop().catch(() => {});
       preparedRef.current = false;
     });
     return () => sub.remove();
-    // recorder is stable for the component's lifetime; isRecording is
-    // captured fresh each AppState fire via closure on every render.
-  }, [recorder, isRecording]);
+    // recorder is stable for the component's lifetime; we don't need
+    // isRecording in deps anymore (we always call stop, regardless).
+  }, [recorder]);
 
   async function toggle() {
     if (transcribing) return;
