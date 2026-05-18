@@ -1,8 +1,15 @@
 // App root: auth gate → bottom tabs (Chats / Tickets / Team) with a stack on
 // top for the Thread screen. Registers for push notifications once on
-// sign-in. The tab navigator is material-top-tabs with tabBarPosition
-// "bottom" so the trainer can swipe horizontally between tabs (WhatsApp
-// pattern) while the bottom bar still drives tap-to-tab.
+// sign-in.
+//
+// v1.190: reverted to @react-navigation/bottom-tabs from material-top-tabs.
+// material-top-tabs requires react-native-pager-view, which is a NATIVE
+// dependency added in commit b25cbb4. The iOS binary on TestFlight was
+// built before that commit, so its native side lacks RNCViewPager and
+// every screen crashed with "Unimplemented component: <RNCViewPager>".
+// bottom-tabs uses RN primitives only — works on the existing binary via
+// OTA. Trade-off: no swipe-between-tabs gesture. The swipe can come back
+// in a future EAS build once the native module is bundled.
 
 import React, { useEffect } from "react";
 import {
@@ -23,7 +30,7 @@ import {
   type LinkingOptions,
   type RouteProp,
 } from "@react-navigation/native";
-import { createMaterialTopTabNavigator } from "@react-navigation/material-top-tabs";
+import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import {
   createNativeStackNavigator,
   type NativeStackNavigationProp,
@@ -69,7 +76,7 @@ const deepLinking: LinkingOptions<RootStackParamList> = {
   },
 };
 
-const Tabs = createMaterialTopTabNavigator();
+const Tabs = createBottomTabNavigator();
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 const TAB_TITLE: Record<string, string> = {
@@ -150,19 +157,15 @@ function TabsNav() {
   useWidgetSync();
   return (
     <Tabs.Navigator
-      tabBarPosition="bottom"
+      // v1.190: bottom-tabs version — no pager-view, no swipe gesture,
+      // but the same BottomTabBar component renders the visible tab UI
+      // exactly like before (tap-to-switch with pill highlight + badges).
       tabBar={(props) => <BottomTabBar {...props} />}
-      // Pager-view swipe is enabled by default. Keep all three screens
-      // mounted (lazy: false) so the swipe-in animation slides the real
-      // content in instead of a blank pane that then mounts mid-gesture.
-      // Trainers will use all three tabs in a session anyway, so the
-      // memory cost is fine.
       screenOptions={{
-        swipeEnabled: true,
+        headerShown: false,
+        // Keep all three screens mounted so switching is instant. Mirrors
+        // the lazy:false we used with material-top-tabs.
         lazy: false,
-        // Hide the default top indicator bar — BottomTabBar handles the
-        // active-state visual entirely.
-        tabBarIndicatorStyle: { height: 0 },
       }}
     >
       <Tabs.Screen name="Chats" component={ChatsScreen} />

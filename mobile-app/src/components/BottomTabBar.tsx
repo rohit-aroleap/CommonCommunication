@@ -1,9 +1,9 @@
-// Custom tab bar for the material-top-tab navigator. Material-top-tabs ships
-// a pill-style indicator at the top that we can't easily restyle, so we
-// render our own bottom bar that matches the look the bottom-tab navigator
-// used to render — pill behind the focused icon, emoji glyph, label below,
-// red badge for unread counts. Swipe between tabs comes for free from the
-// pager-view that material-top-tabs sits on.
+// Custom tab bar for the bottom-tab navigator. Renders the same pill-
+// highlighted icon row regardless of which tab navigator drives it.
+//
+// v1.190: switched from MaterialTopTabBarProps to BottomTabBarProps. The
+// shape is identical for the state/navigation fields we consume, so the
+// render logic is unchanged — only the type import flipped.
 
 import React from "react";
 import {
@@ -13,7 +13,7 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import type { MaterialTopTabBarProps } from "@react-navigation/material-top-tabs";
+import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
 import { useTheme } from "@/theme";
 import { useAppData } from "@/data/AppDataContext";
 
@@ -29,7 +29,7 @@ const TAB_LABEL: Record<string, string> = {
   Team: "Team",
 };
 
-export function BottomTabBar({ state, navigation }: MaterialTopTabBarProps) {
+export function BottomTabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
   const { chatsUnreadCount, ticketsCount, teamUnreadCount } = useAppData();
