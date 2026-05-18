@@ -44,6 +44,7 @@ import type {
   TeamUser,
   Template,
   Ticket,
+  UserGrant,
 } from "@/types";
 
 // How many chats / DMs to subscribe to. The first paint only needs the
@@ -91,6 +92,16 @@ interface AppDataValue {
   // chats…" on cold first-install instead of the misleading "No chats
   // match." empty-state during the brief pre-data window.
   dataReady: boolean;
+  // v1.196: limited-access trainer plumbing.
+  //   isLimited:  derived from teamMembers[myEmail].limited. When true,
+  //               the chat list filters down to manually-granted
+  //               customers + customers I have an open ticket on.
+  //   myGrants:   /userGrants/{myUid} — chatKey → { grantedAt }. Grants
+  //               older than 14 days no longer surface the chat.
+  //   grantChatAccess(chatKey): writes a grant for the current user.
+  isLimited: boolean;
+  myGrants: Record<string, UserGrant>;
+  grantChatAccess: (chatKey: string) => Promise<void>;
 }
 
 function normalizePhone(p: string): string {
@@ -129,6 +140,10 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
   const [tickets, setTickets] = useState<Record<string, Ticket>>({});
   const [teamUsers, setTeamUsers] = useState<Record<string, TeamUser>>({});
   const [teamMembers, setTeamMembers] = useState<Record<string, TeamMember>>({});
+  // v1.196: my own /userGrants subtree. Used by the limited-trainer chat
+  // list filter — chats with a grant in the last 14 days appear in my
+  // list (in addition to any chat I have an open ticket on).
+  const [myGrants, setMyGrants] = useState<Record<string, UserGrant>>({});
   const [dmsByKey, setDmsByKey] = useState<Record<string, { meta?: DmMeta }>>({});
   const [contacts, setContacts] = useState<Record<string, ContactInfo>>({});
   const [habitUsers, setHabitUsers] = useState<
@@ -194,6 +209,9 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     cacheGet<Record<string, boolean>>(uid, "myFavorites").then((v) => {
       if (!cancelled && v) setMyFavorites(v);
     });
+    cacheGet<Record<string, UserGrant>>(uid, "myGrants").then((v) => {
+      if (!cancelled && v) setMyGrants(v);
+    });
     cacheGet<Record<string, SendActivity>>(uid, "mySendActivity").then((v) => {
       if (!cancelled && v) setMySendActivity(v);
     });
@@ -246,6 +264,14 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
           const v = (s.val() || {}) as Record<string, boolean>;
           setMyFavorites(v);
           cacheSet(uid, "myFavorites", v);
+        }),
+      );
+      // v1.196: my own customer-access grants (limited-trainer flow).
+      unsubs.push(
+        onValue(ref(db, `${ROOT}/userGrants/${uid}`), (s) => {
+          const v = (s.val() || {}) as Record<string, UserGrant>;
+          setMyGrants(v);
+          cacheSet(uid, "myGrants", v);
         }),
       );
     };
@@ -529,6 +555,29 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       .catch(() => {});
   };
 
+  // v1.196: derive limited-trainer flag from teamMembers config keyed by
+  // the current user's email. Limited === false (or the user not being
+  // in teamMembers at all, e.g. bootstrap admins) means unrestricted.
+  const isLimited = useMemo(() => {
+    const myEmail = (user?.email || "").toLowerCase();
+    if (!myEmail) return false;
+    for (const m of Object.values(teamMembers || {})) {
+      if (m?.email && m.email.toLowerCase() === myEmail) {
+        return !!m.limited;
+      }
+    }
+    return false;
+  }, [teamMembers, user?.email]);
+
+  // v1.196: writes a grant for the current user on `chatKey`. Used by the
+  // "Add customer" flow on the limited-trainer chat list.
+  const grantChatAccess = async (chatKey: string) => {
+    if (!user || !chatKey) return;
+    await set(ref(db, `${ROOT}/userGrants/${user.uid}/${chatKey}`), {
+      grantedAt: Date.now(),
+    });
+  };
+
   const value: AppDataValue = useMemo(
     () => ({
       chatRows,
@@ -556,6 +605,9 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       ticketsCount,
       templates,
       dataReady,
+      isLimited,
+      myGrants,
+      grantChatAccess,
     }),
     [
       chatRows,
@@ -580,6 +632,8 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       mySendActivity,
       templates,
       dataReady,
+      isLimited,
+      myGrants,
     ],
   );
 

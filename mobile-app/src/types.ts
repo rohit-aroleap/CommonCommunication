@@ -154,6 +154,19 @@ export interface TeamMember {
   email?: string;
   name?: string;
   phones?: Record<string, boolean>; // phone string → true
+  // v1.196: when true, this trainer's chat list starts empty. They unlock
+  // customers individually for 14 days via the "Add customer" flow, or
+  // a teammate assigns them a ticket which unlocks the customer for the
+  // ticket's lifetime. Toggled via the desktop Team modal checkbox.
+  limited?: boolean;
+}
+
+// v1.196: per-user manual customer-access grants for limited trainers.
+// Lives at commonComm/userGrants/{uid}/{chatKey}. grantedAt is the ms
+// timestamp; access expires 14 days after that unless an open ticket
+// assigned to this user keeps it active.
+export interface UserGrant {
+  grantedAt: number;
 }
 
 // Internal team-to-team DM thread metadata. Lives at

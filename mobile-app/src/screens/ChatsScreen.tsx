@@ -3,7 +3,7 @@
 // exclusions) match mobile.html exactly.
 
 import React, { useCallback, useMemo, useState } from "react";
-import { FlatList, StyleSheet, Text, View } from "react-native";
+import { Alert, FlatList, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { space, useStyles, type Colors } from "@/theme";
 import { useAppData, isDailyGroup } from "@/data/AppDataContext";
@@ -11,6 +11,7 @@ import { useAuth } from "@/auth/AuthContext";
 import { resolveDisplayName } from "@/lib/displayName";
 import { ChatRowItem } from "@/components/ChatRow";
 import { FilterBar } from "@/components/FilterBar";
+import { AddCustomerModal } from "@/components/AddCustomerModal";
 import { DAILY_SENTINEL } from "@/types";
 import { FERRA_TAG_STAGE } from "@/config";
 import { normalizeFerraPhone } from "@/lib/ferra";
@@ -43,6 +44,9 @@ export function ChatsScreen() {
     mySendActivity,
     toggleFavorite,
     dataReady,
+    isLimited,
+    myGrants,
+    grantChatAccess,
   } = useAppData();
   const { user } = useAuth();
 
@@ -50,6 +54,8 @@ export function ChatsScreen() {
   const [stageFilter, setStageFilter] = useState("");
   const [search, setSearch] = useState("");
   const [favoritesOnly, setFavoritesOnly] = useState(false);
+  // v1.196: limited-trainer "Add customer" modal state.
+  const [addCustomerOpen, setAddCustomerOpen] = useState(false);
   const styles = useStyles(makeStyles);
 
   // v1.146: warn the user if their phone doesn't have a Groq API key set.
@@ -113,9 +119,34 @@ export function ChatsScreen() {
     [chatRows, habitUsers, cancelledUsers, ferraIndex, contacts, teamPhones],
   );
 
+  // v1.196: limited-trainer visibility filter. A chat is visible iff
+  // (manual grant in last 14 days) OR (open ticket assigned to me on
+  // that chat). Computed once per render and applied alongside the
+  // other filters below. Returns null when the user isn't limited, so
+  // the rest of the pipeline can skip the check entirely.
+  const visibleChatKeysForLimited = useMemo<Set<string> | null>(() => {
+    if (!isLimited) return null;
+    const visible = new Set<string>();
+    const now = Date.now();
+    const FOURTEEN_DAYS = 14 * 24 * 60 * 60 * 1000;
+    for (const [chatKey, grant] of Object.entries(myGrants || {})) {
+      if (grant?.grantedAt && now - grant.grantedAt < FOURTEEN_DAYS) {
+        visible.add(chatKey);
+      }
+    }
+    // Tickets assigned to me unlock the chat for the ticket's lifetime —
+    // myTicketChatKeys already does the filter (open + assignee=me).
+    for (const ck of myTicketChatKeys) visible.add(ck);
+    return visible;
+  }, [isLimited, myGrants, myTicketChatKeys]);
+
   const filtered = useMemo(() => {
     let rows = enriched;
     if (!isAdmin) rows = rows.filter((r) => !r.row.private);
+    if (visibleChatKeysForLimited) {
+      const set = visibleChatKeysForLimited;
+      rows = rows.filter((r) => set.has(r.row.chatKey));
+    }
 
     // Daily-workout cohort groups: only visible when explicitly picked.
     if (statusFilter === DAILY_SENTINEL) {
@@ -155,6 +186,7 @@ export function ChatsScreen() {
     search,
     ferraIndex,
     sharedSubsByPhone,
+    visibleChatKeysForLimited,
   ]);
 
   // Partition: chats with my open ticket anchor the very top, then
@@ -222,6 +254,19 @@ export function ChatsScreen() {
           </Text>
         </View>
       )}
+      {/* v1.196: limited-trainer add-customer entry point. Sits at the
+          top of the chat list as a tappable row. Tapping opens the
+          AddCustomerModal where the trainer types a phone number and
+          unlocks that customer for 14 days. */}
+      {isLimited && (
+        <TouchableOpacity
+          style={styles.addCustomerRow}
+          onPress={() => setAddCustomerOpen(true)}
+          accessibilityLabel="Add customer by phone number"
+        >
+          <Text style={styles.addCustomerTxt}>＋  Add customer</Text>
+        </TouchableOpacity>
+      )}
       <FlatList
         data={listData}
         keyExtractor={(item) => item.key}
@@ -287,6 +332,8 @@ export function ChatsScreen() {
                 ? "Loading chats…"
                 : favoritesOnly
                 ? "No favorites yet."
+                : isLimited
+                ? "Your chat list is empty. Tap + Add customer above to unlock a customer's chat, or wait for a teammate to assign you a ticket."
                 : "No chats match."}
             </Text>
           </View>
@@ -296,6 +343,23 @@ export function ChatsScreen() {
             <Text style={styles.versionTxt}>{getDisplayVersion()}</Text>
           </View>
         }
+      />
+      <AddCustomerModal
+        visible={addCustomerOpen}
+        onCancel={() => setAddCustomerOpen(false)}
+        onAdd={async (chatKey) => {
+          await grantChatAccess(chatKey);
+          // Tell the trainer what happened. If no /chats record exists yet
+          // for that key (customer never messaged the org's WhatsApp),
+          // the chat row won't appear until messages start landing.
+          const hasChat = chatRows.some((r) => r.chatKey === chatKey);
+          if (!hasChat) {
+            Alert.alert(
+              "Added",
+              "No existing chat history for that number yet. The chat will appear in your list as soon as a message arrives.",
+            );
+          }
+        }}
       />
     </SafeAreaView>
   );
@@ -318,6 +382,20 @@ function makeStyles(colors: Colors) {
       borderLeftColor: "#e0a500",
       paddingHorizontal: space.md,
       paddingVertical: 8,
+    },
+    // v1.196: limited-trainer add-customer entry row. Sits between the
+    // filter bar and the chat list. Tap → AddCustomerModal opens.
+    addCustomerRow: {
+      paddingHorizontal: space.md,
+      paddingVertical: 10,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+      backgroundColor: colors.panel,
+    },
+    addCustomerTxt: {
+      color: colors.green,
+      fontSize: 14,
+      fontWeight: "600",
     },
     noKeyBannerTxt: {
       color: "#5c4400",

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.195</title>
+<title>CommonCommunication v1.196</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -397,6 +397,16 @@
     color: var(--muted); font-size: 16px; padding: 0 4px;
   }
   .team-member-row .rm:hover { color: #d9534f; }
+  /* v1.196: limited-access toggle. Sits inline between the email and the
+     × remove button. Off by default; on flips trainer to the gated chat
+     list mode. */
+  .team-member-row .limited-toggle {
+    display: flex; align-items: center; gap: 4px;
+    font-size: 11px; color: var(--muted);
+    cursor: pointer;
+    user-select: none;
+  }
+  .team-member-row .limited-toggle input { cursor: pointer; margin: 0; }
   /* v1.132: inline display-name editor. Feeds the @mention picker
      and other UIs that show "who said this" so we don't have to
      stare at full emails. Optional — falls back to email when blank. */
@@ -524,6 +534,18 @@
   }
 
   .chat-list { flex: 1; overflow-y: auto; }
+  /* v1.196: tappable row at the top of the chat list when the signed-in
+     trainer has the limited-access flag. Opens the Add Customer modal. */
+  .add-customer-row {
+    padding: 10px 16px;
+    background: var(--header);
+    border-bottom: 1px solid var(--border);
+    color: var(--green);
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .add-customer-row:hover { background: var(--hover); }
   .chat-row {
     display: flex; align-items: center; padding: 10px 16px;
     cursor: pointer; gap: 12px;
@@ -1606,7 +1628,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.195</div>
+    <div class="login-version">v1.196</div>
   </div>
 </div>
 
@@ -1614,7 +1636,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.195</span>
+    <span class="ver">v1.196</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -1703,6 +1725,11 @@
            (anchored off the rail's 🎚️ button). Existing JS still finds
            them by ID so renderFilterPills + renderTagFilters keep working
            without code changes. -->
+      <!-- v1.196: limited-trainer add-customer entry, hidden by default.
+           renderChatList toggles visibility based on isLimitedUser(). -->
+      <div id="addCustomerRow" class="add-customer-row" style="display:none;">
+        ＋  Add customer
+      </div>
       <div class="chat-list" id="chatList">
         <div class="empty">No chats yet. Click + to start one.</div>
       </div>
@@ -1929,6 +1956,27 @@
   <img class="media-viewer-img" id="mediaViewerImg" alt="" />
 </div>
 
+<!-- ============== ADD CUSTOMER MODAL (v1.196) ============== -->
+<!-- Limited-trainer entry to unlock a customer chat. Type a phone number,
+     a /userGrants/{uid}/{chatKey} record is written, the chat appears in
+     the trainer's list for 14 days (or longer if a teammate later assigns
+     them a ticket on it). -->
+<div class="modal-back" id="addCustomerModal">
+  <div class="modal" style="width:420px; max-width:94vw;">
+    <h3 style="margin-bottom:4px;">Add customer</h3>
+    <div style="font-size:12px; color:var(--muted); margin-bottom:14px; line-height:1.5;">
+      Enter the customer's phone number to unlock their chat. Access lasts 14 days. If a teammate later assigns you a ticket on this customer, access stays until the ticket is resolved.
+    </div>
+    <input id="addCustomerPhone" type="tel" placeholder="+91 98765 43210"
+      style="width:100%; padding:9px 12px; font-size:14px; border:1px solid var(--border); border-radius:6px; box-sizing:border-box;" />
+    <div id="addCustomerError" style="color:#d9534f; font-size:12px; margin-top:6px; min-height:14px;"></div>
+    <div class="actions" style="margin-top:14px;">
+      <button class="btn btn-secondary" id="addCustomerCancel">Cancel</button>
+      <button class="btn btn-primary" id="addCustomerSubmit">Add</button>
+    </div>
+  </div>
+</div>
+
 <!-- ============== SUMMARY MODAL ============== -->
 <div class="modal-back" id="summaryModal">
   <div class="modal" style="width:600px; max-width:94vw; max-height:80vh; display:flex; flex-direction:column;">
@@ -2060,7 +2108,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.195";
+const APP_VERSION = "v1.196";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -2095,6 +2143,10 @@ let _openPopover = null;          // current ticket popover DOM element
 let myLastSeen = {};              // chatKey -> ts (ms): when I last opened the chat
 let myFavorites = {};             // chatKey -> true: per-user favorites/pins
 let mySendActivity = {};          // chatKey -> { count, lastAt }: my recent sends (for Pin? suggest)
+// v1.196: limited-trainer manual customer-access grants. chatKey → { grantedAt: number }.
+// Populated by listenMyGrants() once the user is authed. Chat list applies a 14-day
+// visibility window on top of this map.
+let myGrants = {};
 const SEND_SUGGEST_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const SEND_SUGGEST_MIN_COUNT = 3;
 let _baseTabTitle = "CommonCommunication";
@@ -2438,6 +2490,7 @@ onAuthStateChanged(auth, async (user) => {
     listenMyLastSeen();
     listenMyFavorites();
     listenMySendActivity();
+    listenMyGrants();
     listenTemplates();
     pingWorker();
   } else {
@@ -2468,6 +2521,44 @@ async function isUserAllowed(email) {
 function isAdmin(email) {
   if (!email) return false;
   return BOOTSTRAP_ADMINS.map(e => e.toLowerCase()).includes(email.toLowerCase());
+}
+// v1.196: is the currently-signed-in user a limited-access trainer? Read
+// from /config/teamMembers — admin-controlled checkbox in the Team modal.
+// Returns false for bootstrap admins regardless of any record (admins
+// always see everything).
+function isLimitedUser() {
+  if (!currentUser) return false;
+  if (isAdmin(currentUser.email)) return false;
+  const myLower = String(currentUser.email || "").toLowerCase();
+  if (!myLower) return false;
+  for (const m of Object.values(teamMembersCache || {})) {
+    if (m?.email && String(m.email).toLowerCase() === myLower) {
+      return !!m.limited;
+    }
+  }
+  return false;
+}
+// v1.196: chats visible to a limited trainer right now. Returns null when
+// the user isn't limited so the caller can skip filtering.
+function visibleChatKeysForLimited() {
+  if (!isLimitedUser()) return null;
+  const visible = new Set();
+  const now = Date.now();
+  const FOURTEEN_DAYS = 14 * 24 * 60 * 60 * 1000;
+  for (const [chatKey, grant] of Object.entries(myGrants || {})) {
+    if (grant?.grantedAt && now - grant.grantedAt < FOURTEEN_DAYS) {
+      visible.add(chatKey);
+    }
+  }
+  // Open tickets assigned to me unlock the chat for the ticket's lifetime.
+  const myUid = currentUser?.uid;
+  if (myUid && ticketsCache) {
+    for (const t of Object.values(ticketsCache)) {
+      if (!t || t.status !== "open" || t.assignee !== myUid || !t.anchorChatId) continue;
+      visible.add(encodeKey(t.anchorChatId));
+    }
+  }
+  return visible;
 }
 function showUnauthorized(email) {
   loginScreen.classList.remove("hidden");
@@ -2578,9 +2669,17 @@ function renderAllowedList() {
       .map(p => `<span class="phone-pill">${escapeHtml(p)}<button class="rm-phone" data-key="${escapeHtml(key)}" data-phone="${escapeHtml(p)}" title="Unlink this number">×</button></span>`)
       .join("");
     const nameVal = member.name || "";
+    const limited = !!member.limited;
+    // v1.196: limited-access toggle. Off (default) = full trainer, sees
+    // everything. On = chat list starts empty; trainer unlocks customers
+    // one-by-one via the Add Customer flow OR by being assigned a ticket.
     return `<div class="team-member-row">
       <div class="top">
         <span class="em">${escapeHtml(display)}</span>
+        <label class="limited-toggle" title="Limited access: chat list starts empty; trainer manually adds customers (14-day window) or is assigned tickets">
+          <input type="checkbox" class="limited-input" data-key="${escapeHtml(key)}" ${limited ? "checked" : ""} />
+          <span>Limited access</span>
+        </label>
         <button class="rm" data-key="${escapeHtml(key)}" title="Remove from team">×</button>
       </div>
       <div class="name-row">
@@ -2594,6 +2693,15 @@ function renderAllowedList() {
       </div>
     </div>`;
   }).join("");
+  // v1.196: persist limited-access toggle changes immediately.
+  allowedListEl.querySelectorAll(".limited-input").forEach((inp) => {
+    inp.onchange = async () => {
+      await set(
+        ref(db, `${ROOT}/config/teamMembers/${inp.dataset.key}/limited`),
+        inp.checked ? true : null,
+      );
+    };
+  });
   allowedListEl.querySelectorAll(".rm").forEach(b => {
     b.onclick = async () => {
       if (!confirm("Remove this teammate from the allowlist? Their DMs stay on disk but they won't be able to sign in.")) return;
@@ -3368,6 +3476,15 @@ function listenMyFavorites() {
   if (!currentUser) return;
   onValue(ref(db, `${ROOT}/userState/${currentUser.uid}/favorites`), (snap) => {
     myFavorites = snap.val() || {};
+    renderChatList(lastChatRows);
+  });
+}
+// v1.196: limited-trainer grants subscription. renderChatList runs the
+// visibility filter against this map every time it fires.
+function listenMyGrants() {
+  if (!currentUser) return;
+  onValue(ref(db, `${ROOT}/userGrants/${currentUser.uid}`), (snap) => {
+    myGrants = snap.val() || {};
     renderChatList(lastChatRows);
   });
 }
@@ -4802,7 +4919,19 @@ function renderChatList(rows) {
   }
   const isCurrentUserAdmin = isAdmin(currentUser?.email);
   // Non-admins never see private chats. Admins see them with a 🔒 indicator.
-  const afterPrivacy = isCurrentUserAdmin ? enriched : enriched.filter(r => !r.private);
+  let afterPrivacy = isCurrentUserAdmin ? enriched : enriched.filter(r => !r.private);
+
+  // v1.196: limited-trainer visibility filter. Hides every chat except
+  // those manually granted in the last 14 days OR with an open ticket
+  // assigned to me. Also shows the "+ Add customer" entry row.
+  const visibleSet = visibleChatKeysForLimited();
+  const addCustomerRow = document.getElementById("addCustomerRow");
+  if (addCustomerRow) {
+    addCustomerRow.style.display = isLimitedUser() ? "" : "none";
+  }
+  if (visibleSet) {
+    afterPrivacy = afterPrivacy.filter(r => visibleSet.has(r.chatKey));
+  }
 
   // Apply the status (row 1) filter first, separately from the tag (row 2)
   // filter. We need each row's counts to reflect "what would happen if I
@@ -5551,6 +5680,60 @@ let _lastSummaryChatId = null;
 summarizeBtn.onclick = () => runSummarize(false);
 summaryRegen.onclick = () => runSummarize(true);
 summaryClose.onclick = () => summaryModal.classList.remove("visible");
+
+// v1.196: Add Customer modal wiring. Limited trainers tap the "＋ Add
+// customer" row at the top of the chat list to open this. Submitting
+// writes a grant to /userGrants/{uid}/{chatKey} which the chat list
+// honors as a 14-day visibility window.
+const addCustomerModal = $("addCustomerModal");
+const addCustomerPhone = $("addCustomerPhone");
+const addCustomerError = $("addCustomerError");
+const addCustomerCancel = $("addCustomerCancel");
+const addCustomerSubmit = $("addCustomerSubmit");
+const addCustomerRowEl = $("addCustomerRow");
+function openAddCustomer() {
+  addCustomerPhone.value = "";
+  addCustomerError.textContent = "";
+  addCustomerModal.classList.add("visible");
+  setTimeout(() => addCustomerPhone.focus(), 50);
+}
+function closeAddCustomer() {
+  addCustomerModal.classList.remove("visible");
+}
+function phoneToChatKey(input) {
+  const digits = String(input || "").replace(/\D/g, "");
+  if (!digits || digits.length < 7) return null;
+  let normalized = digits;
+  if (digits.length === 10 && /^[6-9]/.test(digits)) normalized = "91" + digits;
+  return encodeKey(normalized + "@c.us");
+}
+addCustomerRowEl.onclick = openAddCustomer;
+addCustomerCancel.onclick = closeAddCustomer;
+addCustomerSubmit.onclick = async () => {
+  const ck = phoneToChatKey(addCustomerPhone.value);
+  if (!ck) {
+    addCustomerError.textContent = "Enter a valid phone number (10+ digits).";
+    return;
+  }
+  if (!currentUser) return;
+  try {
+    await set(ref(db, `${ROOT}/userGrants/${currentUser.uid}/${ck}`), {
+      grantedAt: Date.now(),
+    });
+    closeAddCustomer();
+    // If no chat history exists yet for this key, the row won't appear
+    // until messages start landing. Tell the trainer so they're not
+    // confused by the empty list.
+    if (!chatsCache[ck]) {
+      alert("Added. No existing chat history for that number yet — the chat will appear in your list as soon as a message arrives.");
+    }
+  } catch (e) {
+    addCustomerError.textContent = "Couldn't add: " + (e?.message || e);
+  }
+};
+addCustomerPhone.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") addCustomerSubmit.click();
+});
 
 // v1.194: in-app image viewer wiring. window.openMediaViewer is called by
 // the onclick on every <img> rendered by renderMediaHtml. Sets the src,
