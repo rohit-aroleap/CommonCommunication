@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.184</title>
+<title>CommonCommunication v1.185</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -1581,7 +1581,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.184</div>
+    <div class="login-version">v1.185</div>
   </div>
 </div>
 
@@ -1589,7 +1589,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.184</span>
+    <span class="ver">v1.185</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -2026,7 +2026,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.184";
+const APP_VERSION = "v1.185";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -7400,16 +7400,14 @@ function _waInline(text) {
   };
   while (i < text.length) {
     const c = text[i];
-    // URL auto-detect
-    if ((c === "h" || c === "H") && /^https?:\/\//i.test(text.slice(i))) {
-      const um = text.slice(i).match(/^https?:\/\/[^\s<>]+[^\s<>.,;:!?)\]'"]/i);
-      if (um) {
-        flush();
-        const u = um[0];
-        out += `<a href="${escapeHtml(u)}" target="_blank" rel="noopener">${escapeHtml(u)}</a>`;
-        i += u.length;
-        continue;
-      }
+    // v1.185: link auto-detect (URLs, www, bare domains, emails). Run
+    // before inline markers so `_` inside a URL isn't read as italic.
+    const link = _waDetectLink(text, i);
+    if (link) {
+      flush();
+      out += `<a href="${escapeHtml(link.url)}" target="_blank" rel="noopener">${escapeHtml(link.text)}</a>`;
+      i += link.text.length;
+      continue;
     }
     // Inline marker
     if (c === "*" || c === "_" || c === "~" || c === "`") {
@@ -7437,6 +7435,41 @@ function _waInline(text) {
   }
   flush();
   return out;
+}
+
+// v1.185: link auto-detection at position i. Mirrors mobile's detectLinkAt
+// exactly — explicit http(s)://, www.-prefixed domains, bare domains like
+// "ferra.club", and email addresses. Returns null otherwise.
+function _waDetectLink(text, i) {
+  const prev = i > 0 ? text[i - 1] : undefined;
+  if (_waIsWordChar(prev)) return null;
+  const rest = text.slice(i);
+
+  // Email — first, before bare-domain
+  const em = rest.match(/^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,24}/);
+  if (em) return { url: "mailto:" + em[0], text: em[0] };
+
+  // Explicit http(s)://
+  const hm = rest.match(/^https?:\/\/[^\s<>]+/i);
+  if (hm) {
+    const cleaned = _waStripTrailingPunct(hm[0]);
+    return { url: cleaned, text: cleaned };
+  }
+
+  // Bare domain. TLD must be 2–24 letters so "3.14" / "e.g." / "etc."
+  // don't false-positive.
+  const dm = rest.match(/^[a-zA-Z][a-zA-Z0-9-]*(?:\.[a-zA-Z0-9-]+)*\.[a-zA-Z]{2,24}(?:\/[^\s<>]*)?/);
+  if (dm) {
+    const cleaned = _waStripTrailingPunct(dm[0]);
+    if (cleaned.indexOf(".") === -1) return null;
+    return { url: "https://" + cleaned, text: cleaned };
+  }
+
+  return null;
+}
+
+function _waStripTrailingPunct(s) {
+  return s.replace(/[.,;:!?)\]'"]+$/, "");
 }
 
 function _waFindCloser(text, from, marker) {

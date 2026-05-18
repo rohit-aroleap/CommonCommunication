@@ -44,7 +44,10 @@ export type Span =
   | { kind: "italic"; spans: Span[] }
   | { kind: "strike"; spans: Span[] }
   | { kind: "mono"; text: string }
-  | { kind: "link"; url: string };
+  // v1.185: `url` is what we open on tap (https:// prefixed for bare
+  // domains, mailto: for emails). `text` is what the bubble displays
+  // (the original match, e.g. "ferra.club" without the prefix).
+  | { kind: "link"; url: string; text: string };
 
 // ───────────────────────── Parser ─────────────────────────
 
@@ -152,17 +155,16 @@ function parseInline(text: string): Span[] {
   while (i < text.length) {
     const c = text[i];
 
-    // URL auto-detection. Run before inline markers so e.g. `_` inside
-    // URLs isn't interpreted as italic.
-    if ((c === "h" || c === "H") && /^https?:\/\//i.test(text.slice(i))) {
-      // Greedy but stop at whitespace/closing punct that's clearly trailing
-      const um = text.slice(i).match(/^https?:\/\/[^\s<>]+[^\s<>.,;:!?)\]'"]/i);
-      if (um) {
-        flush();
-        out.push({ kind: "link", url: um[0] });
-        i += um[0].length;
-        continue;
-      }
+    // v1.185: link auto-detection. Run before inline markers so `_`
+    // inside a URL isn't read as italic. Covers explicit http(s)://
+    // URLs, www.-prefixed bare URLs, bare domains like "ferra.club",
+    // and email addresses.
+    const link = detectLinkAt(text, i);
+    if (link) {
+      flush();
+      out.push({ kind: "link", url: link.url, text: link.text });
+      i += link.text.length;
+      continue;
     }
 
     // Inline marker open?
@@ -211,6 +213,48 @@ function findCloser(text: string, from: number, marker: string): number {
     return j;
   }
   return -1;
+}
+
+// v1.185: link / email auto-detection at position i. Returns the URL to
+// open (with https:// or mailto: prefix as needed) and the display text
+// (the original match without any added prefix) — so a "ferra.club"
+// shows as "ferra.club" in the bubble but opens https://ferra.club. The
+// boundary rule (previous char not a word char) keeps us from latching
+// onto links inside words.
+function detectLinkAt(
+  text: string,
+  i: number,
+): { url: string; text: string } | null {
+  const prev = i > 0 ? text[i - 1] : undefined;
+  if (isWordChar(prev)) return null;
+  const rest = text.slice(i);
+
+  // Email — check before bare domain so we don't link the trailing
+  // "domain.tld" half on its own.
+  const em = rest.match(/^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,24}/);
+  if (em) return { url: `mailto:${em[0]}`, text: em[0] };
+
+  // Explicit http(s) URL.
+  const hm = rest.match(/^https?:\/\/[^\s<>]+/i);
+  if (hm) {
+    const cleaned = stripTrailingPunct(hm[0]);
+    return { url: cleaned, text: cleaned };
+  }
+
+  // Bare domain (incl. www.). Last segment (TLD) must be 2–24 letters
+  // so "3.14", "2.0", "etc.", "e.g." don't false-positive.
+  const dm = rest.match(/^[a-zA-Z][a-zA-Z0-9-]*(?:\.[a-zA-Z0-9-]+)*\.[a-zA-Z]{2,24}(?:\/[^\s<>]*)?/);
+  if (dm) {
+    const cleaned = stripTrailingPunct(dm[0]);
+    if (cleaned.indexOf(".") === -1) return null;
+    return { url: `https://${cleaned}`, text: cleaned };
+  }
+
+  return null;
+}
+
+function stripTrailingPunct(s: string): string {
+  return s.replace(/[.,;:!?)\]'"]+$/, "");
 }
 
 // ───────────────────────── Renderer ─────────────────────────
@@ -351,7 +395,7 @@ function renderSpan(s: Span, idx: number, colors: Colors): React.ReactNode {
           style={{ color: colors.green, textDecorationLine: "underline" }}
           onPress={() => Linking.openURL(s.url).catch(() => {})}
         >
-          {s.url}
+          {s.text}
         </Text>
       );
   }
