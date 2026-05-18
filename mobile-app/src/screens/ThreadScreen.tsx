@@ -1698,6 +1698,21 @@ export function ThreadScreen({ route, navigation }: Props) {
             placeholderTextColor={colors.muted}
             multiline
           />
+          {/* v1.183: formatting cheat-sheet. Tappable hint that pops an
+              Alert listing the WhatsApp markers — discoverability nudge so
+              trainers don't have to memorize *bold* / _italic_ etc. */}
+          <TouchableOpacity
+            style={styles.fmtHint}
+            onPress={() =>
+              Alert.alert(
+                "Text formatting",
+                "*bold*\n_italic_\n~strike~\n`code`\n```code block```\n> quote\n- bullet\n1. numbered\n\nThese markers also work for the customer — WhatsApp formats them on their phone.",
+              )
+            }
+            hitSlop={8}
+          >
+            <Text style={styles.fmtHintTxt}>Aa</Text>
+          </TouchableOpacity>
           <TouchableOpacity
             style={[styles.attach, attachBusy && styles.attachBusy]}
             onPress={onAttach}
@@ -2553,6 +2568,23 @@ function makeStyles(colors: Colors) {
   },
   attachBusy: { opacity: 0.5 },
   attachTxt: { color: "white", fontSize: 18 },
+  // v1.183: formatting hint button. Smaller than attach/send (it's a
+  // discoverability affordance, not a primary action). Sits between
+  // input and 📎 so the action row reads input → Aa → 📎 → ➤.
+  fmtHint: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "rgba(255,255,255,0.12)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  fmtHintTxt: {
+    color: "white",
+    fontSize: 13,
+    fontWeight: "500",
+    fontStyle: "italic",
+  },
   input: {
     flex: 1,
     backgroundColor: colors.panel,

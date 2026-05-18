@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.182</title>
+<title>CommonCommunication v1.183</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -606,6 +606,50 @@
   .bubble.out { background: var(--bubble-out); }
   .bubble.in  { background: var(--bubble-in); }
   .bubble .text { white-space: pre-wrap; }
+  /* v1.183 WhatsApp-style formatting (rendered by formatWhatsApp). */
+  .bubble .text .wa-para { display: inline; }
+  .bubble .text strong { font-weight: 700; }
+  .bubble .text em { font-style: italic; }
+  .bubble .text s { text-decoration: line-through; }
+  .bubble .text code.wa-code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.9em;
+    background: rgba(127,127,127,0.18);
+    padding: 1px 4px;
+    border-radius: 3px;
+  }
+  .bubble .text pre.wa-pre {
+    margin: 6px 0;
+    background: rgba(127,127,127,0.18);
+    border-radius: 6px;
+    padding: 8px 10px;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .bubble .text pre.wa-pre code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.9em;
+  }
+  .bubble .text blockquote.wa-quote {
+    margin: 4px 0;
+    padding-left: 10px;
+    border-left: 3px solid var(--green);
+    color: inherit;
+    opacity: 0.92;
+    font-style: italic;
+    white-space: pre-wrap;
+  }
+  .bubble .text ul.wa-ul,
+  .bubble .text ol.wa-ol {
+    margin: 4px 0 4px 20px;
+    padding: 0;
+  }
+  .bubble .text ul.wa-ul li,
+  .bubble .text ol.wa-ol li {
+    margin: 2px 0;
+    line-height: 1.45;
+  }
   .bubble .media { margin-bottom: 4px; }
   .bubble .media img { max-width: 100%; max-height: 320px; border-radius: 6px; display: block; cursor: pointer; }
   .bubble .media video { max-width: 100%; max-height: 320px; border-radius: 6px; display: block; }
@@ -687,6 +731,15 @@
     display: flex; align-items: center; justify-content: center;
   }
   .composer .emoji-btn:hover { background: var(--hover); }
+  /* v1.183: formatting-hint button — same size as emoji/attach but with
+     a text glyph instead of an emoji. Italic so it visually reads as a
+     typography affordance. */
+  .composer #fmtHintBtn {
+    font-size: 15px;
+    font-style: italic;
+    font-weight: 600;
+    color: var(--muted);
+  }
 
   .composer .mic-btn {
     background: var(--header); border: 1px solid var(--border);
@@ -1503,7 +1556,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.182</div>
+    <div class="login-version">v1.183</div>
   </div>
 </div>
 
@@ -1511,7 +1564,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.182</span>
+    <span class="ver">v1.183</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -1645,6 +1698,10 @@
         <div class="messages" id="messages"></div>
         <div class="composer">
           <button class="emoji-btn" id="emojiBtn" title="Insert emoji">😀</button>
+          <!-- v1.183 formatting hint. Hover for cheat sheet; click pops the
+               same in a small popover. WhatsApp markers (*bold*, _italic_,
+               etc.) work both in our UI and on the customer's WhatsApp. -->
+          <button class="emoji-btn" id="fmtHintBtn" title="Text formatting:&#10;*bold*&#10;_italic_&#10;~strike~&#10;`code`&#10;```code block```&#10;> quote&#10;- bullet&#10;1. numbered&#10;&#10;Customers see these formatted on their WhatsApp too.">Aa</button>
           <button class="emoji-btn" id="attachBtn" title="Attach file (image, video, audio, document)">📎</button>
           <input type="file" id="fileInput" style="display:none;" accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx" />
           <!-- v1.134: left = voice-to-private-note (📝). -->
@@ -1933,7 +1990,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.182";
+const APP_VERSION = "v1.183";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -5776,7 +5833,7 @@ function renderMessages(list) {
       ? `<span class="status ${m.status || "sent"}">${statusLabel(m.status)}</span>`
       : "";
     const mediaHtml = renderMediaHtml(m);
-    const textHtml = m.text ? `<div class="text">${linkify(escapeHtml(m.text))}</div>` : "";
+    const textHtml = m.text ? `<div class="text">${formatWhatsApp(m.text)}</div>` : "";
     const ribbon = renderTicketRibbon(m.id);
     html += `
     <div class="msg-row ${out ? "out" : "in"}" data-msg-key="${escapeHtml(m.id)}">
@@ -7139,6 +7196,152 @@ function escapeHtml(s) {
 }
 function linkify(s) {
   return s.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+}
+
+// v1.183: WhatsApp-style text formatting → safe HTML. Parser logic
+// mirrors mobile-app/src/lib/whatsappFormat.tsx exactly so the rendered
+// output is consistent across surfaces. The wire format is unchanged —
+// we still send `*bold*` etc. to Periskope, WhatsApp formats it on the
+// customer's end. This function only changes what OUR dashboard shows.
+//
+// Supported: *bold*, _italic_, ~strike~, `mono`, ```block```, > quote,
+// - bullet / * bullet, 1. numbered, http(s):// URLs.
+function formatWhatsApp(text) {
+  if (!text) return "";
+  // Extract triple-backtick code blocks first. Anything inside stays
+  // literal (no further marker parsing).
+  const out = [];
+  const codeRe = /```([\s\S]*?)```/g;
+  let last = 0, m;
+  while ((m = codeRe.exec(text)) !== null) {
+    if (m.index > last) out.push(_waLineBlocks(text.slice(last, m.index)));
+    out.push(`<pre class="wa-pre"><code>${escapeHtml(m[1])}</code></pre>`);
+    last = codeRe.lastIndex;
+  }
+  if (last < text.length) out.push(_waLineBlocks(text.slice(last)));
+  return out.join("");
+}
+
+function _waLineBlocks(text) {
+  if (!text) return "";
+  const lines = text.split("\n");
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    // blockquote — consecutive "> " lines collapse
+    if (/^>\s?/.test(line) && line.replace(/^>\s?/, "").length > 0) {
+      const collected = [];
+      while (i < lines.length && /^>\s?/.test(lines[i]) && lines[i].replace(/^>\s?/, "").length > 0) {
+        collected.push(lines[i].replace(/^>\s?/, ""));
+        i++;
+      }
+      out.push(`<blockquote class="wa-quote">${_waInline(collected.join("\n"))}</blockquote>`);
+      continue;
+    }
+    // unordered list
+    if (/^[-*]\s+\S/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^[-*]\s+\S/.test(lines[i])) {
+        items.push(`<li>${_waInline(lines[i].replace(/^[-*]\s+/, ""))}</li>`);
+        i++;
+      }
+      out.push(`<ul class="wa-ul">${items.join("")}</ul>`);
+      continue;
+    }
+    // ordered list
+    if (/^\d+\.\s+\S/.test(line)) {
+      const items = [];
+      const startMatch = line.match(/^(\d+)\.\s+/);
+      const start = startMatch ? parseInt(startMatch[1], 10) : 1;
+      while (i < lines.length && /^\d+\.\s+\S/.test(lines[i])) {
+        items.push(`<li>${_waInline(lines[i].replace(/^\d+\.\s+/, ""))}</li>`);
+        i++;
+      }
+      out.push(`<ol class="wa-ol" start="${start}">${items.join("")}</ol>`);
+      continue;
+    }
+    // paragraph — gather until next block marker
+    const paraLines = [];
+    while (
+      i < lines.length &&
+      !(/^>\s?/.test(lines[i]) && lines[i].replace(/^>\s?/, "").length > 0) &&
+      !/^[-*]\s+\S/.test(lines[i]) &&
+      !/^\d+\.\s+\S/.test(lines[i])
+    ) {
+      paraLines.push(lines[i]);
+      i++;
+    }
+    // Use a span (not <p>) so paragraph margins don't fight existing
+    // bubble line-height. Newlines inside become <br>.
+    const html = _waInline(paraLines.join("\n")).replace(/\n/g, "<br>");
+    out.push(`<span class="wa-para">${html}</span>`);
+  }
+  return out.join("");
+}
+
+const _waWordChar = /[\p{L}\p{N}]/u;
+function _waIsWordChar(c) { return !!c && _waWordChar.test(c); }
+
+function _waInline(text) {
+  if (!text) return "";
+  let out = "";
+  let buf = "";
+  let i = 0;
+  const flush = () => {
+    if (buf) { out += escapeHtml(buf); buf = ""; }
+  };
+  while (i < text.length) {
+    const c = text[i];
+    // URL auto-detect
+    if ((c === "h" || c === "H") && /^https?:\/\//i.test(text.slice(i))) {
+      const um = text.slice(i).match(/^https?:\/\/[^\s<>]+[^\s<>.,;:!?)\]'"]/i);
+      if (um) {
+        flush();
+        const u = um[0];
+        out += `<a href="${escapeHtml(u)}" target="_blank" rel="noopener">${escapeHtml(u)}</a>`;
+        i += u.length;
+        continue;
+      }
+    }
+    // Inline marker
+    if (c === "*" || c === "_" || c === "~" || c === "`") {
+      const before = i > 0 ? text[i - 1] : undefined;
+      if (!_waIsWordChar(before)) {
+        const close = _waFindCloser(text, i + 1, c);
+        if (close > i + 1) {
+          const inner = text.slice(i + 1, close);
+          if (!inner.includes("\n")) {
+            flush();
+            if (c === "`") {
+              out += `<code class="wa-code">${escapeHtml(inner)}</code>`;
+            } else {
+              const tag = c === "*" ? "strong" : c === "_" ? "em" : "s";
+              out += `<${tag}>${_waInline(inner)}</${tag}>`;
+            }
+            i = close + 1;
+            continue;
+          }
+        }
+      }
+    }
+    buf += c;
+    i++;
+  }
+  flush();
+  return out;
+}
+
+function _waFindCloser(text, from, marker) {
+  for (let j = from; j < text.length; j++) {
+    if (text[j] !== marker) continue;
+    const prev = text[j - 1];
+    const next = j + 1 < text.length ? text[j + 1] : undefined;
+    if (prev === undefined || prev === " " || prev === "\t" || prev === "\n") continue;
+    if (_waIsWordChar(next)) continue;
+    return j;
+  }
+  return -1;
 }
 function formatTime(ts) {
   if (!ts) return "";

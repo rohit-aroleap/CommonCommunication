@@ -18,6 +18,7 @@ import {
 } from "react-native";
 import { space, useStyles, useTheme, type Colors } from "@/theme";
 import { mediaProxyUrl } from "@/lib/worker";
+import { FormattedText } from "@/lib/whatsappFormat";
 import type { Message } from "@/types";
 
 interface Props {
@@ -107,7 +108,9 @@ export function MessageBubble({
         ) : (
           <>
             <MediaBlock media={m.media} onLongPress={() => onLongPress(m)} />
-            {hasText ? <Text style={styles.text}>{m.text}</Text> : null}
+            {hasText ? (
+              <FormattedText text={m.text!} baseStyle={styles.text} />
+            ) : null}
           </>
         )}
         <View style={styles.footer}>
