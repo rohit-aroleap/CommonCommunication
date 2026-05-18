@@ -283,6 +283,15 @@ export function ThreadScreen({ route, navigation }: Props) {
   const [reassignTicket, setReassignTicket] = useState<Ticket | null>(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [attachBusy, setAttachBusy] = useState(false);
+  // v1.184: composer selection tracking for the contextual format toolbar.
+  // The ref carries the latest selection (used inside wrap handlers) and
+  // the boolean state drives toolbar visibility (re-renders on every
+  // selection change). Using a ref alongside state avoids the controlled-
+  // selection cursor-jump issues that plague Android <TextInput> when
+  // `selection` is passed as a prop on every keystroke.
+  const composerInputRef = useRef<TextInput>(null);
+  const composerSelectionRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
+  const [hasComposerSelection, setHasComposerSelection] = useState(false);
   // v1.151: long-press menu state. When set, a bottom-sheet style action
   // list slides up offering Copy / Edit / Delete / Cancel. Only own
   // outbound messages trigger the full menu; long-pressing an inbound
@@ -1138,6 +1147,35 @@ export function ThreadScreen({ route, navigation }: Props) {
     [isDm, meta, headerName, user],
   );
 
+  // v1.184: wrap the current composer selection in WhatsApp markers.
+  // Same effect as WhatsApp's Bold/Italic/Strike action-mode buttons on
+  // Android. Called by the contextual toolbar that appears whenever the
+  // composer has a non-empty text selection.
+  const wrapComposerSelection = useCallback(
+    (marker: string) => {
+      const sel = composerSelectionRef.current;
+      if (sel.start === sel.end) return;
+      const before = composer.slice(0, sel.start);
+      const selected = composer.slice(sel.start, sel.end);
+      const after = composer.slice(sel.end);
+      const newText = `${before}${marker}${selected}${marker}${after}`;
+      const newSel = {
+        start: sel.start + marker.length,
+        end: sel.end + marker.length,
+      };
+      setComposer(newText);
+      composerSelectionRef.current = newSel;
+      // Restore selection on the next tick — setNativeProps after state
+      // flush so the cursor doesn't jump to the end of the new string.
+      // Keeps the same range highlighted in case the trainer wants to
+      // apply another marker on top (e.g. bold then italic).
+      setTimeout(() => {
+        composerInputRef.current?.setNativeProps({ selection: newSel });
+      }, 0);
+    },
+    [composer],
+  );
+
   const onAttach = useCallback(async () => {
     if (!user || attachBusy) return;
     // v1.174: DMs now support attachments. The DM branch is in pickMedia
@@ -1689,24 +1727,72 @@ export function ThreadScreen({ route, navigation }: Props) {
             </TouchableOpacity>
           </View>
         )}
+        {/* v1.184: contextual formatting toolbar. Appears the moment the
+            composer has a non-empty selection (mirrors WhatsApp Android's
+            action-mode bar with Bold/Italic/Strikethrough). Disappears
+            when selection collapses. Tap a button → wraps the selected
+            text with the marker and keeps the selection active for chained
+            formatting. */}
+        {hasComposerSelection && (
+          <View style={styles.fmtToolbar}>
+            <TouchableOpacity
+              style={styles.fmtBtn}
+              onPress={() => wrapComposerSelection("*")}
+              hitSlop={8}
+            >
+              <Text style={[styles.fmtBtnTxt, { fontWeight: "700" }]}>B</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.fmtBtn}
+              onPress={() => wrapComposerSelection("_")}
+              hitSlop={8}
+            >
+              <Text style={[styles.fmtBtnTxt, { fontStyle: "italic" }]}>I</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.fmtBtn}
+              onPress={() => wrapComposerSelection("~")}
+              hitSlop={8}
+            >
+              <Text style={[styles.fmtBtnTxt, { textDecorationLine: "line-through" }]}>S</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.fmtBtn}
+              onPress={() => wrapComposerSelection("`")}
+              hitSlop={8}
+            >
+              <Text style={[styles.fmtBtnTxt, { fontFamily: "Courier", fontSize: 13 }]}>
+                {"</>"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
         <View style={styles.composerRow}>
           <TextInput
+            ref={composerInputRef}
             style={styles.input}
             value={composer}
             onChangeText={setComposer}
+            onSelectionChange={(e) => {
+              const sel = e.nativeEvent.selection;
+              composerSelectionRef.current = sel;
+              const has = sel.start !== sel.end;
+              if (has !== hasComposerSelection) setHasComposerSelection(has);
+            }}
             placeholder={replyTarget ? "Reply…" : "Type a message"}
             placeholderTextColor={colors.muted}
             multiline
           />
           {/* v1.183: formatting cheat-sheet. Tappable hint that pops an
-              Alert listing the WhatsApp markers — discoverability nudge so
-              trainers don't have to memorize *bold* / _italic_ etc. */}
+              Alert listing all the WhatsApp markers — including block
+              ones (quote, bullet, numbered) that don't have a button in
+              the contextual toolbar. */}
           <TouchableOpacity
             style={styles.fmtHint}
             onPress={() =>
               Alert.alert(
                 "Text formatting",
-                "*bold*\n_italic_\n~strike~\n`code`\n```code block```\n> quote\n- bullet\n1. numbered\n\nThese markers also work for the customer — WhatsApp formats them on their phone.",
+                "*bold*\n_italic_\n~strike~\n`code`\n```code block```\n> quote\n- bullet\n1. numbered\n\nTip: select any text to see Bold/Italic/Strike/Code buttons. These markers also format for the customer on their WhatsApp.",
               )
             }
             hitSlop={8}
@@ -2584,6 +2670,33 @@ function makeStyles(colors: Colors) {
     fontSize: 13,
     fontWeight: "500",
     fontStyle: "italic",
+  },
+  // v1.184: contextual formatting bar that appears above the composer
+  // row when there's a non-empty text selection. Visual analog of
+  // WhatsApp's system action-mode bar (Cut/Copy/Bold/Italic/Strike) —
+  // we can't extend the system menu in Expo managed, so we show our
+  // own strip in the same vertical zone (just above the input).
+  fmtToolbar: {
+    flexDirection: "row",
+    alignSelf: "flex-start",
+    backgroundColor: "rgba(255,255,255,0.10)",
+    borderRadius: 12,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+    marginBottom: 6,
+    gap: 2,
+  },
+  fmtBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    minWidth: 36,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  fmtBtnTxt: {
+    color: "white",
+    fontSize: 14,
   },
   input: {
     flex: 1,

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.183</title>
+<title>CommonCommunication v1.184</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -740,6 +740,31 @@
     font-weight: 600;
     color: var(--muted);
   }
+  /* v1.184: contextual format toolbar. Shown above the composer when the
+     textarea has a non-empty selection. Same visual zone where WhatsApp
+     Android's system action-mode bar sits. */
+  .fmt-toolbar {
+    display: flex;
+    gap: 4px;
+    padding: 6px 12px;
+    background: var(--header);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    align-items: center;
+  }
+  .fmt-toolbar .fmt-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 4px 12px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 14px;
+    color: var(--text);
+    min-width: 36px;
+  }
+  .fmt-toolbar .fmt-btn:hover { background: var(--hover); border-color: var(--border); }
+  .fmt-toolbar .fmt-btn code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
 
   .composer .mic-btn {
     background: var(--header); border: 1px solid var(--border);
@@ -1556,7 +1581,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.183</div>
+    <div class="login-version">v1.184</div>
   </div>
 </div>
 
@@ -1564,7 +1589,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.183</span>
+    <span class="ver">v1.184</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -1696,6 +1721,17 @@
           <div class="notes-list" id="notesList"></div>
         </div>
         <div class="messages" id="messages"></div>
+        <!-- v1.184: contextual format toolbar. Mirrors WhatsApp Android's
+             selection action-mode (Bold/Italic/Strikethrough/Code) — shows
+             above the composer the moment there's a non-empty selection
+             in the textarea. Buttons wrap the selection with WhatsApp
+             markers. Keyboard shortcuts (Ctrl/Cmd-B/I) also work. -->
+        <div class="fmt-toolbar" id="fmtToolbar" style="display:none;">
+          <button class="fmt-btn" data-marker="*" title="Bold (Ctrl+B)"><b>B</b></button>
+          <button class="fmt-btn" data-marker="_" title="Italic (Ctrl+I)"><i>I</i></button>
+          <button class="fmt-btn" data-marker="~" title="Strikethrough"><s>S</s></button>
+          <button class="fmt-btn" data-marker="`" title="Code"><code>&lt;/&gt;</code></button>
+        </div>
         <div class="composer">
           <button class="emoji-btn" id="emojiBtn" title="Insert emoji">😀</button>
           <!-- v1.183 formatting hint. Hover for cheat sheet; click pops the
@@ -1990,7 +2026,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.183";
+const APP_VERSION = "v1.184";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -5975,6 +6011,77 @@ composerInput.addEventListener("input", () => {
   composerInput.style.height = Math.min(composerInput.scrollHeight, 160) + "px";
 });
 sendBtn.onclick = doSend;
+
+// v1.184: contextual format toolbar wiring. Visibility tracks whether
+// composerInput has a non-empty selection. Clicking a button (or hitting
+// Ctrl/Cmd-B/I) wraps the selected text with WhatsApp markers and
+// re-selects the new wrapped range so further formatting can chain.
+const fmtToolbar = $("fmtToolbar");
+
+function wrapComposerSelection(marker) {
+  const start = composerInput.selectionStart;
+  const end = composerInput.selectionEnd;
+  if (start === end) return;
+  const before = composerInput.value.slice(0, start);
+  const selected = composerInput.value.slice(start, end);
+  const after = composerInput.value.slice(end);
+  composerInput.value = before + marker + selected + marker + after;
+  // Reselect the wrapped content (without the markers themselves) so
+  // chaining bold→italic works: user keeps the selection alive.
+  composerInput.setSelectionRange(start + marker.length, end + marker.length);
+  composerInput.focus();
+  // Trigger the existing input listener so auto-grow updates.
+  composerInput.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+function updateFmtToolbarVisibility() {
+  const has = composerInput.selectionStart !== composerInput.selectionEnd;
+  fmtToolbar.style.display = has ? "flex" : "none";
+}
+
+// "select" doesn't fire reliably for all selection changes; pair it with
+// keyup/mouseup so toggling visibility is responsive.
+composerInput.addEventListener("select", updateFmtToolbarVisibility);
+composerInput.addEventListener("keyup", updateFmtToolbarVisibility);
+composerInput.addEventListener("mouseup", updateFmtToolbarVisibility);
+composerInput.addEventListener("blur", () => {
+  // Small delay so a click on a toolbar button (which steals focus)
+  // doesn't immediately hide the toolbar before the click registers.
+  setTimeout(() => {
+    if (document.activeElement !== composerInput &&
+        !fmtToolbar.contains(document.activeElement)) {
+      fmtToolbar.style.display = "none";
+    }
+  }, 150);
+});
+
+// Wire button clicks.
+fmtToolbar.querySelectorAll(".fmt-btn").forEach((btn) => {
+  btn.addEventListener("mousedown", (e) => {
+    // mousedown (not click) so we wrap BEFORE the textarea loses focus.
+    e.preventDefault();
+    wrapComposerSelection(btn.dataset.marker);
+  });
+});
+
+// Keyboard shortcuts. Ctrl/Cmd-B = bold, Ctrl/Cmd-I = italic. Strike
+// doesn't have a standard shortcut on most platforms — skip it; the
+// toolbar button covers it.
+composerInput.addEventListener("keydown", (e) => {
+  const mod = e.ctrlKey || e.metaKey;
+  if (!mod) return;
+  if (e.key === "b" || e.key === "B") {
+    if (composerInput.selectionStart !== composerInput.selectionEnd) {
+      e.preventDefault();
+      wrapComposerSelection("*");
+    }
+  } else if (e.key === "i" || e.key === "I") {
+    if (composerInput.selectionStart !== composerInput.selectionEnd) {
+      e.preventDefault();
+      wrapComposerSelection("_");
+    }
+  }
+});
 
 // ====== QUICK REPLY TEMPLATES ======
 let templatesCache = {};   // templateId → { name, text, createdBy, createdAt }
