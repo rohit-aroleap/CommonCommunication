@@ -329,20 +329,24 @@ function makeStyles(colors: Colors) {
     // Bumped the line to 2px, switched both the line and the label to
     // the brand accent (colors.green — emerald in light, blue in dark)
     // so it reads clearly as "section break here, more chats below."
+    // v1.172: strip background now matches the chat-row panel color
+    // so the strip itself disappears — only the green line + label
+    // show, against a continuous chat-list surface. Line bumped 2 → 3px
+    // for a bit more weight.
     divider: {
       flexDirection: "row",
       alignItems: "center",
       paddingHorizontal: space.md,
       paddingVertical: 8,
-      backgroundColor: colors.bg,
+      backgroundColor: colors.panel,
       gap: space.sm,
     },
     dividerLine: {
       flex: 1,
-      height: 2,
+      height: 3,
       backgroundColor: colors.green,
       opacity: 0.55,
-      borderRadius: 1,
+      borderRadius: 1.5,
     },
     dividerTxt: {
       fontSize: 11,
