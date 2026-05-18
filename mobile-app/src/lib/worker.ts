@@ -189,18 +189,13 @@ export async function summarize(chatId: string): Promise<SummaryResponse> {
 // Resolves a Periskope-hosted media URL through the Worker proxy so requests
 // carry the right auth headers. Used for <Image source={{ uri }}> in bubbles.
 //
-// v1.174: Firebase Storage download URLs (used for internal-DM attachments)
-// are publicly fetchable — they carry their own ?alt=media&token=... auth
-// in the query string. Routing them through the worker just adds a useless
-// hop and would require the worker's allow-list to accept the FB host. Pass
-// these through unmodified.
+// v1.176: DM attachments live on the worker itself at /dm-media/<key>
+// (R2-backed). Those are already on the worker domain, no proxy hop
+// needed — skip them. Old v1.174 firebasestorage URLs still in the DB
+// continue to work via the worker /media allow-list.
 export function mediaProxyUrl(url: string): string {
-  if (isFirebaseStorageUrl(url)) return url;
+  if (url.startsWith(WORKER_URL + "/dm-media/")) return url;
   return `${WORKER_URL}/media?u=${encodeURIComponent(url)}`;
-}
-
-export function isFirebaseStorageUrl(url: string): boolean {
-  return /^https:\/\/firebasestorage\.googleapis\.com\//.test(url);
 }
 
 // Fire a push notification for a freshly-sent DM. The message itself is

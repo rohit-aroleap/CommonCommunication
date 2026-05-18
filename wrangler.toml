@@ -9,6 +9,15 @@ ALLOWED_ORIGIN = "*"
 [ai]
 binding = "AI"
 
+# v1.176: R2 bucket for internal-DM attachments. Firebase Storage requires
+# the Blaze plan, so we keep that off and store DM media in R2 instead
+# (10 GB free forever, no egress fees). The bucket must exist on the CF
+# dashboard before deploy. Create with:
+#   wrangler r2 bucket create commoncomm-dm-media
+[[r2_buckets]]
+binding = "DM_MEDIA"
+bucket_name = "commoncomm-dm-media"
+
 # Secrets to set via:
 #   wrangler secret put PERISKOPE_API_KEY
 #   wrangler secret put PERISKOPE_PHONE

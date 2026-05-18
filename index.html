@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.175</title>
+<title>CommonCommunication v1.176</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -1503,7 +1503,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.175</div>
+    <div class="login-version">v1.176</div>
   </div>
 </div>
 
@@ -1511,7 +1511,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.175</span>
+    <span class="ver">v1.176</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -1919,9 +1919,6 @@ import {
 import {
   getDatabase, ref, onValue, push, set, update, get, remove, child, query, orderByChild, limitToLast,
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
-import {
-  getStorage, ref as storageRef, uploadBytes, getDownloadURL,
-} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js";
 
 // ====== CONFIG ======
 const firebaseConfig = {
@@ -1936,7 +1933,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.175";
+const APP_VERSION = "v1.176";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -1947,10 +1944,9 @@ const BOOTSTRAP_ADMINS = ["rohit@aroleap.com", "rohitpatel.mailid297@gmail.com"]
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getDatabase(app);
-// v1.174: Storage handle for internal-DM attachments. Customer chats still
-// route attachments through worker → Periskope; DMs upload to Firebase
-// Storage directly because they never round-trip through Periskope.
-const storage = getStorage(app);
+// v1.176: Firebase Storage handle was here in v1.174 but the project would
+// need the Blaze plan to enable Storage. DM attachments now upload to
+// Cloudflare R2 via the worker (/dm-media/upload, /dm-media/<key>).
 const provider = new GoogleAuthProvider();
 
 // ====== STATE ======
@@ -5846,13 +5842,14 @@ function statusLabel(s) {
 // isn't set.
 function renderMediaHtml(m) {
   if (!m || !m.media || !m.media.url) return "";
-  // v1.174: DM attachments are uploaded directly to Firebase Storage,
-  // which serves the bytes publicly with a token in the query string.
-  // No auth headers needed — skip the worker proxy for those URLs (saves
-  // a hop and avoids needing firebasestorage.googleapis.com in the
-  // worker's host allow-list).
-  const isFbStorage = /^https:\/\/firebasestorage\.googleapis\.com\//.test(m.media.url);
-  const proxyUrl = isFbStorage
+  // v1.176: DM attachments live at `${WORKER_URL}/dm-media/<key>` (R2-backed
+  // through the worker). They're already on the worker domain — no proxy
+  // hop needed. Old v1.174 firebasestorage URLs also bypass the proxy
+  // since the file moved off Firebase Storage entirely.
+  const isOwnWorkerMedia =
+    WORKER_URL && m.media.url.startsWith(WORKER_URL + "/dm-media/");
+  const isLegacyFbStorage = /^https:\/\/firebasestorage\.googleapis\.com\//.test(m.media.url);
+  const proxyUrl = (isOwnWorkerMedia || isLegacyFbStorage)
     ? m.media.url
     : WORKER_URL
     ? `${WORKER_URL}/media?u=${encodeURIComponent(m.media.url)}`
@@ -6803,15 +6800,16 @@ async function doSendMedia(media) {
   }
 }
 
-// v1.174: DM media send. Mirrors doSendMedia but uploads bytes to Firebase
-// Storage (no Periskope, no worker) and writes the download URL into the
-// /dms/{pairKey}/messages record. Both desktop and mobile renderers fetch
-// the URL directly — Firebase Storage download URLs carry a token in the
-// query string and don't need the worker proxy.
+// v1.176: DM media send. Posts the file as multipart to the worker's
+// /dm-media/upload endpoint; worker stores in R2 and returns a public URL
+// (also on the worker domain). The URL goes into the DM record's media.url
+// so both desktop and mobile bubbles render through the same code path.
+// Customer-chat attachments still flow through worker → Periskope.
 async function doSendDmMedia(media) {
   const pairKey = pairKeyFromChatKey(currentChatId);
   const otherUid = pairKey.split("_").find(u => u !== currentUser.uid);
   if (!otherUid) { alert("Couldn't resolve DM peer."); return; }
+  if (!WORKER_URL) { alert("Worker URL not configured."); return; }
   const caption = composerInput.value.trim();
   const ts = Date.now();
   const fromName = currentUser.displayName || currentUser.email || "(team)";
@@ -6843,55 +6841,48 @@ async function doSendDmMedia(media) {
   composerInput.style.height = "auto";
 
   try {
-    // Storage path: commonComm/dms/{pairKey}/{msgId}/{safeName}. msgId
-    // namespaces per-message so simultaneous identical filenames can't
-    // clobber each other. safeName strips path separators.
-    const safeName = (media.filename || "file").replace(/[\/\\]/g, "_");
-    const path = `commonComm/dms/${pairKey}/${localMsgId}/${safeName}`;
-    const sRef = storageRef(storage, path);
-    // base64 → Uint8Array for uploadBytes. Avoids the round-trip through
-    // fetch(data:...).then(r=>r.blob()) which has odd behavior on Safari.
+    // base64 (from fileInput.onchange) → Blob so FormData streams the bytes
+    // (no double-base64 over the wire).
     const bin = atob(media.filedata);
     const bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    await uploadBytes(sRef, bytes, { contentType: media.mimetype });
-    const downloadUrl = await getDownloadURL(sRef);
+    const blob = new Blob([bytes], { type: media.mimetype });
+    const formData = new FormData();
+    formData.append("file", blob, media.filename);
+    formData.append("pairKey", pairKey);
+    formData.append("msgId", localMsgId);
+    const res = await fetch(`${WORKER_URL}/dm-media/upload`, {
+      method: "POST",
+      body: formData,
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || !j?.url) {
+      throw new Error(j?.error || `upload failed (HTTP ${res.status})`);
+    }
     await update(msgRef, {
       media: {
-        url: downloadUrl,
+        url: j.url,
         mimeType: media.mimetype,
         fileName: media.filename,
       },
       status: "sent",
     });
-    // Best-effort push fan-out to the teammate's phones, same shape as a
-    // text DM. Failure is silent — the message is already in Firebase.
-    if (WORKER_URL) {
-      fetch(`${WORKER_URL}/dm-notify`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pairKey,
-          fromUid: currentUser.uid,
-          fromName,
-          toUid: otherUid,
-          text: (caption || `${previewIcon} ${media.filename}`).slice(0, 200),
-        }),
-      }).catch(() => {});
-    }
+    // Best-effort push fan-out to the teammate's phones.
+    fetch(`${WORKER_URL}/dm-notify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        pairKey,
+        fromUid: currentUser.uid,
+        fromName,
+        toUid: otherUid,
+        text: (caption || `${previewIcon} ${media.filename}`).slice(0, 200),
+      }),
+    }).catch(() => {});
   } catch (e) {
-    // v1.175: surface the Firebase error to the user. "storage/unauthorized"
-    // means the bucket rules deny the write — fix the rules in the Firebase
-    // Console (Storage → Rules) to allow authenticated writes.
-    const code = e?.code ? `[${e.code}] ` : "";
     const msg = String(e?.message || e);
-    await update(msgRef, { status: "failed", error: `${code}${msg}`.slice(0, 300) });
-    alert(
-      "Attach failed: " + code + msg +
-        (code.includes("storage/unauthorized")
-          ? "\n\nAsk an admin to open Firebase Storage rules and allow authenticated writes to commonComm/dms/."
-          : "")
-    );
+    await update(msgRef, { status: "failed", error: msg.slice(0, 300) });
+    alert("Attach failed: " + msg);
   }
 }
 

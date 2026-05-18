@@ -42,14 +42,9 @@ import {
   set,
   update,
 } from "firebase/database";
-import {
-  getDownloadURL,
-  ref as storageRefFn,
-  uploadString,
-} from "firebase/storage";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { db, storage } from "@/firebase";
-import { ROOT, MAX_MEDIA_BYTES } from "@/config";
+import { db } from "@/firebase";
+import { ROOT, MAX_MEDIA_BYTES, WORKER_URL } from "@/config";
 import { space, useStyles, useTheme, type Colors } from "@/theme";
 import {
   useAppData,
@@ -1208,9 +1203,6 @@ export function ThreadScreen({ route, navigation }: Props) {
           Alert.alert("Too large", "Max attachment size is 25 MB.");
           return;
         }
-        const base64 = await FileSystem.readAsStringAsync(uri, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
         const mediaType = mimeType.startsWith("image/")
           ? "image"
           : mimeType.startsWith("video/")
@@ -1219,16 +1211,21 @@ export function ThreadScreen({ route, navigation }: Props) {
           ? "audio"
           : "document";
         if (isDm) {
-          // v1.174: DM path — upload bytes to Firebase Storage and write
-          // the message record inline. No worker, no Periskope.
+          // v1.176: DM path — upload via worker /dm-media/upload (R2 backend).
+          // No Periskope, no Firebase Storage. Streams the file as multipart,
+          // so we skip the base64 read entirely (saves ~33% memory + time
+          // on a 25 MB file).
           await doSendDmMedia({
             type: mediaType,
             filename: name,
             mimetype: mimeType,
-            filedata: base64,
             localUri: uri,
           });
         } else {
+          // Customer-chat path: worker /send expects base64 in JSON.
+          const base64 = await FileSystem.readAsStringAsync(uri, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
           await doSendMedia({
             type: mediaType,
             filename: name,
@@ -1301,15 +1298,15 @@ export function ThreadScreen({ route, navigation }: Props) {
       }
     }
 
-    // v1.174: DM media send. Mirrors doSendMedia but uploads bytes to
-    // Firebase Storage (no Periskope, no worker — DMs never leave our
-    // backend) and writes the download URL into the DM record so both
-    // the desktop and mobile renderers can fetch it directly.
+    // v1.176: DM media goes to Cloudflare R2 via the worker (Firebase
+    // Storage requires Blaze plan; R2 is free up to 10 GB). Customer-chat
+    // attachments still flow through worker → Periskope. The worker
+    // returns a public URL on its own domain (`/dm-media/<key>`) and we
+    // store that in the DM record's media.url just like before.
     async function doSendDmMedia(media: {
       type: "image" | "video" | "audio" | "document";
       filename: string;
       mimetype: string;
-      filedata: string;
       localUri: string;
     }) {
       if (!user || !otherUid) return;
@@ -1346,23 +1343,27 @@ export function ThreadScreen({ route, navigation }: Props) {
       });
       setComposer("");
       try {
-        // Storage path: commonComm/dms/{pairKey}/{msgId}/{safeName}. msgId
-        // namespaces so two trainers sending the same filename simultaneously
-        // can't clobber each other. safeName strips path separators so
-        // attackers can't write outside the namespace.
-        const safeName = media.filename.replace(/[\/\\]/g, "_") || "file";
-        const storagePath = `commonComm/dms/${pairKey}/${localMsgId}/${safeName}`;
-        const storageRef = storageRefFn(storage, storagePath);
-        // uploadString with data_url format: lets us send the base64
-        // we already have without round-tripping through fetch(blob:).
-        // The data URL prefix is reconstructed because we stripped it
-        // earlier (filedata is bare base64).
-        const dataUrl = `data:${media.mimetype};base64,${media.filedata}`;
-        await uploadString(storageRef, dataUrl, "data_url");
-        const downloadUrl = await getDownloadURL(storageRef);
+        // React Native FormData accepts the file-URI shape that fetch knows
+        // how to stream — no base64 round-trip needed.
+        const formData = new FormData();
+        formData.append("file", {
+          uri: media.localUri,
+          name: media.filename,
+          type: media.mimetype,
+        } as unknown as Blob);
+        formData.append("pairKey", pairKey);
+        formData.append("msgId", localMsgId);
+        const res = await fetch(`${WORKER_URL}/dm-media/upload`, {
+          method: "POST",
+          body: formData,
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok || !j?.url) {
+          throw new Error(j?.error || `upload failed (HTTP ${res.status})`);
+        }
         await update(msgRef, {
           media: {
-            url: downloadUrl,
+            url: j.url,
             mimeType: media.mimetype,
             fileName: media.filename,
           },
@@ -1377,24 +1378,12 @@ export function ThreadScreen({ route, navigation }: Props) {
           text: caption || `${previewIcon} ${media.filename}`,
         });
       } catch (e: any) {
-        // v1.175: surface the real Firebase error to the user. Without
-        // this the bubble just flips to ✗ with no clue why — usually
-        // the cause is Storage rules denying the write, in which case
-        // the error code is "storage/unauthorized" and the trainer
-        // needs an admin to open Storage rules in the Firebase Console.
-        const code = e?.code ? `[${e.code}] ` : "";
         const msg = String(e?.message || e);
         await update(msgRef, {
           status: "failed",
-          error: `${code}${msg}`.slice(0, 300),
+          error: msg.slice(0, 300),
         });
-        Alert.alert(
-          "Attach failed",
-          `${code}${msg}\n\n` +
-            "If this says 'storage/unauthorized', ask an admin to open " +
-            "Firebase Storage rules and allow authenticated writes to " +
-            "commonComm/dms/.",
-        );
+        Alert.alert("Attach failed", msg);
       }
     }
   }, [isDm, user, attachBusy, composer, chatKey, chatId, phone, pairKey, otherUid]);
