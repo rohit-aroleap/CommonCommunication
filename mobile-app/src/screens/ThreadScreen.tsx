@@ -1234,6 +1234,20 @@ export function ThreadScreen({ route, navigation }: Props) {
           mimeType = asset.mimeType || "application/octet-stream";
         }
         if (!uri) return;
+        // v1.186: HEIC guard. iPhones default to HEIC for new photos but
+        // HEIC bytes don't render on Android, Chrome, Firefox, or Edge.
+        // expo-image-picker's `quality: 0.85` is supposed to re-encode to
+        // JPEG on iOS, but it doesn't always — newer PHPicker mode and
+        // some library assets slip through as HEIC. Detect here and bail
+        // out with a tip to the trainer instead of uploading a file that
+        // will look broken to half the team.
+        if (isHeicFile(name, mimeType)) {
+          Alert.alert(
+            "iPhone HEIC photo",
+            "iPhone HEIC photos don't show on Android or in most browsers — they'd appear broken to other trainers.\n\nQuick fix on your iPhone:\nSettings → Camera → Formats → Most Compatible\n\nNew photos will save as JPEG and work for everyone. For this particular photo, open it in Photos, tap the Share icon → Save as JPEG (or take a screenshot), and re-attach.",
+          );
+          return;
+        }
         // SDK 53+ returns size by default; the explicit { size: true } option
         // was removed. Read info.size as before if it's present.
         const info = await FileSystem.getInfoAsync(uri);
@@ -2168,6 +2182,24 @@ export function ThreadScreen({ route, navigation }: Props) {
 //   🎤 (right of input) → composer fill (caller: onComposerTranscribed)
 // Each instance owns its own expo-audio recorder; the parent passes
 // `disabled` to prevent both from recording at once (the device mic is
+// v1.186: HEIC = Apple's High Efficiency Image Container. iPhone cameras
+// default to it but only iOS/Safari renderers can decode it natively;
+// Android, Chrome, Firefox, and Edge show a broken bubble. Detect by
+// MIME or file extension — both are unreliable in isolation (MIME may be
+// missing on DocumentPicker results, extension may be lowercased/cased).
+function isHeicFile(name: string, mimeType: string): boolean {
+  const m = (mimeType || "").toLowerCase();
+  const n = (name || "").toLowerCase();
+  return (
+    m === "image/heic" ||
+    m === "image/heif" ||
+    m === "image/heic-sequence" ||
+    m === "image/heif-sequence" ||
+    n.endsWith(".heic") ||
+    n.endsWith(".heif")
+  );
+}
+
 // shared hardware). onRecordingChange lets the parent track which mic is
 // active so it can disable the sibling.
 //

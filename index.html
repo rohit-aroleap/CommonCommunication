@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.185</title>
+<title>CommonCommunication v1.186</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -1581,7 +1581,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.185</div>
+    <div class="login-version">v1.186</div>
   </div>
 </div>
 
@@ -1589,7 +1589,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.185</span>
+    <span class="ver">v1.186</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -2026,7 +2026,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.185";
+const APP_VERSION = "v1.186";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -6875,6 +6875,54 @@ fileInput.onchange = async () => {
   await attachFile(file);
 };
 
+// v1.186: HEIC detection helper. Mirrors isHeicFile in mobile-app's
+// ThreadScreen.tsx exactly so the cross-surface behavior is consistent.
+function isHeicFile(name, mimeType) {
+  const m = (mimeType || "").toLowerCase();
+  const n = (name || "").toLowerCase();
+  return (
+    m === "image/heic" ||
+    m === "image/heif" ||
+    m === "image/heic-sequence" ||
+    m === "image/heif-sequence" ||
+    n.endsWith(".heic") ||
+    n.endsWith(".heif")
+  );
+}
+
+// v1.186: attempt canvas-based HEIC → JPEG conversion. Works only in
+// browsers that natively decode HEIC (Safari). Returns the new File on
+// success, null on failure (caller falls back to a blocking alert).
+async function tryConvertHeicToJpeg(file) {
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const img = new Image();
+    const loaded = await new Promise((resolve) => {
+      img.onload = () => resolve(true);
+      img.onerror = () => resolve(false);
+      img.src = objectUrl;
+    });
+    if (!loaded || !img.naturalWidth) return null;
+    const canvas = document.createElement("canvas");
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    ctx.drawImage(img, 0, 0);
+    const blob = await new Promise((resolve) =>
+      canvas.toBlob(resolve, "image/jpeg", 0.9),
+    );
+    if (!blob) return null;
+    const newName = file.name.replace(/\.(heic|heif)$/i, ".jpg");
+    return new File([blob], newName, { type: "image/jpeg" });
+  } catch (e) {
+    console.warn("HEIC conversion failed:", e);
+    return null;
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
 // v1.178: shared entry point for both the 📎 button and drag-and-drop.
 // Validates, branches on chat type, runs the upload.
 async function attachFile(file) {
@@ -6883,6 +6931,24 @@ async function attachFile(file) {
   if (sizeMB > 16) {
     alert(`File is ${sizeMB.toFixed(1)} MB. WhatsApp's per-message limit is ~16 MB. Try a smaller file.`);
     return;
+  }
+
+  // v1.186: HEIC guard. iPhones default to HEIC, which Safari can decode
+  // but Chrome/Firefox/Edge cannot. Convert via <canvas> when the browser
+  // can decode the bytes; otherwise alert and block — uploading a HEIC
+  // that half the team can't view is worse than asking for a re-pick.
+  if (isHeicFile(file.name, file.type)) {
+    const converted = await tryConvertHeicToJpeg(file);
+    if (!converted) {
+      alert(
+        "This is an iPhone HEIC photo. Your browser can't decode HEIC, so it would look broken to other teammates.\n\n" +
+        "Open the photo on a Mac (or in Safari) and re-pick, OR change your iPhone Camera setting:\n" +
+        "Settings → Camera → Formats → Most Compatible\n" +
+        "New photos will save as JPEG."
+      );
+      return;
+    }
+    file = converted;
   }
 
   const mt = file.type || "application/octet-stream";
