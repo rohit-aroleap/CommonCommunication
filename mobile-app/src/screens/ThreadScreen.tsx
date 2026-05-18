@@ -1980,7 +1980,22 @@ function VoiceMicButton({
         allowsRecording: true,
         playsInSilentMode: true,
       });
-      await recorder.prepareToRecordAsync();
+      // v1.155: the recorder's NATIVE state can outlive our preparedRef
+      // when the app foregrounds — the v1.150 AppState handler sets
+      // preparedRef=false to force the slow path on the next tap, but
+      // the underlying expo-audio session may still be in the "prepared"
+      // state from before. prepareToRecordAsync() then rejects with
+      // "AudioRecorder has already been prepared". Swallow that specific
+      // error and proceed — the native state IS ready to record, our
+      // flag was wrong, both are now in sync after this block.
+      try {
+        await recorder.prepareToRecordAsync();
+      } catch (prepErr) {
+        const msg = String((prepErr as Error)?.message || prepErr);
+        if (!/already been prepared/i.test(msg)) {
+          throw prepErr;
+        }
+      }
       preparedRef.current = true;
       recorder.record();
     } catch (e) {
