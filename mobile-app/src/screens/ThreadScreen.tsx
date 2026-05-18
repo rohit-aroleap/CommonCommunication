@@ -497,10 +497,34 @@ export function ThreadScreen({ route, navigation }: Props) {
   const sendDm = useCallback(async () => {
     const text = composer.trim();
     if (!text || !user || !otherUid) return;
+    // v1.171: snapshot the reply target NOW before any await so the
+    // composer's reply bar can be cleared immediately and a chat-change
+    // can't blow it away mid-flight. Mirrors the same snapshot pattern
+    // the customer-chat send uses (v1.153).
+    const replySnapshot = replyTarget;
     const ts = Date.now();
     const fromName = user.displayName || user.email || "(team)";
     const msgRef = push(ref(db, `${ROOT}/dms/${pairKey}/messages`));
-    await set(msgRef, { text, ts, fromUid: user.uid, fromName });
+    const record: Record<string, unknown> = {
+      text,
+      ts,
+      fromUid: user.uid,
+      fromName,
+    };
+    if (replySnapshot) {
+      // DM messages carry the SAME replyTo snapshot shape as customer
+      // messages — that's how MessageBubble's quoted card renders for
+      // both surfaces without branching. periskopeMsgId is null on the
+      // DM source since DMs never round-trip through Periskope.
+      record.replyTo = {
+        msgKey: replySnapshot.id,
+        periskopeMsgId: replySnapshot.periskopeMsgId || null,
+        text: (replySnapshot.text || replySnapshot.media?.caption || "").slice(0, 500),
+        isFromMe: replySnapshot.direction === "out",
+        senderName: replySnapshot.sentByName || null,
+      };
+    }
+    await set(msgRef, record);
     await update(ref(db, `${ROOT}/dms/${pairKey}/meta`), {
       participants: { [user.uid]: true, [otherUid]: true },
       lastMsgAt: ts,
@@ -509,6 +533,7 @@ export function ThreadScreen({ route, navigation }: Props) {
       lastMsgFromName: fromName,
     });
     setComposer("");
+    setReplyTarget(null);
     // Fire-and-forget push fan-out. Don't await — UX shouldn't depend on
     // notification delivery.
     notifyDm({
@@ -518,7 +543,7 @@ export function ThreadScreen({ route, navigation }: Props) {
       toUid: otherUid,
       text: text.slice(0, 200),
     });
-  }, [composer, user, pairKey, otherUid]);
+  }, [composer, user, pairKey, otherUid, replyTarget]);
 
   const send = useCallback(async () => {
     if (isDm) return sendDm();
