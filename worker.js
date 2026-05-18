@@ -1674,10 +1674,26 @@ async function handleDmMediaUpload(request, env) {
   if (!quota.ok) {
     return json({ error: quota.reason }, quota.status);
   }
-  const safeName = String(file.name || "file").replace(/[\/\\]/g, "_").slice(0, 200) || "file";
+  // v1.180: aggressively sanitize the filename. Anything outside the
+  // URL-safe set becomes "_". This avoids the v1.176 bug where desktop
+  // uploads like "Screenshot 2025-05-18.png" stored fine but the URL
+  // we returned wasn't encoded — browsers fetched with %20 in the path,
+  // R2 key still had a literal space, mismatch → 404 → broken image.
+  // Sanitizing at upload means the key, the URL, and the request path
+  // are all the same string regardless of encoding/decoding round-trips.
+  const safeName =
+    String(file.name || "file")
+      .normalize("NFKD")
+      .replace(/[^A-Za-z0-9._-]/g, "_")
+      .replace(/_+/g, "_")
+      .slice(0, 200) || "file";
   const key = `dms/${pairKey}/${msgId}/${safeName}`;
   try {
-    await env.DM_MEDIA.put(key, file.stream(), {
+    // arrayBuffer rather than stream() — small (≤25 MB) and avoids any
+    // platform quirks with multipart File.stream() consumption inside
+    // Workers. Memory is bounded by the size cap.
+    const bytes = await file.arrayBuffer();
+    await env.DM_MEDIA.put(key, bytes, {
       httpMetadata: {
         contentType: file.type || "application/octet-stream",
         cacheControl: "public, max-age=31536000, immutable",
@@ -1701,7 +1717,15 @@ async function handleDmMediaGet(request, env) {
   }
   const url = new URL(request.url);
   // Strip the leading "/dm-media/" prefix; rest is the R2 key.
-  const key = url.pathname.replace(/^\/dm-media\//, "");
+  // v1.180: decode the path so any legacy URLs with %20 etc. round-trip
+  // back to the stored key. New uploads sanitize names so the path is
+  // always plain ASCII, but old DB rows could still hold the encoded form.
+  let key;
+  try {
+    key = decodeURIComponent(url.pathname.replace(/^\/dm-media\//, ""));
+  } catch {
+    key = url.pathname.replace(/^\/dm-media\//, "");
+  }
   if (!key) return new Response("missing key", { status: 400 });
 
   // Range support — parse a single "bytes=A-B" range. Multi-range isn't worth
