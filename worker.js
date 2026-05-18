@@ -22,6 +22,19 @@ const ADMIN_EMAILS = new Set([
   "rohitpatel.mailid297@gmail.com",
 ]);
 
+// v1.177: R2 budget guards. These constants gate every DM upload so a
+// runaway bug or compromised account can't burn through the R2 free tier.
+// Tune freely — the per-user limit should comfortably cover real use
+// (a chatty trainer at 5/hr × 10hr = 50/day), and the global limit is
+// well under the 1M Class A ops/month free tier even at peak.
+const DM_MEDIA_USER_DAILY_LIMIT = 50;
+const DM_MEDIA_GLOBAL_DAILY_LIMIT = 1000;
+const DM_MEDIA_MAX_BYTES = 25 * 1024 * 1024;
+// Retention. Scheduled handler deletes R2 objects older than this. The
+// Firebase RTDB message record stays (so the chat history reads OK with
+// the "📎 filename" placeholder), only the blob is gone.
+const DM_MEDIA_RETENTION_DAYS = 90;
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -117,7 +130,90 @@ export default {
       return cors(env, json({ error: String(err && err.message || err) }, 500));
     }
   },
+
+  // v1.177: scheduled cleanup. Wrangler's [triggers] crons = ["0 3 * * *"]
+  // wakes this every day at 03:00 UTC. Deletes R2 objects whose `uploaded`
+  // timestamp is older than DM_MEDIA_RETENTION_DAYS. Cheap to run: each
+  // list() call is 1 Class A op and returns 1000 objects; even a busy
+  // team will be done in a handful of list+delete cycles.
+  async scheduled(event, env, ctx) {
+    try {
+      await cleanupOldDmMedia(env);
+    } catch (e) {
+      console.warn("scheduled cleanup failed:", e?.message || e);
+    }
+  },
 };
+
+// v1.177: walk R2 in pages, delete objects older than the retention window.
+// Returns count for log visibility (wrangler tail shows it).
+async function cleanupOldDmMedia(env) {
+  if (!env.DM_MEDIA) return 0;
+  const cutoffMs = Date.now() - DM_MEDIA_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  let cursor = undefined;
+  let deleted = 0;
+  // Cap iterations as a safety belt — even at 1000 objects/page, 50 pages
+  // is 50k files which is way more than this app could ever have.
+  for (let i = 0; i < 50; i++) {
+    const listed = await env.DM_MEDIA.list({ prefix: "dms/", cursor, limit: 1000 });
+    const stale = listed.objects
+      .filter((o) => o.uploaded && o.uploaded.getTime() < cutoffMs)
+      .map((o) => o.key);
+    if (stale.length > 0) {
+      // R2 delete accepts an array.
+      await env.DM_MEDIA.delete(stale);
+      deleted += stale.length;
+    }
+    if (!listed.truncated) break;
+    cursor = listed.cursor;
+  }
+  if (deleted > 0) console.log(`cleanupOldDmMedia: deleted ${deleted} objects`);
+  return deleted;
+}
+
+// v1.177: per-user + global daily upload caps. Counters live in Firebase
+// at commonComm/rateLimits/... keyed by YYYY-MM-DD so old days roll off
+// naturally. Non-atomic read-then-write is fine — a 1-2 over-count under
+// concurrent load is harmless given the cap is a safety net, not a hard
+// billing line.
+async function checkAndIncrementDmUploadQuota(env, fromUid) {
+  const today = new Date().toISOString().slice(0, 10);
+  const safeUid = String(fromUid || "anon").replace(/[.#$\[\]\/]/g, "_");
+  const userKey = `${ROOT}/rateLimits/dmUploads/${today}/perUser/${safeUid}`;
+  const globalKey = `${ROOT}/rateLimits/dmUploads/${today}/global`;
+
+  const auth = env.FIREBASE_DB_SECRET ? `?auth=${env.FIREBASE_DB_SECRET}` : "";
+  const userUrl = `${env.FIREBASE_DB_URL}/${userKey}.json${auth}`;
+  const globalUrl = `${env.FIREBASE_DB_URL}/${globalKey}.json${auth}`;
+
+  const [uVal, gVal] = await Promise.all([
+    fetch(userUrl).then((r) => r.json()).catch(() => 0),
+    fetch(globalUrl).then((r) => r.json()).catch(() => 0),
+  ]);
+  const userCount = Number(uVal) || 0;
+  const globalCount = Number(gVal) || 0;
+
+  if (userCount >= DM_MEDIA_USER_DAILY_LIMIT) {
+    return {
+      ok: false,
+      status: 429,
+      reason: `daily upload limit reached for this account (${DM_MEDIA_USER_DAILY_LIMIT}/day). Resets at 00:00 UTC.`,
+    };
+  }
+  if (globalCount >= DM_MEDIA_GLOBAL_DAILY_LIMIT) {
+    return {
+      ok: false,
+      status: 429,
+      reason: `team-wide daily upload limit reached (${DM_MEDIA_GLOBAL_DAILY_LIMIT}/day). Try again tomorrow or ping admin.`,
+    };
+  }
+
+  // Fire-and-forget the increments — the user shouldn't wait on the write.
+  fetch(userUrl, { method: "PUT", body: JSON.stringify(userCount + 1) }).catch(() => {});
+  fetch(globalUrl, { method: "PUT", body: JSON.stringify(globalCount + 1) }).catch(() => {});
+
+  return { ok: true };
+}
 
 // ---------- /send ----------
 async function handleSend(request, env) {
@@ -1556,6 +1652,10 @@ async function handleDmMediaUpload(request, env) {
   const file = form.get("file");
   const pairKey = String(form.get("pairKey") || "");
   const msgId = String(form.get("msgId") || "");
+  // v1.177: callers identify themselves with fromUid so we can rate-limit
+  // per-user. Spoofable, but the global cap still applies so worst case
+  // a malicious client just consumes their share of the global pool.
+  const fromUid = String(form.get("fromUid") || "");
   if (!file || typeof file === "string") return json({ error: "missing file" }, 400);
   if (!pairKey || !msgId) return json({ error: "missing pairKey or msgId" }, 400);
   // Path sanity — both pairKey and msgId are caller-provided so guard against
@@ -1564,8 +1664,15 @@ async function handleDmMediaUpload(request, env) {
     return json({ error: "bad pairKey or msgId" }, 400);
   }
   // file.size is available on the File object Cloudflare exposes.
-  if (file.size > 25 * 1024 * 1024) {
-    return json({ error: "file too large (>25 MB)" }, 413);
+  if (file.size > DM_MEDIA_MAX_BYTES) {
+    return json({ error: `file too large (>${DM_MEDIA_MAX_BYTES / 1024 / 1024} MB)` }, 413);
+  }
+
+  // v1.177: daily quota gate. Rejects before we touch R2 so a rate-limited
+  // call doesn't burn a Class A operation either.
+  const quota = await checkAndIncrementDmUploadQuota(env, fromUid);
+  if (!quota.ok) {
+    return json({ error: quota.reason }, quota.status);
   }
   const safeName = String(file.name || "file").replace(/[\/\\]/g, "_").slice(0, 200) || "file";
   const key = `dms/${pairKey}/${msgId}/${safeName}`;

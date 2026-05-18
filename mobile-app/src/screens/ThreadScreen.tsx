@@ -1353,6 +1353,9 @@ export function ThreadScreen({ route, navigation }: Props) {
         } as unknown as Blob);
         formData.append("pairKey", pairKey);
         formData.append("msgId", localMsgId);
+        // v1.177: per-user rate limit on the worker uses this. Spoofable
+        // (caller could send anyone's uid) but the global cap still applies.
+        formData.append("fromUid", user.uid);
         const res = await fetch(`${WORKER_URL}/dm-media/upload`, {
           method: "POST",
           body: formData,
