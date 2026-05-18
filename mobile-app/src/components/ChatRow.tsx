@@ -58,6 +58,13 @@ export function ChatRowItem({
       ? `${row.sentByName}: `
       : "";
 
+  // v1.167: NEW badge — mobile mirror of the desktop isChatNeedsTriage
+  // signal. Fires when the latest message is INBOUND and there's NO
+  // open ticket on the chat (so the auto-route hasn't fired yet OR a
+  // ticket was resolved and the customer messaged again). Tells the
+  // trainer "this is sitting unanswered and unowned, do something."
+  const needsTriage = row.direction === "in" && !hasOpenTicket;
+
   const time = formatTime(row.lastMsgAt);
 
   // Stop propagation so tapping the star/Pin? button doesn't open the thread.
@@ -76,6 +83,11 @@ export function ChatRowItem({
           <Text style={styles.name} numberOfLines={1}>
             {name}
           </Text>
+          {needsTriage && (
+            <View style={styles.newBadge}>
+              <Text style={styles.newBadgeTxt}>🆕 NEW</Text>
+            </View>
+          )}
           <Text style={styles.time}>{time}</Text>
         </View>
         <View style={styles.bottomLine}>
@@ -260,9 +272,43 @@ function makeStyles(colors: Colors) {
     },
     avatarTxt: { color: "white", fontSize: 18, fontWeight: "500" },
     col: { flex: 1, minWidth: 0, gap: 2 },
-    topLine: { flexDirection: "row", alignItems: "baseline" },
-    name: { flex: 1, fontSize: 15, fontWeight: "500", color: colors.text },
-    time: { fontSize: 11, color: colors.muted, marginLeft: space.sm },
+    topLine: { flexDirection: "row", alignItems: "center" },
+    // v1.167: name was flex:1 which forced it to consume all horizontal
+    // space; the NEW badge would have ended up pushed to the far right
+    // next to the time, far from the actual name text. flexShrink:1
+    // lets the name take just enough width (truncating with
+    // numberOfLines=1 if needed), and the time now gets marginLeft:auto
+    // to float to the right edge. Result: name … NEW             time
+    name: {
+      flexShrink: 1,
+      fontSize: 15,
+      fontWeight: "500",
+      color: colors.text,
+    },
+    time: {
+      fontSize: 11,
+      color: colors.muted,
+      marginLeft: "auto",
+      paddingLeft: space.sm,
+    },
+    // v1.167 NEW triage badge — yellow pill next to the customer's name.
+    // Same color story as the desktop .triage-badge (#fef3c7 bg /
+    // #92400e fg) so the visual language is consistent across both
+    // surfaces. Sized smaller than the journey-stage pill since it
+    // sits on the same line as the name text.
+    newBadge: {
+      backgroundColor: "#fef3c7",
+      paddingHorizontal: 6,
+      paddingVertical: 1,
+      borderRadius: 8,
+      marginLeft: 6,
+    },
+    newBadgeTxt: {
+      color: "#92400e",
+      fontSize: 9,
+      fontWeight: "700",
+      letterSpacing: 0.3,
+    },
     bottomLine: { flexDirection: "row", alignItems: "center" },
     preview: { flex: 1, fontSize: 13, color: colors.muted },
     previewUnread: { color: colors.text, fontWeight: "500" },
