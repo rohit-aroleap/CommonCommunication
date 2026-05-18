@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.177</title>
+<title>CommonCommunication v1.178</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -1503,7 +1503,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.177</div>
+    <div class="login-version">v1.178</div>
   </div>
 </div>
 
@@ -1511,7 +1511,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.177</span>
+    <span class="ver">v1.178</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -1933,7 +1933,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.177";
+const APP_VERSION = "v1.178";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -6700,21 +6700,45 @@ voiceComposerBtn.onclick = () => {
   startMicRecording(voiceComposerBtn, "composer", COMPOSER_MIC_IDLE_HTML, COMPOSER_MIC_IDLE_TITLE);
 };
 
-// Attach: open file picker, then base64-encode and send via worker
+// Attach: open file picker, then send via worker. Customer-chat path reads
+// the file as base64 (worker /send wants JSON); DM path streams the File
+// object directly through FormData so we skip the base64 round-trip.
 attachBtn.onclick = () => fileInput.click();
 fileInput.onchange = async () => {
   const file = fileInput.files?.[0];
   if (!file) return;
   fileInput.value = ""; // allow re-picking the same file later
-  if (!currentChatId) { alert("Open a chat first."); return; }
+  await attachFile(file);
+};
 
+// v1.178: shared entry point for both the 📎 button and drag-and-drop.
+// Validates, branches on chat type, runs the upload.
+async function attachFile(file) {
+  if (!currentChatId) { alert("Open a chat first."); return; }
   const sizeMB = file.size / (1024 * 1024);
   if (sizeMB > 16) {
     alert(`File is ${sizeMB.toFixed(1)} MB. WhatsApp's per-message limit is ~16 MB. Try a smaller file.`);
     return;
   }
 
-  // Read file as data URL, strip the "data:...;base64," prefix
+  const mt = file.type || "application/octet-stream";
+  const mediaType = mt.startsWith("image/") ? "image"
+                 : mt.startsWith("video/") ? "video"
+                 : mt.startsWith("audio/") ? "audio"
+                 : "document";
+
+  // DM path streams the File directly — no base64 read needed.
+  if (isDmKey(currentChatId)) {
+    await doSendDmMedia({
+      type: mediaType,
+      filename: file.name,
+      mimetype: mt,
+      fileObject: file,
+    });
+    return;
+  }
+
+  // Customer-chat path keeps base64 since worker /send expects it in JSON.
   const dataUrl = await new Promise((resolve, reject) => {
     const r = new FileReader();
     r.onload = () => resolve(r.result);
@@ -6724,19 +6748,56 @@ fileInput.onchange = async () => {
   const base64 = String(dataUrl).split(",")[1] || "";
   if (!base64) { alert("Couldn't read file."); return; }
 
-  const mt = file.type || "application/octet-stream";
-  const mediaType = mt.startsWith("image/") ? "image"
-                 : mt.startsWith("video/") ? "video"
-                 : mt.startsWith("audio/") ? "audio"
-                 : "document";
-
   await doSendMedia({
     type: mediaType,
     filename: file.name,
     mimetype: mt,
     filedata: base64,
   });
-};
+}
+
+// v1.178: drag-and-drop a file onto the thread pane to attach it. Shows
+// a visible drop overlay so it's clear the gesture is recognized. Falls
+// through to the same attachFile() path the 📎 button uses.
+(function initDragAndDrop() {
+  const pane = document.getElementById("threadPane");
+  if (!pane) return;
+  let dragDepth = 0;
+  const overlay = document.createElement("div");
+  overlay.id = "dropOverlay";
+  overlay.style.cssText = "position:absolute;inset:0;background:rgba(0,168,132,0.12);border:3px dashed var(--green);display:none;align-items:center;justify-content:center;font-family:var(--sans);font-size:18px;font-weight:600;color:var(--green);pointer-events:none;z-index:50;border-radius:8px;";
+  overlay.textContent = "Drop file to attach";
+  pane.style.position = pane.style.position || "relative";
+  pane.appendChild(overlay);
+
+  // dragenter/leave use a depth counter — entering a child element fires
+  // a fresh dragenter on it AND a dragleave on the parent, so a naive
+  // toggle flickers when the mouse crosses internal boundaries.
+  pane.addEventListener("dragenter", (e) => {
+    if (!e.dataTransfer?.types?.includes("Files")) return;
+    e.preventDefault();
+    dragDepth++;
+    if (dragDepth === 1) overlay.style.display = "flex";
+  });
+  pane.addEventListener("dragover", (e) => {
+    if (!e.dataTransfer?.types?.includes("Files")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  });
+  pane.addEventListener("dragleave", (e) => {
+    if (!e.dataTransfer?.types?.includes("Files")) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) overlay.style.display = "none";
+  });
+  pane.addEventListener("drop", async (e) => {
+    if (!e.dataTransfer?.types?.includes("Files")) return;
+    e.preventDefault();
+    dragDepth = 0;
+    overlay.style.display = "none";
+    const file = e.dataTransfer.files?.[0];
+    if (file) await attachFile(file);
+  });
+})();
 
 async function doSendMedia(media) {
   if (!currentChatId || !currentUser) return;
@@ -6841,12 +6902,19 @@ async function doSendDmMedia(media) {
   composerInput.style.height = "auto";
 
   try {
-    // base64 (from fileInput.onchange) → Blob so FormData streams the bytes
-    // (no double-base64 over the wire).
-    const bin = atob(media.filedata);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    const blob = new Blob([bytes], { type: media.mimetype });
+    // v1.178: prefer the raw File object when available (skips the
+    // base64 round-trip the customer-chat path requires). Falls back
+    // to reconstructing a Blob from base64 for any caller that still
+    // hands us media.filedata.
+    let blob;
+    if (media.fileObject instanceof Blob) {
+      blob = media.fileObject;
+    } else {
+      const bin = atob(media.filedata);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      blob = new Blob([bytes], { type: media.mimetype });
+    }
     const formData = new FormData();
     formData.append("file", blob, media.filename);
     formData.append("pairKey", pairKey);

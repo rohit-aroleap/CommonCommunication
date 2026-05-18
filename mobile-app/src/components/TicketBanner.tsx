@@ -2,15 +2,35 @@
 // the chat. v1.118 compact redesign: single tappable pill row with link-style
 // Reassign / Resolve text actions instead of fat outline buttons. Mirrors
 // the WhatsApp-style notification-bar density.
-//   • Tap Resolve  → confirms (extra prompt when ticket isn't yours)
+//   • Tap Resolve  → opens a note-input modal (and an extra confirmation
+//                    when the ticket isn't yours)
 //   • Tap Reassign → opens the parent's reassign modal
+//
+// v1.178: ported the desktop's resolution-note prompt to mobile. Before
+// this, tapping Resolve on mobile flipped the ticket to resolved and
+// wrote nothing to the chat's notes feed — Bhargav reported "while
+// clearing the ticket of Neeti, it directly took as a resolved without
+// asking for a note." The note is optional (empty is OK), matching the
+// desktop's prompt("(optional)") behavior; when non-empty, the note is
+// mirrored into commonComm/chats/{chatKey}/notes/ so anyone reviewing
+// the customer later sees the resolution.
 
-import React from "react";
-import { Alert, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import React, { useState } from "react";
+import {
+  Alert,
+  Modal,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
 import type { Ticket } from "@/types";
-import { ref, update } from "firebase/database";
+import { push, ref, update } from "firebase/database";
 import { db } from "@/firebase";
 import { ROOT } from "@/config";
+import { encodeKey } from "@/lib/encodeKey";
+import { useStyles, useTheme, type Colors } from "@/theme";
 
 interface Props {
   tickets: Ticket[];
@@ -25,7 +45,88 @@ export function TicketBanner({
   currentName,
   onReassign,
 }: Props) {
+  const styles = useStyles(makeStyles);
+  const { colors } = useTheme();
+  const [resolveTarget, setResolveTarget] = useState<Ticket | null>(null);
+  const [noteText, setNoteText] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  // Tap → if it's someone else's ticket, confirm first; then open the
+  // note-input modal. Mirrors desktop's confirm() → prompt() chain.
+  const onResolvePress = (t: Ticket) => {
+    if (t.assignee && t.assignee !== currentUid) {
+      Alert.alert(
+        "Resolve ticket",
+        `This ticket is assigned to ${
+          t.assigneeName || "someone else"
+        }. Resolve anyway?`,
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Continue", onPress: () => openNoteModal(t) },
+        ],
+        { cancelable: true },
+      );
+    } else {
+      openNoteModal(t);
+    }
+  };
+
+  const openNoteModal = (t: Ticket) => {
+    setNoteText("");
+    setResolveTarget(t);
+  };
+
+  const submitResolve = async () => {
+    if (!resolveTarget || submitting) return;
+    const t = resolveTarget;
+    const trimmed = noteText.trim();
+    const ts = Date.now();
+    const updates: Record<string, unknown> = {
+      [`${ROOT}/tickets/${t.id}/status`]: "resolved",
+      [`${ROOT}/tickets/${t.id}/resolvedBy`]: currentUid,
+      [`${ROOT}/tickets/${t.id}/resolvedByName`]: currentName,
+      [`${ROOT}/tickets/${t.id}/resolvedAt`]: ts,
+    };
+    if (trimmed) {
+      updates[`${ROOT}/tickets/${t.id}/resolutionNote`] = trimmed;
+      // Mirror into the chat's notes feed so anyone reviewing the
+      // customer later sees the resolution. Same shape as the desktop
+      // path (index.html resolveTicket) so the renderer doesn't need
+      // to branch on which surface created the note.
+      if (t.anchorChatId) {
+        const chatKey = encodeKey(t.anchorChatId);
+        const noteRef = push(ref(db, `${ROOT}/chats/${chatKey}/notes`));
+        const titleHint = t.title ? ` "${t.title}"` : "";
+        updates[`${ROOT}/chats/${chatKey}/notes/${noteRef.key}`] = {
+          text: `🎫 Resolved ticket${titleHint}: ${trimmed}`,
+          authorUid: currentUid,
+          authorName: currentName,
+          createdAt: ts,
+          source: "ticket_resolution",
+          ticketId: t.id,
+        };
+      }
+    }
+    setSubmitting(true);
+    try {
+      await update(ref(db), updates);
+      setResolveTarget(null);
+      setNoteText("");
+    } catch (e) {
+      Alert.alert("Resolve failed", (e as Error)?.message ?? String(e));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const cancelResolve = () => {
+    if (submitting) return;
+    setResolveTarget(null);
+    setNoteText("");
+  };
+
   if (!tickets.length) return null;
+
   return (
     <View>
       {tickets.map((t) => {
@@ -59,7 +160,7 @@ export function TicketBanner({
             </TouchableOpacity>
             <Text style={[styles.sep, { color: fg }]}>·</Text>
             <TouchableOpacity
-              onPress={() => confirmResolve(t, currentUid, currentName)}
+              onPress={() => onResolvePress(t)}
               hitSlop={8}
               style={styles.linkBtn}
             >
@@ -68,56 +169,147 @@ export function TicketBanner({
           </View>
         );
       })}
+
+      <Modal
+        visible={!!resolveTarget}
+        transparent
+        animationType="fade"
+        onRequestClose={cancelResolve}
+      >
+        <View style={styles.modalScrim}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Resolve ticket</Text>
+            {resolveTarget?.title ? (
+              <Text style={styles.modalSubtitle} numberOfLines={2}>
+                {resolveTarget.title}
+              </Text>
+            ) : null}
+            <Text style={styles.modalLabel}>Resolution note (optional)</Text>
+            <TextInput
+              value={noteText}
+              onChangeText={setNoteText}
+              placeholder="What was the resolution?"
+              placeholderTextColor={colors.muted}
+              style={styles.modalInput}
+              multiline
+              autoFocus
+              editable={!submitting}
+            />
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                onPress={cancelResolve}
+                disabled={submitting}
+                style={[styles.modalBtn, styles.modalBtnSecondary]}
+              >
+                <Text style={styles.modalBtnSecondaryTxt}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={submitResolve}
+                disabled={submitting}
+                style={[styles.modalBtn, styles.modalBtnPrimary]}
+              >
+                <Text style={styles.modalBtnPrimaryTxt}>
+                  {submitting ? "Resolving…" : "Resolve"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
 
-function confirmResolve(t: Ticket, uid: string, displayName: string) {
-  const isMine = t.assignee === uid;
-  const message = isMine
-    ? `Resolve "${t.title || "this ticket"}"?`
-    : `This ticket is assigned to ${
-        t.assigneeName || "someone else"
-      }. Resolve anyway?`;
-  Alert.alert(
-    "Resolve ticket",
-    message,
-    [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Resolve",
-        style: "destructive",
-        onPress: async () => {
-          const updates: Record<string, unknown> = {};
-          updates[`${ROOT}/tickets/${t.id}/status`] = "resolved";
-          updates[`${ROOT}/tickets/${t.id}/resolvedBy`] = uid;
-          updates[`${ROOT}/tickets/${t.id}/resolvedByName`] = displayName;
-          updates[`${ROOT}/tickets/${t.id}/resolvedAt`] = Date.now();
-          try {
-            await update(ref(db), updates);
-          } catch (e: any) {
-            Alert.alert("Resolve failed", e?.message ?? String(e));
-          }
-        },
-      },
-    ],
-    { cancelable: true },
-  );
-}
+function makeStyles(colors: Colors) {
+  return StyleSheet.create({
+    banner: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingHorizontal: 12,
+      paddingVertical: 5,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      gap: 6,
+    },
+    txt: { fontSize: 12, flex: 1 },
+    assignee: { fontWeight: "600" },
+    unassigned: { fontStyle: "italic", opacity: 0.85 },
+    linkBtn: { paddingHorizontal: 2 },
+    link: { fontSize: 12, fontWeight: "600", textDecorationLine: "underline" },
+    sep: { fontSize: 12, opacity: 0.5, paddingHorizontal: 1 },
 
-const styles = StyleSheet.create({
-  banner: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    gap: 6,
-  },
-  txt: { fontSize: 12, flex: 1 },
-  assignee: { fontWeight: "600" },
-  unassigned: { fontStyle: "italic", opacity: 0.85 },
-  linkBtn: { paddingHorizontal: 2 },
-  link: { fontSize: 12, fontWeight: "600", textDecorationLine: "underline" },
-  sep: { fontSize: 12, opacity: 0.5, paddingHorizontal: 1 },
-});
+    // Modal styles. The scrim is intentionally darker than typical RN
+    // modals so it works visibly in both light and dark themes.
+    modalScrim: {
+      flex: 1,
+      backgroundColor: "rgba(0,0,0,0.55)",
+      justifyContent: "center",
+      alignItems: "center",
+      padding: 20,
+    },
+    modalCard: {
+      width: "100%",
+      maxWidth: 380,
+      backgroundColor: colors.panel,
+      borderRadius: 14,
+      padding: 18,
+      gap: 8,
+    },
+    modalTitle: {
+      fontSize: 16,
+      fontWeight: "600",
+      color: colors.text,
+    },
+    modalSubtitle: {
+      fontSize: 12,
+      color: colors.muted,
+      marginBottom: 4,
+    },
+    modalLabel: {
+      fontSize: 12,
+      color: colors.muted,
+      marginTop: 6,
+    },
+    modalInput: {
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 8,
+      paddingHorizontal: 10,
+      paddingVertical: 8,
+      fontSize: 14,
+      color: colors.text,
+      minHeight: 70,
+      maxHeight: 140,
+      textAlignVertical: "top",
+      backgroundColor: colors.bg,
+    },
+    modalActions: {
+      flexDirection: "row",
+      justifyContent: "flex-end",
+      gap: 8,
+      marginTop: 6,
+    },
+    modalBtn: {
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+      borderRadius: 8,
+      minWidth: 80,
+      alignItems: "center",
+    },
+    modalBtnSecondary: {
+      backgroundColor: "transparent",
+    },
+    modalBtnSecondaryTxt: {
+      color: colors.muted,
+      fontSize: 14,
+      fontWeight: "500",
+    },
+    modalBtnPrimary: {
+      backgroundColor: colors.green,
+    },
+    modalBtnPrimaryTxt: {
+      color: "white",
+      fontSize: 14,
+      fontWeight: "600",
+    },
+  });
+}
