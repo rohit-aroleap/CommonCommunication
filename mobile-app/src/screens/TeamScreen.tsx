@@ -22,7 +22,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { ref, set, update, get } from "firebase/database";
 import { db } from "@/firebase";
-import { ROOT } from "@/config";
+import { ROOT, BOOTSTRAP_ADMINS } from "@/config";
 import { space, useStyles, useTheme, type Colors } from "@/theme";
 import {
   useAppData,
@@ -64,15 +64,36 @@ export function TeamScreen() {
   // an existing DM thread for them. Same pattern as the desktop v1.110
   // Team-tab simplification: no "pick a teammate" step, tap any row to
   // open/create the DM.
+  //
+  // v1.187: orphan filter. `commonComm/users/{uid}` records persist after
+  // an admin removes someone from the team allowlist — the remove flow
+  // only touches /config/teamMembers and /config/allowedEmails. Build a
+  // set of currently-allowed emails (admin-curated teamMembers + the
+  // hard-coded bootstrap admins) and hide any user whose email isn't in
+  // it. New /users records that don't have an email field yet (write-
+  // race during sign-in) are kept — they'll get reconciled on next render.
   const rows = useMemo<UnifiedRow[]>(() => {
     const me = user?.uid;
     const myEmail = (user?.email || "").toLowerCase();
+    const allowedEmails = new Set<string>();
+    for (const m of Object.values(teamMembers || {})) {
+      if (m?.email) allowedEmails.add(m.email.toLowerCase());
+    }
+    for (const a of BOOTSTRAP_ADMINS) {
+      allowedEmails.add(a.toLowerCase());
+    }
+    const isAllowed = (email: string): boolean => {
+      if (!email) return true; // no email yet → don't filter, let next render handle
+      return allowedEmails.has(email.toLowerCase());
+    };
+
     const seenUids = new Set<string>();
     const seenEmails = new Set<string>();
     const out: UnifiedRow[] = [];
 
     // A: existing DM threads
     for (const r of dmRows) {
+      if (!isAllowed(r.email)) continue;
       seenUids.add(r.otherUid);
       const u = teamUsers[r.otherUid];
       if (u?.email) seenEmails.add(u.email.toLowerCase());
@@ -94,6 +115,7 @@ export function TeamScreen() {
     for (const [uid, u] of Object.entries(teamUsers)) {
       if (uid === me || seenUids.has(uid)) continue;
       const emailLower = String(u?.email || "").toLowerCase();
+      if (!isAllowed(u?.email || "")) continue;
       if (emailLower) seenEmails.add(emailLower);
       out.push({
         kind: "new-active",

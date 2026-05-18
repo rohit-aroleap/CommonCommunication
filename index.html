@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.186</title>
+<title>CommonCommunication v1.187</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -1581,7 +1581,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.186</div>
+    <div class="login-version">v1.187</div>
   </div>
 </div>
 
@@ -1589,7 +1589,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.186</span>
+    <span class="ver">v1.187</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -2026,12 +2026,12 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.186";
+const APP_VERSION = "v1.187";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
 // To add another admin, edit this list and push a new version.
-const BOOTSTRAP_ADMINS = ["rohit@aroleap.com", "rohitpatel.mailid297@gmail.com"];
+const BOOTSTRAP_ADMINS = ["rohit@aroleap.com"];
 
 // ====== INIT ======
 const app = initializeApp(firebaseConfig);
@@ -2563,10 +2563,23 @@ function renderAllowedList() {
   allowedListEl.querySelectorAll(".rm").forEach(b => {
     b.onclick = async () => {
       if (!confirm("Remove this teammate from the allowlist? Their DMs stay on disk but they won't be able to sign in.")) return;
-      await Promise.all([
-        set(ref(db, `${ROOT}/config/allowedEmails/${b.dataset.key}`), null),
-        set(ref(db, `${ROOT}/config/teamMembers/${b.dataset.key}`), null),
-      ]);
+      const emailKey = b.dataset.key;
+      // v1.187: also clean up commonComm/users/{uid} entries for any UID
+      // that signed in with this email. Without this the orphan record
+      // keeps the teammate visible in everyone's Team list even after
+      // removal (because TeamScreen reads from /users directly).
+      const userEmail = (teamMembersCache[emailKey]?.email || "").toLowerCase();
+      const orphanUids = userEmail
+        ? Object.entries(teamUsers || {})
+            .filter(([, u]) => String(u?.email || "").toLowerCase() === userEmail)
+            .map(([uid]) => uid)
+        : [];
+      const writes = [
+        set(ref(db, `${ROOT}/config/allowedEmails/${emailKey}`), null),
+        set(ref(db, `${ROOT}/config/teamMembers/${emailKey}`), null),
+        ...orphanUids.map((uid) => set(ref(db, `${ROOT}/users/${uid}`), null)),
+      ];
+      await Promise.all(writes);
     };
   });
   allowedListEl.querySelectorAll(".rm-phone").forEach(b => {
@@ -4507,6 +4520,22 @@ function renderTeamChatList() {
   const me = currentUser?.uid;
   const myEmail = (teamUsers[me]?.email || currentUser?.email || "").toLowerCase();
 
+  // v1.187: orphan filter. commonComm/users/{uid} records persist after
+  // an admin removes someone from the team allowlist (the Remove button
+  // only clears /config/teamMembers and /config/allowedEmails). Build a
+  // set of currently-allowed emails (admin-curated teamMembers + bootstrap
+  // admins) and hide any user whose email isn't in it — the orphaned
+  // /users record stops rendering as a phantom row in the Team list.
+  const allowedTeamEmails = new Set();
+  for (const m of Object.values(teamMembersCache || {})) {
+    if (m?.email) allowedTeamEmails.add(m.email.toLowerCase());
+  }
+  for (const a of BOOTSTRAP_ADMINS) allowedTeamEmails.add(a.toLowerCase());
+  const isAllowedTeamEmail = (email) => {
+    if (!email) return true; // empty email = write-race; let next render handle
+    return allowedTeamEmails.has(String(email).toLowerCase());
+  };
+
   // Map uid → dmRow for quick lookup
   const dmByUid = {};
   for (const r of dmRows) dmByUid[r.otherUid] = r;
@@ -4517,6 +4546,7 @@ function renderTeamChatList() {
 
   // A: existing DM threads
   for (const r of dmRows) {
+    if (!isAllowedTeamEmail(r.email)) continue;
     seenUids.add(r.otherUid);
     const u = teamUsers[r.otherUid] || {};
     if (u.email) seenEmails.add(u.email.toLowerCase());
@@ -4539,6 +4569,7 @@ function renderTeamChatList() {
   for (const [uid, u] of Object.entries(teamUsers)) {
     if (uid === me || seenUids.has(uid)) continue;
     const emailLower = String(u?.email || "").toLowerCase();
+    if (!isAllowedTeamEmail(u?.email || "")) continue;
     if (emailLower) seenEmails.add(emailLower);
     rows.push({
       kind: "new-active",

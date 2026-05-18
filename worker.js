@@ -19,7 +19,6 @@ const ROOT = "commonComm";
 // dashboard learns a new admin, bump this list too.
 const ADMIN_EMAILS = new Set([
   "rohit@aroleap.com",
-  "rohitpatel.mailid297@gmail.com",
 ]);
 
 // v1.177: R2 budget guards. These constants gate every DM upload so a

@@ -38,10 +38,7 @@ export const GOOGLE_OAUTH = {
 
 export const ROOT = "commonComm";
 
-export const BOOTSTRAP_ADMINS = [
-  "rohit@aroleap.com",
-  "rohitpatel.mailid297@gmail.com",
-];
+export const BOOTSTRAP_ADMINS = ["rohit@aroleap.com"];
 
 export const DAILY_GROUP_PREFIX = "Daily Workout Ferra C";
 
