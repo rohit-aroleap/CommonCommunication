@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.155</title>
+<title>CommonCommunication v1.156</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -77,15 +77,91 @@
 
   .main {
     flex: 1; display: grid;
-    /* minmax(0, 1fr) — plain `1fr` defaults to minmax(auto, 1fr), and `auto`
-       resolves to min-content. When the right column contains the thread +
-       a 380px drawer + any long unbreakable token (URL, UTM string), the
-       min-content forces the column wider than the available space, which
-       pushes the drawer past the right edge of the viewport. Body has
-       overflow:hidden, so what spills off the right gets clipped. */
-    grid-template-columns: 380px minmax(0, 1fr);
+    /* v1.156: 3-column grid — rail + chat-list panel + thread. The rail
+       is 56px (matches WhatsApp's chat-list icon column width); the
+       middle column stays at 380px; minmax(0, 1fr) on the thread column
+       is the original guard against the customer-info drawer pushing
+       past the viewport edge with a long unbreakable string. */
+    grid-template-columns: 56px 380px minmax(0, 1fr);
     min-height: 0;
   }
+
+  /* ---------- v1.156 Left icon rail (WhatsApp pattern) ---------- */
+  .left-rail {
+    background: var(--header);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 12px 0;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .rail-btn {
+    position: relative;
+    width: 44px; height: 44px;
+    border-radius: 12px;
+    border: none;
+    background: transparent;
+    color: var(--text);
+    font-family: inherit;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: background .12s, transform .12s;
+  }
+  .rail-btn:hover { background: var(--hover); }
+  .rail-btn:active { transform: scale(0.96); }
+  .rail-icon { font-size: 20px; line-height: 1; }
+  /* Count badge anchored to the top-right corner of the icon, like an
+     iOS app-icon notification. Hidden by default — JS adds visible
+     state via the has-tickets / has-unread classes (mirrors the prior
+     pill-style indicator). */
+  .rail-badge {
+    position: absolute;
+    top: 4px; right: 4px;
+    min-width: 16px; height: 16px;
+    border-radius: 8px;
+    background: #ef4444;
+    color: white;
+    font-size: 10px; font-weight: 700;
+    line-height: 16px;
+    padding: 0 4px;
+    text-align: center;
+    display: none;
+  }
+  /* My-tickets has-tickets state — red badge visible. Active state —
+     button itself tinted red so the chat list "filtered by tickets"
+     mode is unmistakable. Mirrors the old pill-button color logic
+     exactly (red for tickets / blue for team) so the user retains the
+     visual association built in earlier versions. */
+  .rail-tickets.has-tickets .rail-badge { display: block; }
+  .rail-tickets.active {
+    background: #ef4444;
+  }
+  .rail-tickets.active .rail-icon { filter: brightness(1.2); }
+  .rail-tickets.active .rail-badge {
+    background: white;
+    color: #ef4444;
+  }
+  /* Team has-unread + active states — same pattern but blue. */
+  .rail-team .rail-badge { background: #3b82f6; }
+  .rail-team.has-unread .rail-badge { display: block; }
+  .rail-team.active {
+    background: #3b82f6;
+  }
+  .rail-team.active .rail-icon { filter: brightness(1.2); }
+  .rail-team.active .rail-badge {
+    background: white;
+    color: #3b82f6;
+  }
+  /* "+ New chat" button — visually distinct (green tint) so the rail
+     reads as "navigation icons" + "primary create action". */
+  .rail-new .rail-icon {
+    color: var(--green);
+    font-size: 26px;
+    font-weight: 300;
+  }
+  .rail-new:hover { background: rgba(0, 168, 132, 0.12); }
 
   /* ---------- Sidebar (chat list) ---------- */
   .sidebar {
@@ -94,8 +170,12 @@
     display: flex; flex-direction: column;
     min-height: 0;
   }
+  /* v1.156: the action buttons moved to the .left-rail, so the side-
+     header is now title-only and shorter — 44px instead of 60px. That
+     16px back to the chat list, on top of the rail-driven savings, is
+     why opening a chat now feels closer to WhatsApp's full-height list. */
   .side-header {
-    height: 60px; background: var(--header);
+    height: 44px; background: var(--header);
     display: flex; align-items: center; justify-content: space-between;
     padding: 0 16px;
     flex-shrink: 0;
@@ -580,7 +660,7 @@
     50%      { box-shadow: 0 0 0 8px rgba(239,68,68,0); }
   }
 
-  /* v1.155: pill-shaped variant of the mic button — used for the primary
+  /* v1.156: pill-shaped variant of the mic button — used for the primary
      voice-to-composer button (🎤 Voice). Bigger target than the circular
      📝 notes mic to match its higher-frequency use. The `.mic-btn` base
      handles the .recording (red pulse) + .transcribing (yellow) states;
@@ -1315,7 +1395,12 @@
   .cb-row .added { font-size: 12px; color: var(--green-dark); padding: 5px 12px; flex-shrink: 0; }
 
   @media (max-width: 720px) {
+    /* v1.156: on narrow viewports, the left rail eats too much of the
+       chat-list panel. Collapse the layout to a single column (no rail,
+       no sidebar-then-thread split) and rely on the existing
+       thread-open class to toggle between list-and-thread views. */
     .main { grid-template-columns: 1fr; }
+    .left-rail { display: none; }
     .thread { display: none; }
     .main.thread-open .sidebar { display: none; }
     .main.thread-open .thread { display: flex; }
@@ -1351,7 +1436,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.155</div>
+    <div class="login-version">v1.156</div>
   </div>
 </div>
 
@@ -1359,7 +1444,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.155</span>
+    <span class="ver">v1.156</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -1385,15 +1470,29 @@
   </div>
 
   <div class="main" id="mainGrid">
+    <!-- v1.156: WhatsApp-style left icon rail. Moves the "My tickets",
+         "Team", and "New chat" buttons out of the chat-list header into
+         a thin vertical bar so the chat list itself can take almost the
+         full viewport height. The button IDs are unchanged so all JS
+         handlers (toggle filter, switch view, open new-chat modal)
+         continue to work without modification. -->
+    <div class="left-rail">
+      <button class="rail-btn rail-tickets" id="myTicketsBtn" title="My open tickets — click to filter">
+        <span class="rail-icon">🎫</span>
+        <span class="rail-badge" id="myTicketsCount">0</span>
+      </button>
+      <button class="rail-btn rail-team" id="teamViewBtn" title="Internal team chats (direct messages, not sent through Periskope)">
+        <span class="rail-icon">👥</span>
+        <span class="rail-badge" id="teamUnreadCount">0</span>
+      </button>
+      <button class="rail-btn rail-new" id="newChatBtn" title="New chat by phone">
+        <span class="rail-icon">+</span>
+      </button>
+    </div>
     <!-- Sidebar -->
     <div class="sidebar">
       <div class="side-header">
         <h2>Chats</h2>
-        <div class="actions">
-          <button class="my-tickets-btn" id="myTicketsBtn" title="My open tickets — click to filter">🎫 My tickets <span class="ct" id="myTicketsCount">0</span></button>
-          <button class="team-btn" id="teamViewBtn" title="Internal team chats (direct messages, not sent through Periskope)">👥 Team <span class="ct" id="teamUnreadCount">0</span></button>
-          <button class="icon-btn" id="newChatBtn" title="New chat by phone">+</button>
-        </div>
       </div>
       <div class="search-row">
         <input id="searchInput" placeholder="Search chats..." />
@@ -1445,7 +1544,7 @@
           <!-- v1.134: left = voice-to-private-note (📝). -->
           <button class="mic-btn" id="voiceNoteBtn" title="Record a private note — transcribed and added to the notes panel (NOT sent to the customer)">📝</button>
           <textarea id="composerInput" placeholder="Type a message" rows="1"></textarea>
-          <!-- v1.155: voice-to-composer pill (mic icon + "Voice" label). Sits
+          <!-- v1.156: voice-to-composer pill (mic icon + "Voice" label). Sits
                to the left of the AI suggest button — that's the primary
                speak-to-reply affordance, hence the bigger target. -->
           <button class="mic-btn voice-pill" id="voiceComposerBtn" title="Record a voice message — transcribed and added to the reply box (you can edit before sending)"><span class="voice-pill-icon">🎤</span><span class="voice-pill-label">Voice</span></button>
@@ -1735,7 +1834,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.155";
+const APP_VERSION = "v1.156";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -6403,7 +6502,7 @@ voiceNoteBtn.onclick = () => {
 // v1.134: composer mic (right of input). Idle = pill with 🎤 + "Voice",
 // mode = "composer" — appends the cleaned transcript to the reply box so
 // the trainer can edit + Send. This is the primary voice button for replies.
-// v1.155: pill shape with text label, sits to the left of the ✨ AI button.
+// v1.156: pill shape with text label, sits to the left of the ✨ AI button.
 const COMPOSER_MIC_IDLE_HTML = '<span class="voice-pill-icon">🎤</span><span class="voice-pill-label">Voice</span>';
 const COMPOSER_MIC_IDLE_TITLE = "Record a voice message — transcribed and added to the reply box (you can edit before sending)";
 const voiceComposerBtn = $("voiceComposerBtn");
