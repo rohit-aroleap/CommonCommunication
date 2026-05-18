@@ -42,8 +42,13 @@ import {
   set,
   update,
 } from "firebase/database";
+import {
+  getDownloadURL,
+  ref as storageRefFn,
+  uploadString,
+} from "firebase/storage";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { db } from "@/firebase";
+import { db, storage } from "@/firebase";
 import { ROOT, MAX_MEDIA_BYTES } from "@/config";
 import { space, useStyles, useTheme, type Colors } from "@/theme";
 import {
@@ -1140,13 +1145,10 @@ export function ThreadScreen({ route, navigation }: Props) {
 
   const onAttach = useCallback(async () => {
     if (!user || attachBusy) return;
-    if (isDm) {
-      Alert.alert(
-        "Not yet",
-        "Attachments aren't supported in internal chats yet — text only for now.",
-      );
-      return;
-    }
+    // v1.174: DMs now support attachments. The DM branch is in pickMedia
+    // → uploads to Firebase Storage and writes the download URL into the
+    // /dms/{pairKey}/messages record. Customer-chat branch still routes
+    // through worker → Periskope as before.
     Alert.alert(
       "Attach",
       undefined,
@@ -1216,12 +1218,24 @@ export function ThreadScreen({ route, navigation }: Props) {
           : mimeType.startsWith("audio/")
           ? "audio"
           : "document";
-        await doSendMedia({
-          type: mediaType,
-          filename: name,
-          mimetype: mimeType,
-          filedata: base64,
-        });
+        if (isDm) {
+          // v1.174: DM path — upload bytes to Firebase Storage and write
+          // the message record inline. No worker, no Periskope.
+          await doSendDmMedia({
+            type: mediaType,
+            filename: name,
+            mimetype: mimeType,
+            filedata: base64,
+            localUri: uri,
+          });
+        } else {
+          await doSendMedia({
+            type: mediaType,
+            filename: name,
+            mimetype: mimeType,
+            filedata: base64,
+          });
+        }
       } catch (e: any) {
         Alert.alert("Attach failed", e?.message ?? String(e));
       } finally {
@@ -1286,7 +1300,90 @@ export function ThreadScreen({ route, navigation }: Props) {
         await update(msgRef, { status: "failed", error: String(e) });
       }
     }
-  }, [isDm, user, attachBusy, composer, chatKey, chatId, phone]);
+
+    // v1.174: DM media send. Mirrors doSendMedia but uploads bytes to
+    // Firebase Storage (no Periskope, no worker — DMs never leave our
+    // backend) and writes the download URL into the DM record so both
+    // the desktop and mobile renderers can fetch it directly.
+    async function doSendDmMedia(media: {
+      type: "image" | "video" | "audio" | "document";
+      filename: string;
+      mimetype: string;
+      filedata: string;
+      localUri: string;
+    }) {
+      if (!user || !otherUid) return;
+      const caption = composer.trim();
+      const ts = Date.now();
+      const msgRef = push(ref(db, `${ROOT}/dms/${pairKey}/messages`));
+      const localMsgId = msgRef.key as string;
+      // Optimistic "uploading" row first so the trainer sees something
+      // immediately. We patch in the URL once the upload resolves.
+      const fromName = user.displayName || user.email || "(team)";
+      await set(msgRef, {
+        text: caption,
+        ts,
+        fromUid: user.uid,
+        fromName,
+        media: { mimeType: media.mimetype, fileName: media.filename },
+        messageType: media.type,
+        status: "sending",
+      });
+      const previewIcon =
+        media.type === "image"
+          ? "📷"
+          : media.type === "video"
+          ? "🎥"
+          : media.type === "audio"
+          ? "🎤"
+          : "📎";
+      await update(ref(db, `${ROOT}/dms/${pairKey}/meta`), {
+        participants: { [user.uid]: true, [otherUid]: true },
+        lastMsgAt: ts,
+        lastMsgPreview: caption || `${previewIcon} ${media.filename}`,
+        lastMsgFromUid: user.uid,
+        lastMsgFromName: fromName,
+      });
+      setComposer("");
+      try {
+        // Storage path: commonComm/dms/{pairKey}/{msgId}/{safeName}. msgId
+        // namespaces so two trainers sending the same filename simultaneously
+        // can't clobber each other. safeName strips path separators so
+        // attackers can't write outside the namespace.
+        const safeName = media.filename.replace(/[\/\\]/g, "_") || "file";
+        const storagePath = `commonComm/dms/${pairKey}/${localMsgId}/${safeName}`;
+        const storageRef = storageRefFn(storage, storagePath);
+        // uploadString with data_url format: lets us send the base64
+        // we already have without round-tripping through fetch(blob:).
+        // The data URL prefix is reconstructed because we stripped it
+        // earlier (filedata is bare base64).
+        const dataUrl = `data:${media.mimetype};base64,${media.filedata}`;
+        await uploadString(storageRef, dataUrl, "data_url");
+        const downloadUrl = await getDownloadURL(storageRef);
+        await update(msgRef, {
+          media: {
+            url: downloadUrl,
+            mimeType: media.mimetype,
+            fileName: media.filename,
+          },
+          status: "sent",
+        });
+        // Best-effort push fan-out, same shape as text DMs.
+        notifyDm({
+          pairKey,
+          fromUid: user.uid,
+          fromName,
+          toUid: otherUid,
+          text: caption || `${previewIcon} ${media.filename}`,
+        });
+      } catch (e: any) {
+        await update(msgRef, {
+          status: "failed",
+          error: String(e?.message || e).slice(0, 300),
+        });
+      }
+    }
+  }, [isDm, user, attachBusy, composer, chatKey, chatId, phone, pairKey, otherUid]);
 
   const resolveSenderName = useCallback(
     (senderPhone: string) =>

@@ -1486,7 +1486,13 @@ async function handleMediaProxy(request, env) {
     host.endsWith("amazonaws.com") ||
     host === "storage.googleapis.com" ||
     host.endsWith(".storage.googleapis.com") ||
-    host.endsWith(".googleusercontent.com")
+    host.endsWith(".googleusercontent.com") ||
+    // v1.174: DM attachments live in motherofdashboard's Firebase Storage
+    // bucket. Both renderers now skip the proxy for these URLs (they're
+    // publicly fetchable with the ?alt=media&token=... query), but keep
+    // the host allow-listed in case any older client still routes through
+    // here — better a working render than a 403.
+    host === "firebasestorage.googleapis.com"
   );
   if (!ok) return new Response("host not allowed: " + host, { status: 403 });
 

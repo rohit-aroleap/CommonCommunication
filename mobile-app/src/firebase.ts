@@ -13,6 +13,7 @@ import {
   // @ts-expect-error: getReactNativePersistence is exported but not declared in types
   getReactNativePersistence,
 } from "firebase/auth";
+import { getStorage } from "firebase/storage";
 import { FIREBASE_CONFIG } from "@/config";
 
 export const firebaseApp = initializeApp(FIREBASE_CONFIG);
@@ -22,3 +23,11 @@ export const auth = initializeAuth(firebaseApp, {
 });
 
 export const db = getDatabase(firebaseApp);
+
+// v1.174: Firebase Storage handle for internal-DM attachments. Customer-chat
+// attachments still flow through worker → Periskope (Periskope hosts the
+// bytes on Google Cloud Storage). DMs never round-trip through Periskope,
+// so we upload the bytes ourselves to motherofdashboard's storage bucket
+// and write the download URL into the message record alongside the other
+// DM fields. See ThreadScreen.tsx onAttach / doSendDmMedia.
+export const storage = getStorage(firebaseApp);
