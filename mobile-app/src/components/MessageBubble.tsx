@@ -27,6 +27,10 @@ interface Props {
   resolveSenderName: (phone: string) => string;
   onPress: (m: Message) => void;
   onLongPress: (m: Message) => void;
+  // v1.194: image taps open the in-app MediaViewerModal (parent-managed)
+  // instead of Linking.openURL'ing out to Safari/Chrome. Non-image media
+  // still uses Linking via the default path inside MediaBlock.
+  onImagePress?: (url: string) => void;
 }
 
 export function MessageBubble({
@@ -35,6 +39,7 @@ export function MessageBubble({
   resolveSenderName,
   onPress,
   onLongPress,
+  onImagePress,
 }: Props) {
   const styles = useStyles(makeStyles);
   const out = m.direction === "out";
@@ -107,7 +112,11 @@ export function MessageBubble({
           <Text style={styles.deletedTxt}>🚫 This message was deleted</Text>
         ) : (
           <>
-            <MediaBlock media={m.media} onLongPress={() => onLongPress(m)} />
+            <MediaBlock
+              media={m.media}
+              onLongPress={() => onLongPress(m)}
+              onImagePress={onImagePress}
+            />
             {hasText ? (
               <FormattedText text={m.text!} baseStyle={styles.text} />
             ) : null}
@@ -194,9 +203,11 @@ function Status({ status }: { status: Message["status"] }) {
 function MediaBlock({
   media,
   onLongPress,
+  onImagePress,
 }: {
   media?: Message["media"] | null;
   onLongPress: () => void;
+  onImagePress?: (url: string) => void;
 }) {
   const styles = useStyles(makeStyles);
   if (!media) return null;
@@ -215,7 +226,13 @@ function MediaBlock({
   if (mt.startsWith("image")) {
     return (
       <TouchableOpacity
-        onPress={() => Linking.openURL(proxied)}
+        onPress={() => {
+          // v1.194: prefer the parent-supplied in-app viewer when wired
+          // (Thread / DM screens). Falls back to Linking for any caller
+          // that hasn't been updated yet (search results, etc.).
+          if (onImagePress) onImagePress(media.url!);
+          else Linking.openURL(proxied);
+        }}
         onLongPress={onLongPress}
         delayLongPress={420}
       >

@@ -85,6 +85,7 @@ import { TicketBanner } from "@/components/TicketBanner";
 import { CreateTicketModal } from "@/components/CreateTicketModal";
 import { ReassignModal } from "@/components/ReassignModal";
 import { SummaryModal } from "@/components/SummaryModal";
+import { MediaViewerModal } from "@/components/MediaViewerModal";
 import { ActivityIndicator } from "react-native";
 import type { Message, Ticket } from "@/types";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
@@ -326,6 +327,11 @@ export function ThreadScreen({ route, navigation }: Props) {
   const composerInputRef = useRef<TextInput>(null);
   const composerSelectionRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
   const [hasComposerSelection, setHasComposerSelection] = useState(false);
+  // v1.194: in-app image viewer. Tapping an image bubble sets the
+  // selected media URL; MediaViewerModal renders fullscreen until the
+  // trainer taps to dismiss. Replaces the v1.176 Linking.openURL that
+  // bounced the user out to Safari / Chrome.
+  const [mediaViewerUrl, setMediaViewerUrl] = useState<string | null>(null);
   // v1.151: long-press menu state. When set, a bottom-sheet style action
   // list slides up offering Copy / Edit / Delete / Cancel. Only own
   // outbound messages trigger the full menu; long-pressing an inbound
@@ -1527,6 +1533,7 @@ export function ThreadScreen({ route, navigation }: Props) {
             message={item}
             isGroup={isGroup}
             resolveSenderName={resolveSenderName}
+            onImagePress={(url) => setMediaViewerUrl(url)}
             onPress={(m) => {
               // Single tap → open "Create ticket from this message" flow.
               // Matches webapp behaviour where clicking a bubble is the
@@ -1911,6 +1918,12 @@ export function ThreadScreen({ route, navigation }: Props) {
         visible={summaryOpen}
         chatId={chatId}
         onClose={() => setSummaryOpen(false)}
+      />
+
+      <MediaViewerModal
+        visible={!!mediaViewerUrl}
+        url={mediaViewerUrl}
+        onClose={() => setMediaViewerUrl(null)}
       />
 
       {/* v1.151+1.152: long-press action menu. Emoji-react row on top

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.193</title>
+<title>CommonCommunication v1.194</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -907,6 +907,31 @@
     z-index: 50;
   }
   .modal-back.visible { display: flex; }
+  /* v1.194: fullscreen in-app image viewer. Higher z-index than the
+     ticket popover so it always sits on top. Backdrop click + × button
+     + ESC all dismiss. Image stretches up to viewport bounds, native
+     browser pinch / wheel zoom still works inside. */
+  .media-viewer {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.95);
+    display: none; align-items: center; justify-content: center;
+    z-index: 200; cursor: zoom-out;
+  }
+  .media-viewer.visible { display: flex; }
+  .media-viewer-img {
+    max-width: 95vw; max-height: 92vh;
+    object-fit: contain;
+    cursor: auto;
+    box-shadow: 0 4px 30px rgba(0,0,0,0.6);
+  }
+  .media-viewer-close {
+    position: absolute; top: 18px; right: 22px;
+    width: 40px; height: 40px; border-radius: 20px;
+    background: rgba(255,255,255,0.18); border: none;
+    color: white; font-size: 18px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.15s;
+  }
+  .media-viewer-close:hover { background: rgba(255,255,255,0.3); }
   .modal {
     background: white; border-radius: 12px; padding: 24px;
     width: 360px; max-width: 92vw;
@@ -1581,7 +1606,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.193</div>
+    <div class="login-version">v1.194</div>
   </div>
 </div>
 
@@ -1589,7 +1614,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.193</span>
+    <span class="ver">v1.194</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -1895,6 +1920,15 @@
   </div>
 </div>
 
+<!-- ============== MEDIA VIEWER (v1.194) ============== -->
+<!-- Fullscreen image viewer. Replaces the previous window.open behaviour
+     so clicking an image bubble stays inside the dashboard instead of
+     spawning a new tab. Click the dim backdrop or × or hit ESC to close. -->
+<div class="media-viewer" id="mediaViewer">
+  <button class="media-viewer-close" id="mediaViewerClose" title="Close (Esc)">✕</button>
+  <img class="media-viewer-img" id="mediaViewerImg" alt="" />
+</div>
+
 <!-- ============== SUMMARY MODAL ============== -->
 <div class="modal-back" id="summaryModal">
   <div class="modal" style="width:600px; max-width:94vw; max-height:80vh; display:flex; flex-direction:column;">
@@ -2026,7 +2060,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.193";
+const APP_VERSION = "v1.194";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -5487,6 +5521,33 @@ let _lastSummaryChatId = null;
 summarizeBtn.onclick = () => runSummarize(false);
 summaryRegen.onclick = () => runSummarize(true);
 summaryClose.onclick = () => summaryModal.classList.remove("visible");
+
+// v1.194: in-app image viewer wiring. window.openMediaViewer is called by
+// the onclick on every <img> rendered by renderMediaHtml. Sets the src,
+// shows the overlay. Backdrop click + × button + ESC key dismiss.
+const mediaViewerEl = $("mediaViewer");
+const mediaViewerImg = $("mediaViewerImg");
+const mediaViewerCloseBtn = $("mediaViewerClose");
+window.openMediaViewer = function (src) {
+  if (!src) return;
+  mediaViewerImg.src = src;
+  mediaViewerEl.classList.add("visible");
+};
+function closeMediaViewer() {
+  mediaViewerEl.classList.remove("visible");
+  // Clear src to release memory + stop any in-flight fetch.
+  mediaViewerImg.src = "";
+}
+mediaViewerCloseBtn.onclick = closeMediaViewer;
+mediaViewerEl.addEventListener("click", (e) => {
+  // Only close when the click landed on the backdrop, not on the image.
+  if (e.target === mediaViewerEl) closeMediaViewer();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && mediaViewerEl.classList.contains("visible")) {
+    closeMediaViewer();
+  }
+});
 summaryCopy.onclick = async () => {
   try {
     await navigator.clipboard.writeText(summaryBody.textContent || "");
@@ -6015,7 +6076,11 @@ function renderMediaHtml(m) {
   const isVideo = mime.startsWith("video") || mime === "video";
   const isAudio = mime.startsWith("audio") || mime === "audio" || mime === "ptt";
   if (isImage) {
-    return `<div class="media"><img src="${escapeHtml(proxyUrl)}" alt="image" loading="lazy" onclick="window.open(this.src, '_blank')" /></div>`;
+    // v1.194: in-app fullscreen viewer instead of opening the image in a
+    // new tab. window.openMediaViewer is defined below; takes the URL,
+    // populates the overlay, shows it. Clicking the backdrop / × / ESC
+    // dismisses.
+    return `<div class="media"><img src="${escapeHtml(proxyUrl)}" alt="image" loading="lazy" onclick="window.openMediaViewer(this.src)" /></div>`;
   }
   if (isVideo) {
     return `<div class="media"><video controls preload="metadata" src="${escapeHtml(proxyUrl)}"></video></div>`;
