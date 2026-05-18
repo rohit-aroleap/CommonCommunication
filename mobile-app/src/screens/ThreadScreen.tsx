@@ -12,6 +12,7 @@ import React, {
 } from "react";
 import {
   Alert,
+  AppState,
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
@@ -1332,6 +1333,36 @@ function VoiceMicButton({
       cancelled = true;
     };
   }, [recorder]);
+
+  // Reset recorder state on AppState transitions away from "active".
+  //
+  // Why: on iOS, when the app backgrounds while a recorder is in the
+  // "prepared but idle" state (our fast-path optimization), the audio
+  // session can get into a weird state where foregrounding the app auto-
+  // resumes recording without any user tap. Trainers were seeing the mic
+  // light up on its own after switching apps and coming back.
+  //
+  // Fix: when we transition out of "active", force-stop any active
+  // recording AND mark the recorder as unprepared. Next tap goes through
+  // the full prepare+permission flow — adds ~200ms latency on that one
+  // tap but eliminates the auto-record bug entirely. Normal in-foreground
+  // taps still use the pre-prepared fast path.
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (next) => {
+      if (next === "active") return;
+      // Best-effort stop — if we're not recording, this is a no-op or
+      // throws an "already stopped" we can swallow.
+      if (isRecording) {
+        recorder.stop().catch(() => {
+          /* swallow — recorder may be in a transitional state */
+        });
+      }
+      preparedRef.current = false;
+    });
+    return () => sub.remove();
+    // recorder is stable for the component's lifetime; isRecording is
+    // captured fresh each AppState fire via closure on every render.
+  }, [recorder, isRecording]);
 
   async function toggle() {
     if (transcribing) return;
