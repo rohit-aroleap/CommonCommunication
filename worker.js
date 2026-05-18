@@ -144,6 +144,15 @@ async function handleSend(request, env) {
   if (body.media && (body.media.filedata || body.media.url)) {
     periskopeBody.media = body.media;
   }
+  // v1.153 reply / quote. When the caller includes a replyTo snapshot,
+  // we ask Periskope to make this a reply (so the customer's WhatsApp
+  // shows the quoted parent above the new message). Several possible
+  // field names — Periskope's REST docs aren't public, so we send the
+  // most-likely one and the build comment for the next round if it
+  // doesn't pop. reply_to_message_id is what WhatsApp's Cloud API uses.
+  if (body.replyTo?.periskopeMsgId) {
+    periskopeBody.reply_to_message_id = body.replyTo.periskopeMsgId;
+  }
   const periskopeRes = await fetch(`${PERISKOPE_BASE}/message/send`, {
     method: "POST",
     headers: periskopeHeaders(env),
@@ -185,6 +194,19 @@ async function handleSend(request, env) {
   }
   if (mentions.length > 0) {
     msgRecord.mentions = mentions;
+  }
+  // v1.153: stash reply snapshot so the bubble can render the quoted
+  // card without an extra read of the parent (which may have been
+  // edited or deleted since). Only fields we'll actually render get
+  // persisted — keep the record lean.
+  if (body.replyTo?.msgKey) {
+    msgRecord.replyTo = {
+      msgKey: body.replyTo.msgKey,
+      periskopeMsgId: body.replyTo.periskopeMsgId || null,
+      text: String(body.replyTo.text || "").slice(0, 500),
+      isFromMe: !!body.replyTo.isFromMe,
+      senderName: body.replyTo.senderName || null,
+    };
   }
 
   let msgKey = localMsgId;

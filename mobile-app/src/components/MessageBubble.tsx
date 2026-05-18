@@ -75,6 +75,22 @@ export function MessageBubble({
         ]}
       >
         {senderTag && <Text style={styles.senderTag}>{senderTag}</Text>}
+        {/* v1.153 quoted card. If this message was sent as a reply,
+            render a snippet of the parent above the body so the trainer
+            (and the customer, mirroring WhatsApp) can see what's being
+            answered without scrolling. */}
+        {!isDeleted && m.replyTo && (
+          <View style={styles.replyQuote}>
+            <Text style={styles.replyQuoteLabel} numberOfLines={1}>
+              {m.replyTo.isFromMe
+                ? "You"
+                : m.replyTo.senderName || "Customer"}
+            </Text>
+            <Text style={styles.replyQuoteTxt} numberOfLines={2}>
+              {m.replyTo.text || "(media)"}
+            </Text>
+          </View>
+        )}
         {isDeleted ? (
           <Text style={styles.deletedTxt}>🚫 This message was deleted</Text>
         ) : (
@@ -299,6 +315,28 @@ function makeStyles(colors: Colors) {
       borderColor: colors.border,
     },
     reactionsPillTxt: { fontSize: 12, color: colors.text },
+    // v1.153 quoted card inside a reply bubble. Left accent stripe +
+    // muted label + clipped snippet. Tinted background so it reads as
+    // a distinct sub-block within the bubble.
+    replyQuote: {
+      borderLeftWidth: 3,
+      borderLeftColor: senderTagColor,
+      paddingLeft: 6,
+      paddingVertical: 4,
+      marginBottom: 4,
+      backgroundColor: "rgba(0,0,0,0.06)",
+      borderRadius: 4,
+    },
+    replyQuoteLabel: {
+      fontSize: 11,
+      fontWeight: "600",
+      color: senderTagColor,
+    },
+    replyQuoteTxt: {
+      fontSize: 12.5,
+      color: colors.muted,
+      marginTop: 1,
+    },
     image: {
       width: 220,
       height: 220,

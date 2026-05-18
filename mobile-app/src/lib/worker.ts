@@ -26,6 +26,16 @@ export interface SendBody {
     mimetype: string;
     filedata: string; // base64
   };
+  // v1.153 reply / quote. When set, the worker passes
+  // reply_to_message_id to Periskope and stores a snapshot of the parent
+  // on the new message record so the bubble can render a quoted card.
+  replyTo?: {
+    msgKey: string;
+    periskopeMsgId?: string | null;
+    text: string;
+    isFromMe?: boolean;
+    senderName?: string | null;
+  };
 }
 
 export async function sendMessage(body: SendBody): Promise<Response> {

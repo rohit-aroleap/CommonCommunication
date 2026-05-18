@@ -292,6 +292,16 @@ export function ThreadScreen({ route, navigation }: Props) {
   const [editFor, setEditFor] = useState<
     { message: Message; draft: string; saving: boolean } | null
   >(null);
+  // v1.153: when the trainer picks "Reply" from the action sheet, we
+  // stash a snapshot of the parent message here. The composer renders a
+  // quoted-message bar above the text input while this is set. Cleared
+  // on send, on dismiss-tap, or on chat change (via the effect below).
+  const [replyTarget, setReplyTarget] = useState<Message | null>(null);
+  useEffect(() => {
+    // Chat changed — drop any pending reply target so it doesn't leak
+    // into the next chat's send.
+    setReplyTarget(null);
+  }, [chatKey]);
   // Voice-flow state — v1.134 splits the old single mic into two:
   //   📝 left of input: still goes through the note-preview modal.
   //   🎤 right of input: appends transcript directly to the composer.
@@ -505,17 +515,31 @@ export function ThreadScreen({ route, navigation }: Props) {
     if (isDm) return sendDm();
     const text = composer.trim();
     if (!text || !user) return;
+    // v1.153: snapshot the reply target NOW (before any await) so the
+    // composer can clear immediately and a chat change can't blow it
+    // away mid-flight.
+    const replySnapshot = replyTarget;
     const ts = Date.now();
     const msgRef = push(ref(db, `${ROOT}/chats/${chatKey}/messages`));
     const localMsgId = msgRef.key as string;
-    await set(msgRef, {
+    const optimisticRec: Record<string, unknown> = {
       direction: "out",
       text,
       ts,
       sentByUid: user.uid,
       sentByName: user.displayName || user.email,
       status: "sending",
-    });
+    };
+    if (replySnapshot) {
+      optimisticRec.replyTo = {
+        msgKey: replySnapshot.id,
+        periskopeMsgId: replySnapshot.periskopeMsgId || null,
+        text: (replySnapshot.text || replySnapshot.media?.caption || "").slice(0, 500),
+        isFromMe: replySnapshot.direction === "out",
+        senderName: replySnapshot.sentByName || null,
+      };
+    }
+    await set(msgRef, optimisticRec);
     await update(ref(db, `${ROOT}/chats/${chatKey}/meta`), {
       chatId,
       phone,
@@ -535,6 +559,7 @@ export function ThreadScreen({ route, navigation }: Props) {
     }
     setComposer("");
     setMentions(new Map());
+    setReplyTarget(null);
     try {
       const res = await sendMessage({
         chatId,
@@ -544,6 +569,17 @@ export function ThreadScreen({ route, navigation }: Props) {
         sentByName: user.displayName || user.email || "",
         localMsgId,
         ...(mentionUids.length > 0 ? { mentions: mentionUids } : {}),
+        ...(replySnapshot
+          ? {
+              replyTo: {
+                msgKey: replySnapshot.id,
+                periskopeMsgId: replySnapshot.periskopeMsgId || null,
+                text: (replySnapshot.text || replySnapshot.media?.caption || "").slice(0, 500),
+                isFromMe: replySnapshot.direction === "out",
+                senderName: replySnapshot.sentByName || null,
+              },
+            }
+          : {}),
       });
       if (!res.ok) {
         const t = await res.text();
@@ -552,7 +588,7 @@ export function ThreadScreen({ route, navigation }: Props) {
     } catch (e: any) {
       await update(msgRef, { status: "failed", error: String(e) });
     }
-  }, [isDm, sendDm, composer, user, chatKey, chatId, phone, mentions]);
+  }, [isDm, sendDm, composer, user, chatKey, chatId, phone, mentions, replyTarget]);
 
   // Voice note flow — called by MicButton after recording stops with the
   // captured audio file URI. Uploads to /transcribe, opens the preview
@@ -1306,12 +1342,39 @@ export function ThreadScreen({ route, navigation }: Props) {
             />
           </View>
         )}
+        {/* v1.153 quoted-reply bar. Sits flush above the composer row
+            when the trainer picked "Reply" from a message's action sheet.
+            Shows who they're replying to + a snippet of the text + an X
+            to dismiss. Theme-aware via colors.bg / .text / .muted. */}
+        {replyTarget && (
+          <View style={styles.replyBar}>
+            <View style={styles.replyBarAccent} />
+            <View style={styles.replyBarBody}>
+              <Text style={styles.replyBarLabel}>
+                {replyTarget.direction === "out"
+                  ? "Replying to yourself"
+                  : `Replying to ${replyTarget.sentByName || replyTarget.senderPhone || "customer"}`}
+              </Text>
+              <Text style={styles.replyBarTxt} numberOfLines={1}>
+                {replyTarget.text || replyTarget.media?.caption || "(media)"}
+              </Text>
+            </View>
+            <TouchableOpacity
+              accessibilityLabel="Cancel reply"
+              onPress={() => setReplyTarget(null)}
+              style={styles.replyBarClose}
+              hitSlop={8}
+            >
+              <Text style={styles.replyBarCloseTxt}>✕</Text>
+            </TouchableOpacity>
+          </View>
+        )}
         <View style={styles.composerRow}>
           <TextInput
             style={styles.input}
             value={composer}
             onChangeText={setComposer}
-            placeholder="Type a message"
+            placeholder={replyTarget ? "Reply…" : "Type a message"}
             placeholderTextColor={colors.muted}
             multiline
           />
@@ -1402,6 +1465,21 @@ export function ThreadScreen({ route, navigation }: Props) {
                 );
               })}
             </View>
+            <TouchableOpacity
+              style={styles.actionSheetRow}
+              onPress={() => {
+                // v1.153: Reply queues the message as the next send's
+                // quote target. The composer renders a quoted bar above
+                // the text input — see styles.replyBar below.
+                if (messageMenuFor) {
+                  setReplyTarget(messageMenuFor);
+                  setMessageMenuFor(null);
+                }
+              }}
+            >
+              <Text style={styles.actionSheetIcon}>↩️</Text>
+              <Text style={styles.actionSheetTxt}>Reply</Text>
+            </TouchableOpacity>
             <TouchableOpacity
               style={styles.actionSheetRow}
               onPress={() => messageMenuFor && handleCopyMessage(messageMenuFor)}
@@ -2215,6 +2293,40 @@ function makeStyles(colors: Colors) {
   },
   reactBtnActive: { backgroundColor: colors.bg },
   reactBtnTxt: { fontSize: 24 },
+  // v1.153 quoted-reply bar above the composer. Vertical accent strip
+  // on the left echoes WhatsApp's "you're replying to X" indicator.
+  replyBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.bg,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+  },
+  replyBarAccent: {
+    width: 3,
+    alignSelf: "stretch",
+    backgroundColor: colors.green,
+    borderRadius: 2,
+    marginRight: 8,
+  },
+  replyBarBody: { flex: 1 },
+  replyBarLabel: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: colors.green,
+  },
+  replyBarTxt: {
+    fontSize: 13,
+    color: colors.muted,
+    marginTop: 1,
+  },
+  replyBarClose: {
+    padding: 6,
+    marginLeft: 4,
+  },
+  replyBarCloseTxt: { color: colors.muted, fontSize: 16 },
   headerBtn: {
     width: 36,
     height: 36,

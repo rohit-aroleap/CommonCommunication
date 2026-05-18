@@ -80,6 +80,18 @@ export interface Message {
       source?: "trainer" | "customer";
     }
   > | null;
+  // v1.153 reply / quote. Snapshot of the parent message at the time
+  // the reply was sent — keeps the quoted card stable even if the
+  // parent is edited later. Worker fills this in (forwarded from
+  // mobile's send body). Bubble renders the snapshot as a small
+  // quoted card above the reply's text.
+  replyTo?: {
+    msgKey: string;
+    periskopeMsgId?: string | null;
+    text: string;
+    isFromMe?: boolean;
+    senderName?: string | null;
+  } | null;
 }
 
 export interface Ticket {
