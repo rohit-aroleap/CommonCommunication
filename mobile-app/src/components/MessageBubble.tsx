@@ -106,7 +106,7 @@ export function MessageBubble({
           <Text style={styles.deletedTxt}>🚫 This message was deleted</Text>
         ) : (
           <>
-            <MediaBlock media={m.media} />
+            <MediaBlock media={m.media} onLongPress={() => onLongPress(m)} />
             {hasText ? <Text style={styles.text}>{m.text}</Text> : null}
           </>
         )}
@@ -182,7 +182,19 @@ function Status({ status }: { status: Message["status"] }) {
   return <Text style={[styles.status, { color }]}>{txt}</Text>;
 }
 
-function MediaBlock({ media }: { media?: Message["media"] | null }) {
+// v1.181: forward long-press from the media's inner TouchableOpacity to
+// the parent bubble's onLongPress so the React/Reply/Forward/Edit/Delete
+// menu opens on attachment bubbles just like it does on text bubbles.
+// Without this, the inner Touchable captures the touch and the outer
+// bubble's onLongPress never fires — Bhargav reported the action menu
+// "is coming for chats, but not for attachments in team chat."
+function MediaBlock({
+  media,
+  onLongPress,
+}: {
+  media?: Message["media"] | null;
+  onLongPress: () => void;
+}) {
   const styles = useStyles(makeStyles);
   if (!media) return null;
   if (!media.url) {
@@ -199,7 +211,11 @@ function MediaBlock({ media }: { media?: Message["media"] | null }) {
   const proxied = mediaProxyUrl(media.url);
   if (mt.startsWith("image")) {
     return (
-      <TouchableOpacity onPress={() => Linking.openURL(proxied)}>
+      <TouchableOpacity
+        onPress={() => Linking.openURL(proxied)}
+        onLongPress={onLongPress}
+        delayLongPress={420}
+      >
         <Image
           source={{ uri: proxied }}
           style={styles.image}
@@ -212,6 +228,8 @@ function MediaBlock({ media }: { media?: Message["media"] | null }) {
     return (
       <TouchableOpacity
         onPress={() => Linking.openURL(proxied)}
+        onLongPress={onLongPress}
+        delayLongPress={420}
         style={styles.docBlock}
       >
         <Text style={styles.docTxt}>🎥 {media.fileName || "Video"}</Text>
@@ -222,6 +240,8 @@ function MediaBlock({ media }: { media?: Message["media"] | null }) {
     return (
       <TouchableOpacity
         onPress={() => Linking.openURL(proxied)}
+        onLongPress={onLongPress}
+        delayLongPress={420}
         style={styles.docBlock}
       >
         <Text style={styles.docTxt}>🎤 {media.fileName || "Voice note"}</Text>
@@ -231,6 +251,8 @@ function MediaBlock({ media }: { media?: Message["media"] | null }) {
   return (
     <TouchableOpacity
       onPress={() => Linking.openURL(proxied)}
+      onLongPress={onLongPress}
+      delayLongPress={420}
       style={styles.docBlock}
     >
       <Text style={styles.docTxt}>📎 {media.fileName || "Attachment"}</Text>
