@@ -125,6 +125,13 @@ export default {
       if (url.pathname.startsWith("/dm-media/") && request.method === "GET") {
         return cors(env, await handleDmMediaGet(request, env));
       }
+      // v1.182: manual trigger for the cleanup that used to run on cron.
+      // Idempotent — safe to hit on a schedule (uptime monitor) or
+      // ad-hoc. Returns the number of objects deleted.
+      if (url.pathname === "/cleanup-dm-media" && request.method === "POST") {
+        const deleted = await cleanupOldDmMedia(env);
+        return cors(env, json({ ok: true, deleted, retentionDays: DM_MEDIA_RETENTION_DAYS }));
+      }
       return cors(env, json({ error: "not_found" }, 404));
     } catch (err) {
       return cors(env, json({ error: String(err && err.message || err) }, 500));

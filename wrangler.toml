@@ -18,13 +18,15 @@ binding = "AI"
 binding = "DM_MEDIA"
 bucket_name = "commoncomm-dm-media"
 
-# v1.177: daily cleanup. Walks DM_MEDIA and deletes objects older than
-# DM_MEDIA_RETENTION_DAYS (see worker.js). Bounds R2 storage growth so
-# the free tier (10 GB) is never exhausted by ordinary team use. 03:00
-# UTC chosen as a quiet hour for the team in IST (08:30 IST). The
-# scheduled handler in worker.js is the entry point.
-[triggers]
-crons = ["0 3 * * *"]
+# v1.182: the daily cron was removed because the CF account is at the
+# 5-cron limit across all Workers (Route Tracker, CTracker, MyWhatsapp,
+# etc.). Cleanup now runs via an HTTP endpoint (POST /cleanup-dm-media)
+# that anyone can hit periodically — bookmark + click weekly, or wire
+# it to a free uptime monitor (cron-job.org) for full automation.
+# The scheduled() handler in worker.js stays in place so re-attaching
+# a cron in the future is a one-liner if a slot frees up.
+# [triggers]
+# crons = ["0 3 * * *"]
 
 # Secrets to set via:
 #   wrangler secret put PERISKOPE_API_KEY
