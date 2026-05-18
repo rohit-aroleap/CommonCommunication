@@ -56,7 +56,14 @@ import { useAuth } from "@/auth/AuthContext";
 import { resolveDisplayName } from "@/lib/displayName";
 import { dayLabel } from "@/lib/format";
 import { chatKeyToChatId } from "@/lib/encodeKey";
-import { fetchChatInfo, sendMessage, notifyDm, transcribeAudio } from "@/lib/worker";
+import {
+  fetchChatInfo,
+  sendMessage,
+  notifyDm,
+  transcribeAudio,
+  editMessage,
+  deleteMessage,
+} from "@/lib/worker";
 import { makeVoiceNoteRecordingOptions } from "@/lib/voiceRecording";
 import { prewarmTranscription } from "@/lib/prewarm";
 import { getGroqKey } from "@/lib/groqKey";
@@ -268,6 +275,16 @@ export function ThreadScreen({ route, navigation }: Props) {
   const [reassignTicket, setReassignTicket] = useState<Ticket | null>(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [attachBusy, setAttachBusy] = useState(false);
+  // v1.151: long-press menu state. When set, a bottom-sheet style action
+  // list slides up offering Copy / Edit / Delete / Cancel. Only own
+  // outbound messages trigger the full menu; long-pressing an inbound
+  // message still just copies (preserves the v1.118 behavior).
+  const [messageMenuFor, setMessageMenuFor] = useState<Message | null>(null);
+  // The Edit modal is its own piece of state because the menu closes
+  // immediately on Edit tap, before the modal opens. Holds {message, draft, saving}.
+  const [editFor, setEditFor] = useState<
+    { message: Message; draft: string; saving: boolean } | null
+  >(null);
   // Voice-flow state — v1.134 splits the old single mic into two:
   //   📝 left of input: still goes through the note-preview modal.
   //   🎤 right of input: appends transcript directly to the composer.
@@ -638,6 +655,115 @@ export function ThreadScreen({ route, navigation }: Props) {
     }
   }
 
+  // v1.151: action-sheet handlers — Copy / Edit / Delete on long-press of
+  // an own outbound message. The menu state (messageMenuFor) is set by
+  // MessageBubble's onLongPress in renderItem; these handlers consume it
+  // and route to the right follow-up flow.
+
+  const handleCopyMessage = useCallback(async (m: Message) => {
+    const txt = m.text || m.media?.caption || m.media?.fileName || "";
+    setMessageMenuFor(null);
+    if (!txt) return;
+    await Clipboard.setStringAsync(txt);
+    Alert.alert("Copied");
+  }, []);
+
+  const handleStartEdit = useCallback((m: Message) => {
+    setMessageMenuFor(null);
+    // Pre-fill with the current text — falls back to caption if this is
+    // a media message with a caption. Empty fallback never reaches the
+    // network: saveEdit validates before sending.
+    const initialText = m.text || m.media?.caption || "";
+    setEditFor({ message: m, draft: initialText, saving: false });
+  }, []);
+
+  const saveEdit = useCallback(async () => {
+    if (!editFor || !user) return;
+    const trimmed = editFor.draft.trim();
+    if (!trimmed) {
+      Alert.alert("Empty message", "Type something or cancel.");
+      return;
+    }
+    if (trimmed === (editFor.message.text || "").trim()) {
+      // No-op — close without an unnecessary worker call.
+      setEditFor(null);
+      return;
+    }
+    const periskopeMsgId = editFor.message.periskopeMsgId;
+    if (!periskopeMsgId) {
+      Alert.alert("Can't edit", "This message wasn't tracked by Periskope yet — try again in a moment.");
+      return;
+    }
+    setEditFor({ ...editFor, saving: true });
+    const result = await editMessage({
+      chatKey,
+      msgKey: editFor.message.id,
+      periskopeMsgId,
+      newText: trimmed,
+      editedByUid: user.uid,
+      editedByName: user.displayName || user.email || "",
+    });
+    if (result.ok) {
+      // Firebase listener will pick up the updated text + editedAt and
+      // re-render the bubble. Just close the modal.
+      setEditFor(null);
+      return;
+    }
+    // Most likely failure: Periskope's edit window expired (~15 min on
+    // WhatsApp). Surface their error message rather than a generic one.
+    Alert.alert(
+      "Couldn't edit",
+      typeof result.details === "string"
+        ? result.details
+        : (result.error || `HTTP ${result.status}`) +
+          "\n\nWhatsApp typically only allows edits within 15 minutes of sending.",
+    );
+    setEditFor((prev) => (prev ? { ...prev, saving: false } : prev));
+  }, [editFor, user, chatKey]);
+
+  const handleDeleteMessage = useCallback(
+    (m: Message) => {
+      setMessageMenuFor(null);
+      const periskopeMsgId = m.periskopeMsgId;
+      if (!periskopeMsgId) {
+        Alert.alert(
+          "Can't delete",
+          "This message wasn't tracked by Periskope yet — try again in a moment.",
+        );
+        return;
+      }
+      if (!user) return;
+      Alert.alert(
+        "Delete this message?",
+        "It'll be removed from the customer's WhatsApp too. WhatsApp typically only allows this within ~2 days of sending.",
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Delete",
+            style: "destructive",
+            onPress: async () => {
+              const result = await deleteMessage({
+                chatKey,
+                msgKey: m.id,
+                periskopeMsgId,
+                deletedByUid: user.uid,
+                deletedByName: user.displayName || user.email || "",
+              });
+              if (result.ok) return; // listener will re-render the bubble as deleted
+              Alert.alert(
+                "Couldn't delete",
+                typeof result.details === "string"
+                  ? result.details
+                  : (result.error || `HTTP ${result.status}`),
+              );
+            },
+          },
+        ],
+      );
+    },
+    [chatKey, user],
+  );
+
   // v1.129: save a new template to commonComm/config/templates. The listener
   // in AppDataContext picks it up immediately, so the picker refreshes and
   // we can close the modal right after the write.
@@ -907,8 +1033,16 @@ export function ThreadScreen({ route, navigation }: Props) {
               setTicketCreateFor(m);
             }}
             onLongPress={async (m) => {
-              // Long-press → copy. Quietly puts text on clipboard and shows
-              // a light toast-style alert so the trainer knows it worked.
+              // v1.151: own outbound messages get the action menu
+              // (Copy / Edit / Delete). Inbound + deleted messages still
+              // long-press → copy directly (matches v1.118 behavior; no
+              // point showing Edit/Delete on something we can't modify).
+              const canEditOrDelete =
+                m.direction === "out" && !m.deleted && !!m.periskopeMsgId;
+              if (canEditOrDelete) {
+                setMessageMenuFor(m);
+                return;
+              }
               const txt =
                 m.text ||
                 m.media?.caption ||
@@ -1183,6 +1317,114 @@ export function ThreadScreen({ route, navigation }: Props) {
         chatId={chatId}
         onClose={() => setSummaryOpen(false)}
       />
+
+      {/* v1.151: long-press action menu for own outbound messages.
+          Bottom sheet with Copy / Edit / Delete / Cancel — WhatsApp pattern. */}
+      <Modal
+        visible={!!messageMenuFor}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setMessageMenuFor(null)}
+      >
+        <Pressable
+          style={styles.actionSheetBack}
+          onPress={() => setMessageMenuFor(null)}
+        >
+          <Pressable
+            style={styles.actionSheetCard}
+            onPress={(e) => e.stopPropagation()}
+          >
+            <TouchableOpacity
+              style={styles.actionSheetRow}
+              onPress={() => messageMenuFor && handleCopyMessage(messageMenuFor)}
+            >
+              <Text style={styles.actionSheetIcon}>📋</Text>
+              <Text style={styles.actionSheetTxt}>Copy</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.actionSheetRow}
+              onPress={() => messageMenuFor && handleStartEdit(messageMenuFor)}
+            >
+              <Text style={styles.actionSheetIcon}>✏️</Text>
+              <Text style={styles.actionSheetTxt}>Edit</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.actionSheetRow}
+              onPress={() => messageMenuFor && handleDeleteMessage(messageMenuFor)}
+            >
+              <Text style={styles.actionSheetIcon}>🗑️</Text>
+              <Text style={[styles.actionSheetTxt, styles.actionSheetTxtDestructive]}>
+                Delete
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.actionSheetRow, styles.actionSheetCancelRow]}
+              onPress={() => setMessageMenuFor(null)}
+            >
+              <Text style={styles.actionSheetCancelTxt}>Cancel</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* v1.151: Edit modal. Re-uses the preview-card chrome from the
+          note / new-template modals so it feels consistent. Saves through
+          /edit-message; close handlers and validation in saveEdit above. */}
+      <Modal
+        visible={!!editFor}
+        transparent
+        animationType="fade"
+        onRequestClose={() => editFor && !editFor.saving && setEditFor(null)}
+      >
+        <View style={styles.previewBack}>
+          <View style={styles.previewCard}>
+            <View style={styles.previewHead}>
+              <Text style={styles.previewTitle}>Edit message</Text>
+              <Text style={styles.previewSub}>
+                The customer's WhatsApp will update too. Edits typically
+                allowed within 15 minutes of sending.
+              </Text>
+            </View>
+            <TextInput
+              style={[styles.previewInput, { minHeight: 110 }]}
+              value={editFor?.draft ?? ""}
+              onChangeText={(v) =>
+                setEditFor((prev) => (prev ? { ...prev, draft: v } : prev))
+              }
+              placeholder="Type the new message…"
+              placeholderTextColor={colors.muted}
+              multiline
+              autoFocus
+              editable={!editFor?.saving}
+            />
+            <View style={styles.previewActions}>
+              <TouchableOpacity
+                style={styles.previewBtn}
+                onPress={() => setEditFor(null)}
+                disabled={editFor?.saving}
+              >
+                <Text style={styles.previewBtnTxt}>Cancel</Text>
+              </TouchableOpacity>
+              <View style={{ flex: 1 }} />
+              <TouchableOpacity
+                onPress={saveEdit}
+                style={[
+                  styles.previewSave,
+                  (!editFor?.draft.trim() || editFor?.saving) &&
+                    styles.previewSaveDisabled,
+                ]}
+                disabled={!editFor?.draft.trim() || editFor?.saving}
+              >
+                {editFor?.saving ? (
+                  <ActivityIndicator color="white" size="small" />
+                ) : (
+                  <Text style={styles.previewSaveTxt}>Save</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* v1.129: New-template composer. Same layout as NotePreviewModal so
           the screen feels familiar — a card with two inputs (slash keyword
@@ -1845,6 +2087,41 @@ function makeStyles(colors: Colors) {
   // hardcoded color. Works in both themes.
   previewSaveDisabled: { opacity: 0.45 },
   previewSaveTxt: { color: "white", fontWeight: "600", fontSize: 14 },
+  // v1.151 bottom-sheet style action menu on long-press. Background is
+  // the standard scrim; card sits at the bottom of the screen for thumb
+  // reach. Three primary rows (Copy / Edit / Delete) + a separated
+  // Cancel row.
+  actionSheetBack: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.4)",
+    justifyContent: "flex-end",
+  },
+  actionSheetCard: {
+    backgroundColor: colors.panel,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingTop: 8,
+    paddingBottom: 28,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+  },
+  actionSheetRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+    gap: 14,
+  },
+  actionSheetIcon: { fontSize: 18 },
+  actionSheetTxt: { color: colors.text, fontSize: 16 },
+  actionSheetTxtDestructive: { color: colors.red, fontWeight: "600" },
+  actionSheetCancelRow: {
+    justifyContent: "center",
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+    marginTop: 4,
+  },
+  actionSheetCancelTxt: { color: colors.muted, fontSize: 15, fontWeight: "600" },
   headerBtn: {
     width: 36,
     height: 36,

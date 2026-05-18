@@ -54,6 +54,20 @@ export interface Message {
   messageType?: string;
   senderPhone?: string;
   media?: MediaInfo | null;
+  // v1.151 edit/delete support. Worker dual-writes these after Periskope
+  // confirms the action. UI renders "edited" tag + "Message deleted"
+  // placeholder accordingly.
+  editedAt?: number | null;
+  editedByUid?: string | null;
+  editedByName?: string | null;
+  deleted?: boolean | null;
+  deletedAt?: number | null;
+  deletedByUid?: string | null;
+  deletedByName?: string | null;
+  // First-edit / pre-delete snapshot kept for audit context. The mobile
+  // UI doesn't show this today but the dashboard or a future history view
+  // can surface it.
+  originalText?: string | null;
 }
 
 export interface Ticket {

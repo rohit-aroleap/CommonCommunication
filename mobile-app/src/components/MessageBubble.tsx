@@ -43,12 +43,19 @@ export function MessageBubble({
     ? `~ ${resolveSenderName(m.senderPhone)}`
     : null;
 
+  // v1.151: deleted messages render a "Message deleted" placeholder in
+  // place of their original content (WhatsApp pattern). We still keep
+  // the bubble visible so ticket-anchor records have somewhere to point.
+  const isDeleted = m.deleted === true;
+  const isEdited = !isDeleted && !!m.editedAt;
+
   // Detect "empty" messages: no text, no usable media. Periskope occasionally
   // sends these (reaction-only, deleted-for-me, system events). Without this
   // guard they render as ghost bubbles with just a timestamp — looks broken.
+  // Deleted messages get their own bubble, so skip the empty-bubble cull.
   const hasText = !!(m.text && m.text.trim());
   const hasMedia = !!(m.media && (m.media.url || m.media.fileName));
-  if (!hasText && !hasMedia) {
+  if (!isDeleted && !hasText && !hasMedia) {
     return null;
   }
 
@@ -59,14 +66,25 @@ export function MessageBubble({
         onPress={() => onPress(m)}
         onLongPress={() => onLongPress(m)}
         activeOpacity={0.85}
-        style={[styles.bubble, out ? styles.bubbleOut : styles.bubbleIn]}
+        style={[
+          styles.bubble,
+          out ? styles.bubbleOut : styles.bubbleIn,
+          isDeleted && styles.bubbleDeleted,
+        ]}
       >
         {senderTag && <Text style={styles.senderTag}>{senderTag}</Text>}
-        <MediaBlock media={m.media} />
-        {hasText ? <Text style={styles.text}>{m.text}</Text> : null}
+        {isDeleted ? (
+          <Text style={styles.deletedTxt}>🚫 This message was deleted</Text>
+        ) : (
+          <>
+            <MediaBlock media={m.media} />
+            {hasText ? <Text style={styles.text}>{m.text}</Text> : null}
+          </>
+        )}
         <View style={styles.footer}>
+          {isEdited && <Text style={styles.editedTag}>edited</Text>}
           <Text style={styles.clock}>{formatClock(m.ts)}</Text>
-          {out && <Status status={m.status} />}
+          {out && !isDeleted && <Status status={m.status} />}
         </View>
       </TouchableOpacity>
     </View>
@@ -199,6 +217,21 @@ function makeStyles(colors: Colors) {
     },
     clock: { fontSize: 10.5, color: colors.muted },
     status: { fontSize: 11 },
+    // v1.151 deleted-message styling. Italic muted text + a slightly
+    // washed-out bubble background so it reads as "tombstone" without
+    // disappearing entirely.
+    bubbleDeleted: { opacity: 0.7 },
+    deletedTxt: {
+      fontSize: 14,
+      color: colors.muted,
+      fontStyle: "italic",
+      lineHeight: 19,
+    },
+    editedTag: {
+      fontSize: 10.5,
+      color: colors.muted,
+      fontStyle: "italic",
+    },
     image: {
       width: 220,
       height: 220,

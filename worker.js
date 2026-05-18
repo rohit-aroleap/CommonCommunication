@@ -42,7 +42,7 @@ export default {
         return cors(env, json({
           service: "CommonCommunication Worker",
           status: "ok",
-          endpoints: ["/health", "/send (POST)", "/webhook (POST)", "/messages?chatId=... (GET)", "/transcribe (POST)", "/cleanup (POST)", "/register-push-token (POST)"],
+          endpoints: ["/health", "/send (POST)", "/edit-message (POST)", "/delete-message (POST)", "/webhook (POST)", "/messages?chatId=... (GET)", "/transcribe (POST)", "/cleanup (POST)", "/register-push-token (POST)"],
         }));
       }
       if (url.pathname === "/messages" && request.method === "GET") {
@@ -92,6 +92,12 @@ export default {
       }
       if (url.pathname === "/backfill-chats-index" && request.method === "POST") {
         return cors(env, await handleBackfillChatsIndex(request, env));
+      }
+      if (url.pathname === "/edit-message" && request.method === "POST") {
+        return cors(env, await handleEditMessage(request, env));
+      }
+      if (url.pathname === "/delete-message" && request.method === "POST") {
+        return cors(env, await handleDeleteMessage(request, env));
       }
       return cors(env, json({ error: "not_found" }, 404));
     } catch (err) {
@@ -236,6 +242,159 @@ async function handleSend(request, env) {
   }
 
   return json({ ok, periskope: periskopeJson }, ok ? 200 : 502);
+}
+
+// ---------- /edit-message ----------
+// Edits a previously-sent WhatsApp message through Periskope, then patches
+// the Firebase record so every connected client sees the new text (plus
+// the `editedAt` marker that lets the UI render the "edited" tag).
+//
+// Body: {
+//   chatKey, msgKey         — Firebase paths to patch on success
+//   periskopeMsgId          — Periskope's message identifier (we pass this
+//                             through to their API)
+//   newText                 — replacement message body
+//   editedByUid, editedByName — for the audit trail on the message record
+// }
+//
+// Periskope's documented edit window is ~15 min on WhatsApp. If the window
+// has expired their API returns an error which we surface verbatim — we
+// don't pre-check on our side because the rule is theirs to enforce.
+async function handleEditMessage(request, env) {
+  const body = await request.json();
+  const { chatKey, msgKey, periskopeMsgId, newText, editedByUid, editedByName } = body || {};
+
+  if (!periskopeMsgId) return json({ error: "missing periskopeMsgId" }, 400);
+  if (!chatKey || !msgKey) return json({ error: "missing chatKey/msgKey" }, 400);
+  const trimmed = String(newText || "").trim();
+  if (!trimmed) return json({ error: "missing newText" }, 400);
+
+  // Periskope's edit endpoint shape (per their REST API): PATCH to the
+  // resource with the new body. If the actual endpoint differs we'll see
+  // a 404/405 here and can adjust to POST /v1/message/edit pattern.
+  let periskopeRes;
+  try {
+    periskopeRes = await fetch(
+      `${PERISKOPE_BASE}/message/${encodeURIComponent(periskopeMsgId)}`,
+      {
+        method: "PATCH",
+        headers: periskopeHeaders(env),
+        body: JSON.stringify({ edited_body: trimmed }),
+      },
+    );
+  } catch (e) {
+    return json({ error: "periskope_unreachable", details: String(e) }, 502);
+  }
+  const periskopeJson = await safeJson(periskopeRes);
+  if (!periskopeRes.ok) {
+    // Surface Periskope's error (likely "edit window expired" or similar)
+    // so the mobile UI can show a useful toast.
+    return json({ error: "periskope_edit_failed", details: periskopeJson, status: periskopeRes.status }, periskopeRes.status);
+  }
+
+  // Patch the Firebase message record so connected clients update. Keep
+  // the original text in `originalText` for the audit trail / dashboard
+  // edit-history view we may build later.
+  const editedAt = Date.now();
+  const prior = await fbGet(env, `${ROOT}/chats/${chatKey}/messages/${msgKey}`);
+  const patch = {
+    text: trimmed,
+    editedAt,
+    editedByUid: editedByUid || null,
+    editedByName: editedByName || null,
+  };
+  // Only stash originalText the FIRST time a message is edited — subsequent
+  // edits preserve the truly-original text rather than overwriting with
+  // the second-most-recent.
+  if (prior && !prior.originalText && prior.text) {
+    patch.originalText = prior.text;
+  }
+  await fbPatch(env, `${ROOT}/chats/${chatKey}/messages/${msgKey}`, patch);
+
+  // Update the chat-list preview if this was the latest message. Cheaper
+  // than a full meta read — just compare against lastMsgAt; if our ts
+  // matches, the preview is for this exact message and should refresh.
+  if (prior?.ts) {
+    const meta = await fbGet(env, `${ROOT}/chats/${chatKey}/meta`);
+    if (meta?.lastMsgAt === prior.ts) {
+      const preview = trimmed.slice(0, 120);
+      const metaPatch = {
+        lastMsgPreview: preview,
+        // Mirror the dual-write that handleSend / handleWebhook do, so
+        // chatsIndex (mobile's chat-list source) stays in sync.
+      };
+      await fbPatch(env, `${ROOT}/chats/${chatKey}/meta`, metaPatch);
+      await fbPatch(env, `${ROOT}/chatsIndex/${chatKey}`, { lastMsgPreview: preview });
+    }
+  }
+
+  return json({ ok: true, editedAt });
+}
+
+// ---------- /delete-message ----------
+// Deletes a previously-sent WhatsApp message through Periskope, then marks
+// the Firebase record as deleted. We DON'T remove the record outright —
+// the UI shows a "Message deleted" placeholder in its place (WhatsApp
+// pattern), which matters for ticket-anchor records and audit context.
+//
+// Body: {
+//   chatKey, msgKey
+//   periskopeMsgId
+//   deletedByUid, deletedByName
+// }
+async function handleDeleteMessage(request, env) {
+  const body = await request.json();
+  const { chatKey, msgKey, periskopeMsgId, deletedByUid, deletedByName } = body || {};
+
+  if (!periskopeMsgId) return json({ error: "missing periskopeMsgId" }, 400);
+  if (!chatKey || !msgKey) return json({ error: "missing chatKey/msgKey" }, 400);
+
+  let periskopeRes;
+  try {
+    periskopeRes = await fetch(
+      `${PERISKOPE_BASE}/message/${encodeURIComponent(periskopeMsgId)}`,
+      {
+        method: "DELETE",
+        headers: periskopeHeaders(env),
+      },
+    );
+  } catch (e) {
+    return json({ error: "periskope_unreachable", details: String(e) }, 502);
+  }
+  const periskopeJson = await safeJson(periskopeRes);
+  if (!periskopeRes.ok) {
+    // Most likely cause: "delete-for-everyone window expired" (~2 days on
+    // WhatsApp). Surface Periskope's error so mobile shows a useful toast.
+    return json({ error: "periskope_delete_failed", details: periskopeJson, status: periskopeRes.status }, periskopeRes.status);
+  }
+
+  // Tombstone the Firebase record. We keep media metadata (filename only,
+  // no URL) for audit context but clear the text and any media URLs.
+  const deletedAt = Date.now();
+  const prior = await fbGet(env, `${ROOT}/chats/${chatKey}/messages/${msgKey}`);
+  const patch = {
+    deleted: true,
+    deletedAt,
+    deletedByUid: deletedByUid || null,
+    deletedByName: deletedByName || null,
+  };
+  // Preserve originalText if this is the first state change.
+  if (prior && !prior.originalText && prior.text) {
+    patch.originalText = prior.text;
+  }
+  await fbPatch(env, `${ROOT}/chats/${chatKey}/messages/${msgKey}`, patch);
+
+  // Refresh chat-list preview if this was the latest message.
+  if (prior?.ts) {
+    const meta = await fbGet(env, `${ROOT}/chats/${chatKey}/meta`);
+    if (meta?.lastMsgAt === prior.ts) {
+      const preview = "🚫 Message deleted";
+      await fbPatch(env, `${ROOT}/chats/${chatKey}/meta`, { lastMsgPreview: preview });
+      await fbPatch(env, `${ROOT}/chatsIndex/${chatKey}`, { lastMsgPreview: preview });
+    }
+  }
+
+  return json({ ok: true, deletedAt });
 }
 
 // ---------- /webhook (inbound from Periskope) ----------

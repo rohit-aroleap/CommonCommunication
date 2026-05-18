@@ -36,6 +36,78 @@ export async function sendMessage(body: SendBody): Promise<Response> {
   });
 }
 
+// v1.151: edit a previously-sent WhatsApp message. The worker calls
+// Periskope's edit endpoint then patches Firebase with the new text +
+// editedAt marker. Returns the worker's JSON response so the caller can
+// surface a toast on failure (most commonly "edit window expired" from
+// Periskope when the message is older than ~15 min).
+export interface EditMessageBody {
+  chatKey: string;
+  msgKey: string;
+  periskopeMsgId: string;
+  newText: string;
+  editedByUid: string;
+  editedByName: string;
+}
+export async function editMessage(body: EditMessageBody): Promise<{
+  ok: boolean;
+  status: number;
+  error?: string;
+  details?: unknown;
+}> {
+  let res: Response;
+  try {
+    res = await fetch(`${WORKER_URL}/edit-message`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    return { ok: false, status: 0, error: String((e as Error)?.message || e) };
+  }
+  const j = (await res.json().catch(() => ({}))) as {
+    error?: string;
+    details?: unknown;
+  };
+  if (!res.ok) return { ok: false, status: res.status, error: j?.error, details: j?.details };
+  return { ok: true, status: res.status };
+}
+
+// v1.151: delete a previously-sent WhatsApp message ("for everyone").
+// Same pattern as editMessage — worker calls Periskope, patches Firebase
+// to tombstone the record (sets deleted: true + deletedAt), and the UI
+// renders a "Message deleted" placeholder in place of the original.
+export interface DeleteMessageBody {
+  chatKey: string;
+  msgKey: string;
+  periskopeMsgId: string;
+  deletedByUid: string;
+  deletedByName: string;
+}
+export async function deleteMessage(body: DeleteMessageBody): Promise<{
+  ok: boolean;
+  status: number;
+  error?: string;
+  details?: unknown;
+}> {
+  let res: Response;
+  try {
+    res = await fetch(`${WORKER_URL}/delete-message`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    return { ok: false, status: 0, error: String((e as Error)?.message || e) };
+  }
+  const j = (await res.json().catch(() => ({}))) as {
+    error?: string;
+    details?: unknown;
+  };
+  if (!res.ok) return { ok: false, status: res.status, error: j?.error, details: j?.details };
+  return { ok: true, status: res.status };
+}
+
 export async function fetchChatInfo(chatId: string): Promise<void> {
   // Best-effort: backfill missing groupName / member names. Failures are
   // non-fatal — the chat list will simply show "Unnamed group" until next try.
