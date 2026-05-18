@@ -22,7 +22,8 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { ref, set, update, get } from "firebase/database";
 import { db } from "@/firebase";
-import { ROOT, BOOTSTRAP_ADMINS } from "@/config";
+import { ROOT } from "@/config";
+import { buildAllowedEmailSet, isAllowedTeamEmail } from "@/lib/teamFilter";
 import { space, useStyles, useTheme, type Colors } from "@/theme";
 import {
   useAppData,
@@ -65,27 +66,15 @@ export function TeamScreen() {
   // Team-tab simplification: no "pick a teammate" step, tap any row to
   // open/create the DM.
   //
-  // v1.187: orphan filter. `commonComm/users/{uid}` records persist after
-  // an admin removes someone from the team allowlist — the remove flow
-  // only touches /config/teamMembers and /config/allowedEmails. Build a
-  // set of currently-allowed emails (admin-curated teamMembers + the
-  // hard-coded bootstrap admins) and hide any user whose email isn't in
-  // it. New /users records that don't have an email field yet (write-
-  // race during sign-in) are kept — they'll get reconciled on next render.
+  // v1.188: orphan filter via shared lib/teamFilter helper so the same
+  // allowed-email gate runs here, in the ticket assignee picker, the
+  // reassign modal, and the @-mention candidate list.
   const rows = useMemo<UnifiedRow[]>(() => {
     const me = user?.uid;
     const myEmail = (user?.email || "").toLowerCase();
-    const allowedEmails = new Set<string>();
-    for (const m of Object.values(teamMembers || {})) {
-      if (m?.email) allowedEmails.add(m.email.toLowerCase());
-    }
-    for (const a of BOOTSTRAP_ADMINS) {
-      allowedEmails.add(a.toLowerCase());
-    }
-    const isAllowed = (email: string): boolean => {
-      if (!email) return true; // no email yet → don't filter, let next render handle
-      return allowedEmails.has(email.toLowerCase());
-    };
+    const allowedEmails = buildAllowedEmailSet(teamMembers);
+    const isAllowed = (email: string): boolean =>
+      isAllowedTeamEmail(email, allowedEmails);
 
     const seenUids = new Set<string>();
     const seenEmails = new Set<string>();

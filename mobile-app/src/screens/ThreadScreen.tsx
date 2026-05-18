@@ -69,6 +69,11 @@ import {
 import { makeVoiceNoteRecordingOptions } from "@/lib/voiceRecording";
 import { prewarmTranscription } from "@/lib/prewarm";
 import { getGroqKey } from "@/lib/groqKey";
+import {
+  buildAllowedEmailSet,
+  filterAllowedTeamUsers,
+  isAllowedTeamEmail,
+} from "@/lib/teamFilter";
 import { dedupMessages } from "@/lib/messageDedup";
 import {
   filterTemplates,
@@ -113,6 +118,11 @@ export function ThreadScreen({ route, navigation }: Props) {
   // the composer's mic/send buttons sit flush against the phone's bottom
   // edge and get clipped by the gesture area.
   const insets = useSafeAreaInsets();
+  // v1.188: teamUsersAllowed = teamUsers minus orphans (people whose email
+  // was removed from /config/teamMembers). Passed into the ticket-create
+  // + reassign modals so their assignee pickers don't show stale entries.
+  // Raw teamUsers is still available for places like dmRows that need to
+  // resolve display names for historical DMs.
   const {
     chatMetaByKey,
     tickets,
@@ -127,6 +137,13 @@ export function ThreadScreen({ route, navigation }: Props) {
     bumpSendActivity,
     templates,
   } = useAppData();
+
+  // v1.188: orphan-free teamUsers for assignee pickers. See lib/teamFilter
+  // for the rule.
+  const teamUsersAllowed = useMemo(
+    () => filterAllowedTeamUsers(teamUsers, teamMembers),
+    [teamUsers, teamMembers],
+  );
 
   // DM mode: the chatKey is "dm:" + pairKey, not a customer chatKey. Branch
   // here so the rest of the component can stay shape-compatible — chatId
@@ -233,12 +250,18 @@ export function ThreadScreen({ route, navigation }: Props) {
     for (const m of Object.values(teamMembers || {})) {
       if (m?.email) memberByEmail.set(m.email.toLowerCase(), m);
     }
+    // v1.188: same orphan filter applied here as in TeamScreen — keeps
+    // removed teammates out of the @-mention picker. Without this the
+    // picker showed stale /users/{uid} records (e.g. two "Rohit Patel"
+    // entries after an admin demote).
+    const allowedEmails = buildAllowedEmailSet(teamMembers);
     const byUid = new Map<
       string,
       { uid: string; name: string; active: boolean }
     >();
     for (const [uid, u] of Object.entries(teamUsers || {})) {
       if (!u || uid === me) continue;
+      if (!isAllowedTeamEmail(u.email || "", allowedEmails)) continue;
       const emailLower = (u.email || "").toLowerCase();
       const override = memberByEmail.get(emailLower);
       const displayName =
@@ -1843,7 +1866,7 @@ export function ThreadScreen({ route, navigation }: Props) {
         chatId={chatId}
         currentUid={user?.uid ?? ""}
         currentName={user?.displayName || user?.email || ""}
-        teamUsers={teamUsers}
+        teamUsers={teamUsersAllowed}
         onClose={() => setTicketCreateFor(null)}
       />
 
@@ -1852,7 +1875,7 @@ export function ThreadScreen({ route, navigation }: Props) {
         ticket={reassignTicket}
         currentUid={user?.uid ?? ""}
         currentName={user?.displayName || user?.email || ""}
-        teamUsers={teamUsers}
+        teamUsers={teamUsersAllowed}
         onClose={() => setReassignTicket(null)}
       />
 
