@@ -48,7 +48,13 @@ export interface Message {
   ts: number;
   sentByUid?: string;
   sentByName?: string | null;
-  status?: "sending" | "sent" | "failed";
+  // v1.197 widens the state machine to include delivered / read. Worker
+  // patches `status` + the matching timestamp when Periskope's webhook
+  // fires a delivery or read event. Older messages stay on "sent" and
+  // simply never advance — backward-compat with no migration needed.
+  status?: "sending" | "sent" | "delivered" | "read" | "failed";
+  deliveredAt?: number | null;
+  readAt?: number | null;
   periskopeMsgId?: string | null;
   periskopeUniqueId?: string | null;
   messageType?: string;

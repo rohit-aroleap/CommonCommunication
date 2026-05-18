@@ -697,9 +697,13 @@
   }
   .bubble .status {
     font-size: 11px;
+    color: #99a5ad;
   }
-  .bubble .status.sending { color: #99a5ad; }
-  .bubble .status.failed  { color: #d9534f; }
+  .bubble .status.sending   { color: #99a5ad; }
+  .bubble .status.failed    { color: #d9534f; }
+  .bubble .status.delivered { color: #99a5ad; }
+  /* WhatsApp blue for read receipts — same shade the mobile app uses. */
+  .bubble .status.read      { color: #53bdeb; }
 
   .day-divider {
     align-self: center;
@@ -6260,9 +6264,14 @@ function renderTicketRibbon(msgKey) {
   return `<div class="${cls}" title="${escapeHtml(t.title || "")}">${label}${more}</div>`;
 }
 
+// v1.197 read receipts. Mirrors mobile MessageBubble.Status — single gray
+// ✓ for sent, gray ✓✓ for delivered, blue ✓✓ for read. The .delivered /
+// .read CSS classes (in the style block above) drive the color; the text
+// here is just the glyph count.
 function statusLabel(s) {
   if (s === "sending") return "…";
   if (s === "failed") return "✕ failed";
+  if (s === "delivered" || s === "read") return "✓✓";
   return "✓";
 }
 

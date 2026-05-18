@@ -701,6 +701,82 @@ async function handleWebhook(request, env) {
     return json({ ok: true, kind: "reaction" });
   }
 
+  // v1.197: handle message status events (delivered / read). Periskope's
+  // webhook for status transitions carries the original message_id (the
+  // one we wrote at send time and pre-indexed under byPeriskopeId/), plus
+  // a status string. We look up the stored message and patch its status +
+  // matching timestamp.
+  //
+  // Event shape isn't fully documented — defensive parsing on multiple
+  // plausible signals (event/type strings + a top-level status field). The
+  // `_debug/webhook` log captures every payload so we can tighten this
+  // once we see real samples from Periskope.
+  const evtLower = String(evtType).toLowerCase();
+  const statusFromMsg = String(msg.status || "").toLowerCase();
+  const isStatusEvent =
+    /^message\.(delivered|read|sent|failed)$/.test(evtLower) ||
+    /^messages?\.status/.test(evtLower) ||
+    statusFromMsg === "delivered" ||
+    statusFromMsg === "read";
+  if (isStatusEvent) {
+    try {
+      // Resolve the status string. Prefer the explicit msg.status, fall
+      // back to the suffix of the event name ("message.read" → "read").
+      const status =
+        statusFromMsg ||
+        evtLower.split(".").pop() ||
+        "";
+      // The message_id field naming varies between BSPs. Try the common
+      // shapes; we'll learn from _debug/webhook if any payload misses.
+      const targetMsgId =
+        msg.message_id ||
+        msg.target_message_id ||
+        msg.original_message_id ||
+        msg.id?.serialized ||
+        msg.id ||
+        null;
+      await fbPut(env, `${ROOT}/_debug/status_events/${debugKey}`, {
+        evtType,
+        status,
+        targetMsgId,
+        receivedAt: Date.now(),
+      });
+      if (targetMsgId && (status === "delivered" || status === "read")) {
+        const refDoc = await fbGet(
+          env,
+          `${ROOT}/byPeriskopeId/${encodeKey(targetMsgId)}`,
+        );
+        if (refDoc?.chatId && refDoc?.msgKey) {
+          const msgPath = `${ROOT}/chats/${encodeKey(refDoc.chatId)}/messages/${refDoc.msgKey}`;
+          const prior = await fbGet(env, msgPath);
+          // Upgrade-only state machine: read > delivered > sent > sending.
+          // Out-of-order webhook delivery (or a duplicate replay of an
+          // older event) must never downgrade a message that's already
+          // been seen at a higher level.
+          const rank = { sending: 0, sent: 1, delivered: 2, read: 3, failed: 0 };
+          const priorRank = rank[prior?.status] ?? 0;
+          const newRank = rank[status] ?? 0;
+          if (newRank > priorRank) {
+            const patch = { status };
+            const evtTs = parseTs(msg.timestamp) || Date.now();
+            if (status === "delivered") {
+              patch.deliveredAt = evtTs;
+            } else if (status === "read") {
+              patch.readAt = evtTs;
+              // If we never saw the delivered event, backfill its
+              // timestamp so the UI can still show "delivered at X".
+              if (!prior?.deliveredAt) patch.deliveredAt = evtTs;
+            }
+            await fbPatch(env, msgPath, patch);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[status-event] failed:", e);
+    }
+    return json({ ok: true, kind: "status" });
+  }
+
   const isFromMe = msg.from_me === true || msg.fromMe === true;
   const text = msg.body || msg.message || msg.text || "";
   const ts = parseTs(msg.timestamp);

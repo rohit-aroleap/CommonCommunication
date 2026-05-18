@@ -178,6 +178,12 @@ function ReactionsPill({
   );
 }
 
+// v1.197 read receipts: ✓ (sent) → ✓✓ gray (delivered) → ✓✓ blue (read).
+// Pre-197 messages that never advance past "sent" keep showing a single
+// gray ✓ — no migration; the wider state machine is purely additive.
+// Note: the prior implementation tinted "sent" blue, which read as "the
+// customer saw this" even though we had no read-receipt signal. Now blue
+// is reserved for actual read confirmations.
 function Status({ status }: { status: Message["status"] }) {
   const { colors } = useTheme();
   const styles = useStyles(makeStyles);
@@ -188,7 +194,10 @@ function Status({ status }: { status: Message["status"] }) {
   } else if (status === "failed") {
     txt = "✗";
     color = colors.red;
-  } else {
+  } else if (status === "delivered") {
+    txt = "✓✓";
+  } else if (status === "read") {
+    txt = "✓✓";
     color = "#53bdeb";
   }
   return <Text style={[styles.status, { color }]}>{txt}</Text>;
