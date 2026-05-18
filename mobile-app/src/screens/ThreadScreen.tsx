@@ -1377,10 +1377,24 @@ export function ThreadScreen({ route, navigation }: Props) {
           text: caption || `${previewIcon} ${media.filename}`,
         });
       } catch (e: any) {
+        // v1.175: surface the real Firebase error to the user. Without
+        // this the bubble just flips to ✗ with no clue why — usually
+        // the cause is Storage rules denying the write, in which case
+        // the error code is "storage/unauthorized" and the trainer
+        // needs an admin to open Storage rules in the Firebase Console.
+        const code = e?.code ? `[${e.code}] ` : "";
+        const msg = String(e?.message || e);
         await update(msgRef, {
           status: "failed",
-          error: String(e?.message || e).slice(0, 300),
+          error: `${code}${msg}`.slice(0, 300),
         });
+        Alert.alert(
+          "Attach failed",
+          `${code}${msg}\n\n` +
+            "If this says 'storage/unauthorized', ask an admin to open " +
+            "Firebase Storage rules and allow authenticated writes to " +
+            "commonComm/dms/.",
+        );
       }
     }
   }, [isDm, user, attachBusy, composer, chatKey, chatId, phone, pairKey, otherUid]);
