@@ -75,6 +75,17 @@ export function MessageBubble({
         ]}
       >
         {senderTag && <Text style={styles.senderTag}>{senderTag}</Text>}
+        {/* v1.154 forwarded-from header. Renders above the body when a
+            DM message was forwarded from a customer thread. Shows ↪️
+            with the source customer's name so the recipient sees the
+            context at a glance. */}
+        {!isDeleted && m.forwardedFrom && (
+          <View style={styles.forwardedHeader}>
+            <Text style={styles.forwardedTxt} numberOfLines={1}>
+              ↪️ Forwarded from {m.forwardedFrom.customerName || "customer"}
+            </Text>
+          </View>
+        )}
         {/* v1.153 quoted card. If this message was sent as a reply,
             render a snippet of the parent above the body so the trainer
             (and the customer, mirroring WhatsApp) can see what's being
@@ -336,6 +347,14 @@ function makeStyles(colors: Colors) {
       fontSize: 12.5,
       color: colors.muted,
       marginTop: 1,
+    },
+    // v1.154 "↪️ Forwarded from X" header. Italic + muted so it reads
+    // as metadata, not as part of the message body.
+    forwardedHeader: { marginBottom: 4 },
+    forwardedTxt: {
+      fontSize: 12,
+      color: colors.muted,
+      fontStyle: "italic",
     },
     image: {
       width: 220,

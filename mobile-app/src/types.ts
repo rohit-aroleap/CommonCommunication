@@ -92,6 +92,23 @@ export interface Message {
     isFromMe?: boolean;
     senderName?: string | null;
   } | null;
+  // v1.154 forward-to-DM. Set on the DM message we wrote when the
+  // trainer forwarded a customer message into a team DM. Snapshot of
+  // the original message (text-only for v1; no media forwarding yet).
+  forwardedFrom?: {
+    chatId?: string | null; // source customer chat
+    customerName?: string | null;
+    customerPhone?: string | null;
+    originalText: string;
+    originalTs: number;
+    originalDirection?: "in" | "out"; // "in" = forwarded a customer's message; "out" = forwarded our own reply
+  } | null;
+  // DM-specific field aliases — DM messages were written before the
+  // current Message type existed. The listener inside ThreadScreen
+  // normalizes these into the main fields, but we declare them here so
+  // the writer doesn't have to cast.
+  fromUid?: string;
+  fromName?: string | null;
 }
 
 export interface Ticket {

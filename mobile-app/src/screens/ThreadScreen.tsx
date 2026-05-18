@@ -51,6 +51,7 @@ import {
   openTicketsForChat,
   isDmKey,
   pairKeyFromChatKey,
+  getPairKey,
 } from "@/data/AppDataContext";
 import { useAuth } from "@/auth/AuthContext";
 import { resolveDisplayName } from "@/lib/displayName";
@@ -301,6 +302,14 @@ export function ThreadScreen({ route, navigation }: Props) {
     // Chat changed — drop any pending reply target so it doesn't leak
     // into the next chat's send.
     setReplyTarget(null);
+  }, [chatKey]);
+  // v1.154: when the trainer picks "Forward to teammate" from the
+  // action sheet, we hold the source message here. Tapping a teammate
+  // in the picker writes a DM under their pairKey, then clears the
+  // target. Cancel-tap or chat change also clears.
+  const [forwardTarget, setForwardTarget] = useState<Message | null>(null);
+  useEffect(() => {
+    setForwardTarget(null);
   }, [chatKey]);
   // Voice-flow state — v1.134 splits the old single mic into two:
   //   📝 left of input: still goes through the note-preview modal.
@@ -804,6 +813,71 @@ export function ThreadScreen({ route, navigation }: Props) {
     );
     setEditFor((prev) => (prev ? { ...prev, saving: false } : prev));
   }, [editFor, user, chatKey]);
+
+  // v1.154: forward the held forwardTarget to a teammate's DM thread.
+  // Direct Firebase write (DMs are pure-Firebase, no Periskope) + a
+  // best-effort notifyDm push. The forwarded payload carries a snapshot
+  // of the source message so the recipient sees "↪️ Forwarded from
+  // {customer}" above the text.
+  const executeForward = useCallback(
+    async (toUid: string) => {
+      if (!forwardTarget || !user) return;
+      const src = forwardTarget;
+      const srcText =
+        src.text || src.media?.caption || src.media?.fileName || "";
+      if (!srcText) {
+        Alert.alert("Nothing to forward", "This message has no text to forward.");
+        return;
+      }
+      const pairKey = getPairKey(user.uid, toUid);
+      const ts = Date.now();
+      const fromName = user.displayName || user.email || "(team)";
+      const customerName =
+        headerName ||
+        meta.contactName ||
+        meta.displayName ||
+        meta.groupName ||
+        meta.phone ||
+        "customer";
+      try {
+        const msgRef = push(ref(db, `${ROOT}/dms/${pairKey}/messages`));
+        await set(msgRef, {
+          text: srcText,
+          ts,
+          fromUid: user.uid,
+          fromName,
+          forwardedFrom: {
+            chatId: meta.chatId || null,
+            customerName,
+            customerPhone: meta.phone || null,
+            originalText: srcText.slice(0, 500),
+            originalTs: src.ts || 0,
+            originalDirection: src.direction,
+          },
+        });
+        await update(ref(db, `${ROOT}/dms/${pairKey}/meta`), {
+          participants: { [user.uid]: true, [toUid]: true },
+          lastMsgAt: ts,
+          lastMsgPreview: `↪️ ${srcText.slice(0, 100)}`,
+          lastMsgFromUid: user.uid,
+          lastMsgFromName: fromName,
+        });
+        // Push fan-out — fire-and-forget, same pattern as sendDm.
+        notifyDm({
+          pairKey,
+          fromUid: user.uid,
+          fromName,
+          toUid,
+          text: `↪️ Forwarded from ${customerName}: ${srcText.slice(0, 140)}`,
+        });
+        setForwardTarget(null);
+        Alert.alert("Forwarded");
+      } catch (e) {
+        Alert.alert("Couldn't forward", String((e as Error)?.message || e));
+      }
+    },
+    [forwardTarget, user, headerName, meta],
+  );
 
   const handleDeleteMessage = useCallback(
     (m: Message) => {
@@ -1480,6 +1554,23 @@ export function ThreadScreen({ route, navigation }: Props) {
               <Text style={styles.actionSheetIcon}>↩️</Text>
               <Text style={styles.actionSheetTxt}>Reply</Text>
             </TouchableOpacity>
+            {/* v1.154: Forward only makes sense from a customer thread.
+                In a DM, "forward this message to another teammate" isn't
+                a use case the user described — skip the action there. */}
+            {!isDm && (
+              <TouchableOpacity
+                style={styles.actionSheetRow}
+                onPress={() => {
+                  if (messageMenuFor) {
+                    setForwardTarget(messageMenuFor);
+                    setMessageMenuFor(null);
+                  }
+                }}
+              >
+                <Text style={styles.actionSheetIcon}>↪️</Text>
+                <Text style={styles.actionSheetTxt}>Forward to teammate</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity
               style={styles.actionSheetRow}
               onPress={() => messageMenuFor && handleCopyMessage(messageMenuFor)}
@@ -1510,6 +1601,84 @@ export function ThreadScreen({ route, navigation }: Props) {
             <TouchableOpacity
               style={[styles.actionSheetRow, styles.actionSheetCancelRow]}
               onPress={() => setMessageMenuFor(null)}
+            >
+              <Text style={styles.actionSheetCancelTxt}>Cancel</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* v1.154: Forward picker. Pulls the teammate list from teamUsers
+          (signed-in only) filtered to !self. Tapping a row writes a DM
+          to that teammate's pairKey with the forwarded snapshot. */}
+      <Modal
+        visible={!!forwardTarget}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setForwardTarget(null)}
+      >
+        <Pressable
+          style={styles.actionSheetBack}
+          onPress={() => setForwardTarget(null)}
+        >
+          <Pressable
+            style={styles.actionSheetCard}
+            onPress={(e) => e.stopPropagation()}
+          >
+            <View style={styles.forwardHeader}>
+              <Text style={styles.forwardTitle}>Forward to teammate</Text>
+              <Text style={styles.forwardSub} numberOfLines={2}>
+                {forwardTarget?.text ||
+                  forwardTarget?.media?.caption ||
+                  forwardTarget?.media?.fileName ||
+                  ""}
+              </Text>
+            </View>
+            {(() => {
+              const me = user?.uid;
+              const rows = Object.entries(teamUsers || {})
+                .filter(([uid, u]) => uid !== me && u && (u.email || u.name))
+                .map(([uid, u]) => {
+                  // v1.131: prefer admin-set name from teamMembers config
+                  // over Auth display name → email.
+                  const emailLower = (u.email || "").toLowerCase();
+                  let override: string | null = null;
+                  for (const m of Object.values(teamMembers || {})) {
+                    if ((m?.email || "").toLowerCase() === emailLower && m?.name) {
+                      override = m.name;
+                      break;
+                    }
+                  }
+                  return {
+                    uid,
+                    name: override || u.name || u.email || uid,
+                  };
+                })
+                .sort((a, b) => a.name.localeCompare(b.name));
+              if (rows.length === 0) {
+                return (
+                  <View style={styles.forwardEmptyWrap}>
+                    <Text style={styles.forwardEmptyTxt}>
+                      No teammates yet. Invite them via the desktop dashboard's
+                      Team modal.
+                    </Text>
+                  </View>
+                );
+              }
+              return rows.map((r) => (
+                <TouchableOpacity
+                  key={r.uid}
+                  style={styles.actionSheetRow}
+                  onPress={() => executeForward(r.uid)}
+                >
+                  <Text style={styles.actionSheetIcon}>👤</Text>
+                  <Text style={styles.actionSheetTxt}>{r.name}</Text>
+                </TouchableOpacity>
+              ));
+            })()}
+            <TouchableOpacity
+              style={[styles.actionSheetRow, styles.actionSheetCancelRow]}
+              onPress={() => setForwardTarget(null)}
             >
               <Text style={styles.actionSheetCancelTxt}>Cancel</Text>
             </TouchableOpacity>
@@ -2293,6 +2462,20 @@ function makeStyles(colors: Colors) {
   },
   reactBtnActive: { backgroundColor: colors.bg },
   reactBtnTxt: { fontSize: 24 },
+  // v1.154 forward picker header. Shows the snippet of what's being
+  // forwarded so the trainer can confirm they picked the right
+  // message before tapping a teammate.
+  forwardHeader: {
+    paddingHorizontal: 18,
+    paddingTop: 16,
+    paddingBottom: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  forwardTitle: { color: colors.text, fontSize: 16, fontWeight: "600" },
+  forwardSub: { color: colors.muted, fontSize: 12, marginTop: 4 },
+  forwardEmptyWrap: { paddingHorizontal: 18, paddingVertical: 16 },
+  forwardEmptyTxt: { color: colors.muted, fontSize: 13, lineHeight: 18 },
   // v1.153 quoted-reply bar above the composer. Vertical accent strip
   // on the left echoes WhatsApp's "you're replying to X" indicator.
   replyBar: {
