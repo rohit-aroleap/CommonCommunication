@@ -1,15 +1,17 @@
-// App root: auth gate → bottom tabs (Chats / Tickets / Team) with a stack on
-// top for the Thread screen. Registers for push notifications once on
-// sign-in.
+// App root: auth gate → top tabs rendered at the bottom (Chats / Tickets /
+// Team) with a stack on top for the Thread screen. Registers for push
+// notifications once on sign-in.
 //
-// v1.190: reverted to @react-navigation/bottom-tabs from material-top-tabs.
-// material-top-tabs requires react-native-pager-view, which is a NATIVE
-// dependency added in commit b25cbb4. The iOS binary on TestFlight was
-// built before that commit, so its native side lacks RNCViewPager and
-// every screen crashed with "Unimplemented component: <RNCViewPager>".
-// bottom-tabs uses RN primitives only — works on the existing binary via
-// OTA. Trade-off: no swipe-between-tabs gesture. The swipe can come back
-// in a future EAS build once the native module is bundled.
+// v1.193: restored @react-navigation/material-top-tabs after the v1.192
+// EAS build shipped the bundled react-native-pager-view native module on
+// both iOS and Android. Trainers can swipe horizontally between tabs
+// again (WhatsApp pattern). The bottom bar still drives tap-to-tab via
+// the custom BottomTabBar.
+//
+// History: v1.190 had to revert to bottom-tabs because the old iOS
+// binary (pre-b25cbb4) didn't have RNCViewPager in its native side and
+// crashed on every render. v1.192's EAS Build re-bundled that module so
+// the JS swap is safe again.
 
 import React, { useEffect } from "react";
 import {
@@ -30,7 +32,7 @@ import {
   type LinkingOptions,
   type RouteProp,
 } from "@react-navigation/native";
-import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+import { createMaterialTopTabNavigator } from "@react-navigation/material-top-tabs";
 import {
   createNativeStackNavigator,
   type NativeStackNavigationProp,
@@ -76,7 +78,7 @@ const deepLinking: LinkingOptions<RootStackParamList> = {
   },
 };
 
-const Tabs = createBottomTabNavigator();
+const Tabs = createMaterialTopTabNavigator();
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 const TAB_TITLE: Record<string, string> = {
@@ -157,15 +159,17 @@ function TabsNav() {
   useWidgetSync();
   return (
     <Tabs.Navigator
-      // v1.190: bottom-tabs version — no pager-view, no swipe gesture,
-      // but the same BottomTabBar component renders the visible tab UI
-      // exactly like before (tap-to-switch with pill highlight + badges).
+      tabBarPosition="bottom"
       tabBar={(props) => <BottomTabBar {...props} />}
+      // Pager-view swipe is enabled by default. Keep all three screens
+      // mounted (lazy: false) so the swipe-in animation slides the real
+      // content in instead of a blank pane that then mounts mid-gesture.
       screenOptions={{
-        headerShown: false,
-        // Keep all three screens mounted so switching is instant. Mirrors
-        // the lazy:false we used with material-top-tabs.
+        swipeEnabled: true,
         lazy: false,
+        // Hide the default top indicator bar — BottomTabBar handles the
+        // active-state visual entirely.
+        tabBarIndicatorStyle: { height: 0 },
       }}
     >
       <Tabs.Screen name="Chats" component={ChatsScreen} />
