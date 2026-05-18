@@ -324,22 +324,30 @@ function makeStyles(colors: Colors) {
       fontSize: 12,
       fontWeight: "500",
     },
+    // v1.166: divider was blending into the chat-list background
+    // because the line was 1px in the same gray as the borders below.
+    // Bumped the line to 2px, switched both the line and the label to
+    // the brand accent (colors.green — emerald in light, blue in dark)
+    // so it reads clearly as "section break here, more chats below."
     divider: {
       flexDirection: "row",
       alignItems: "center",
       paddingHorizontal: space.md,
-      paddingVertical: 6,
-      backgroundColor: colors.rowHover,
+      paddingVertical: 8,
+      backgroundColor: colors.bg,
       gap: space.sm,
     },
     dividerLine: {
       flex: 1,
-      height: StyleSheet.hairlineWidth,
-      backgroundColor: colors.border,
+      height: 2,
+      backgroundColor: colors.green,
+      opacity: 0.55,
+      borderRadius: 1,
     },
     dividerTxt: {
       fontSize: 11,
-      color: colors.muted,
+      color: colors.green,
+      fontWeight: "600",
       textTransform: "uppercase",
       letterSpacing: 0.5,
     },
