@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.208</title>
+<title>CommonCommunication v1.209</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2446,7 +2446,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.208";
+const APP_VERSION = "v1.209";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -2865,7 +2865,13 @@ onAuthStateChanged(auth, async (user) => {
     aiInboxBtn.style.display = isAdmin(user.email) ? "" : "none";
     aiBriefBtn.style.display = isAdmin(user.email) ? "" : "none";
     namesBtn.style.display = isAdmin(user.email) ? "" : "none";
-    templatesBtn.style.display = isAdmin(user.email) ? "" : "none";
+    // v1.209: Templates pill is visible to everyone, not just admins.
+    // Quick-reply templates are a team-wide shared library — every
+    // trainer needs to be able to add / edit / delete them so they can
+    // keep the canned replies they actually use up to date without
+    // pinging an admin. Writes still go to /config/templates and are
+    // visible to all (same path as before).
+    templatesBtn.style.display = "";
     ferraRefreshBtn.style.display = isAdmin(user.email) ? "" : "none";
     listenFerraData();
     await update(ref(db, `${ROOT}/users/${user.uid}`), {
