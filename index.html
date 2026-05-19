@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.200</title>
+<title>CommonCommunication v1.201</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -1787,7 +1787,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.200</div>
+    <div class="login-version">v1.201</div>
   </div>
 </div>
 
@@ -1795,7 +1795,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.200</span>
+    <span class="ver">v1.201</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -2290,7 +2290,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.200";
+const APP_VERSION = "v1.201";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -6623,12 +6623,17 @@ function openMessageActionsPopover(triggerBtn, message) {
 
   const pop = document.createElement("div");
   pop.className = "msg-actions-popover";
+  // v1.201: explicit "Create ticket" item for customer chats. The
+  // single-click-bubble path still works (and is wired below) but it
+  // wasn't discoverable next to the new Reply/Forward/etc. — trainers
+  // assumed the ticket flow was gone after v1.200.
   pop.innerHTML = `
     <div class="emoji-row">
       ${REACT_EMOJIS.map(e => `<button data-emoji="${escapeHtml(e)}" title="React with ${escapeHtml(e)}">${e}</button>`).join("")}
     </div>
     <div class="item" data-action="reply"><span class="icon">↩</span><span>Reply</span></div>
     <div class="item" data-action="forward"><span class="icon">↪</span><span>Forward to teammate</span></div>
+    ${!isDm ? `<div class="item" data-action="ticket"><span class="icon">🎫</span><span>Create ticket</span></div>` : ""}
     <div class="item" data-action="copy"><span class="icon">📋</span><span>Copy</span></div>
     ${canEditDelete ? `<div class="item" data-action="edit"><span class="icon">✏</span><span>Edit</span></div>` : ""}
     ${canEditDelete ? `<div class="item danger" data-action="delete"><span class="icon">🗑</span><span>Delete</span></div>` : ""}
@@ -6662,6 +6667,12 @@ function openMessageActionsPopover(triggerBtn, message) {
       closeMessageActionsPopover();
       if (a === "reply") handleReply(message);
       else if (a === "forward") handleForward(message);
+      else if (a === "ticket") {
+        // v1.201: anchor the ticket-assignee popover off the bubble
+        // (not the closed ⋯ trigger, which is now detached from layout).
+        const bubble = messagesEl.querySelector(`.bubble[data-msg-key="${cssEscape(message.id)}"]`);
+        openTicketPicker(bubble || triggerBtn, message, "create");
+      }
       else if (a === "copy") handleCopy(message);
       else if (a === "edit") handleEdit(message);
       else if (a === "delete") handleDelete(message);
