@@ -93,6 +93,20 @@ export default {
       if (url.pathname === "/dm-notify" && request.method === "POST") {
         return cors(env, await handleDmNotify(request, env));
       }
+      // v1.210: one-click ack-webhook subscription. POSTs to Periskope's
+      // /v1/webhooks endpoint using the existing PERISKOPE_API_KEY +
+      // PERISKOPE_PHONE secrets to register this worker's /webhook URL for
+      // `message.ack.updated` events (delivered / read receipts).
+      // Idempotent on Periskope's side as far as we know — if the hook is
+      // already registered it just returns the existing entry.
+      if (url.pathname === "/subscribe-ack-webhook" && request.method === "POST") {
+        return cors(env, await handleSubscribeAckWebhook(request, env));
+      }
+      // v1.210: convenience GET so an admin can hit this from the browser
+      // (no curl needed). Body-less; identical logic to the POST path.
+      if (url.pathname === "/subscribe-ack-webhook" && request.method === "GET") {
+        return cors(env, await handleSubscribeAckWebhook(request, env));
+      }
       if (url.pathname === "/dm-search" && request.method === "GET") {
         return cors(env, await handleDmSearch(request, env));
       }
@@ -2638,6 +2652,48 @@ async function handleSearchMessages(request, env) {
 // endpoint exists only to ping the recipient's mobile device. No Periskope
 // involvement — DMs never leave Firebase.
 //
+// v1.210: subscribe this worker's /webhook to Periskope's
+// `message.ack.updated` event so delivered/read receipts start flowing in
+// for outbound messages. Idempotent on our end — if Periskope rejects with
+// "already subscribed" or similar we surface that verbatim so the operator
+// can see it. Auth uses the same PERISKOPE_API_KEY + PERISKOPE_PHONE that
+// /send already uses, so no extra secrets needed.
+async function handleSubscribeAckWebhook(request, env) {
+  const url = new URL(request.url);
+  // The hookUrl we want Periskope to call. Defaults to THIS worker's own
+  // /webhook (computed from request.url). Override via ?hookUrl=... if
+  // you ever need to point ack events somewhere else for testing.
+  const defaultHook = `${url.protocol}//${url.host}/webhook`;
+  const hookUrl = url.searchParams.get("hookUrl") || defaultHook;
+  if (!env.PERISKOPE_API_KEY || !env.PERISKOPE_PHONE) {
+    return json({ error: "missing PERISKOPE_API_KEY/PERISKOPE_PHONE secrets" }, 500);
+  }
+  const periskopeRes = await fetch("https://api.periskope.app/v1/webhooks", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.PERISKOPE_API_KEY}`,
+      "x-phone": env.PERISKOPE_PHONE,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      name: "CommonComm ack receipts",
+      hookUrl,
+      integrationName: ["message.ack.updated"],
+    }),
+  });
+  const periskopeJson = await safeJson(periskopeRes);
+  return json(
+    {
+      ok: periskopeRes.ok,
+      status: periskopeRes.status,
+      hookUrl,
+      event: "message.ack.updated",
+      periskope: periskopeJson,
+    },
+    periskopeRes.ok ? 200 : periskopeRes.status,
+  );
+}
+
 // Body: { pairKey, fromUid, fromName, toUid, text }
 // We re-verify on the server that fromUid is actually a participant in
 // {pairKey}, so a malicious caller can't trigger pushes to arbitrary users.
