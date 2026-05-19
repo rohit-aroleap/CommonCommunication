@@ -69,6 +69,11 @@ interface AppDataValue {
   cancelledUsers: Record<string, FerraUser> | FerraUser[] | null;
   sharedSubsByPhone: Record<string, string> | null;
   sharedCustomerDetails: Record<string, CustomerDetail> | null;
+  // v1.212: timestamp from ferraSubscriptions/v1/uploadedAt — the last
+  // moment the Ferra-sync worker wrote fresh data. Surfaced in the app
+  // header as "↻ 30m ago" so trainers know whether the customer list /
+  // stages they're looking at are stale, and tap it to force a refresh.
+  ferraLastSyncedAt: number | null;
   ferraIndex: FerraIndex;
   myLastSeen: Record<string, number>;
   markChatSeen: (chatKey: string) => void;
@@ -158,6 +163,11 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
   const [sharedCustomerDetails, setSharedCustomerDetails] = useState<
     Record<string, CustomerDetail> | null
   >(null);
+  // v1.212: when Ferra last synced (epoch ms). Updated whenever the
+  // ferraSubscriptions/v1 node is rewritten by the Ferra-sync worker.
+  const [ferraLastSyncedAt, setFerraLastSyncedAt] = useState<number | null>(
+    null,
+  );
   const [myLastSeen, setMyLastSeen] = useState<Record<string, number>>({});
   const [myFavorites, setMyFavorites] = useState<Record<string, boolean>>({});
   const [mySendActivity, setMySendActivity] = useState<
@@ -349,9 +359,25 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
           const v = s.val() as {
             byPhone?: Record<string, string>;
             customerDetails?: Record<string, CustomerDetail>;
+            // v1.212: epoch-ms timestamp the Ferra-sync worker writes on
+            // every successful pull. Used to render the "↻ 30m ago" pill
+            // in the app header.
+            uploadedAt?: number | string;
           } | null;
           setSharedSubsByPhone(v?.byPhone ?? null);
           setSharedCustomerDetails(v?.customerDetails ?? null);
+          // Coerce — the worker has historically written either a number
+          // (epoch ms) or an ISO string. Try numeric first, fall back to
+          // Date.parse, fall back to null.
+          const rawTs = v?.uploadedAt ?? null;
+          if (typeof rawTs === "number" && Number.isFinite(rawTs)) {
+            setFerraLastSyncedAt(rawTs);
+          } else if (typeof rawTs === "string") {
+            const parsed = Date.parse(rawTs);
+            setFerraLastSyncedAt(Number.isFinite(parsed) ? parsed : null);
+          } else {
+            setFerraLastSyncedAt(null);
+          }
         }),
       );
     };
@@ -593,6 +619,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       cancelledUsers,
       sharedSubsByPhone,
       sharedCustomerDetails,
+      ferraLastSyncedAt,
       ferraIndex,
       myLastSeen,
       markChatSeen,
@@ -626,6 +653,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       ticketsCount,
       sharedSubsByPhone,
       sharedCustomerDetails,
+      ferraLastSyncedAt,
       ferraIndex,
       myLastSeen,
       myFavorites,

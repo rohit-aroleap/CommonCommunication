@@ -13,7 +13,7 @@
 // crashed on every render. v1.192's EAS Build re-bundled that module so
 // the JS swap is safe again.
 
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -23,6 +23,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { refreshFerraNow } from "@/lib/worker";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import {
@@ -121,10 +122,64 @@ function LogoutButton() {
 // v1.133: gear icon in every tab header that pushes the Settings screen onto
 // the root stack. Settings currently holds the per-user Groq API key for
 // fast voice-note transcription.
+//
+// v1.212: added a ↻ Ferra-refresh pill to the left of the gear. Mirrors the
+// desktop's ↻ button — tap to force the Ferra-sync worker to pull fresh
+// subscription / habit data into Firebase. Shows "30m ago" (or similar
+// truncated form) under the icon so trainers can see at a glance how
+// stale the customer list / stages they're looking at are.
 function HeaderRight() {
   const nav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const { ferraLastSyncedAt } = useAppData();
+  const [syncing, setSyncing] = useState(false);
+  // Tick state used purely to force a re-render once a minute so the
+  // "30m ago" label stays current without the trainer reloading. The
+  // value is irrelevant — its existence in the closure forces the
+  // component to re-run formatRelativeTime() on each tick.
+  const [, setNowTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setNowTick((n) => n + 1), 60_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const onPressRefresh = async () => {
+    if (syncing) return;
+    setSyncing(true);
+    const { ok } = await refreshFerraNow();
+    setSyncing(false);
+    if (!ok) {
+      Alert.alert(
+        "Ferra refresh failed",
+        "Couldn't reach the Ferra-sync worker. Try again in a few seconds — if it keeps failing, the worker may be down.",
+      );
+    }
+    // On success: nothing to do. The Firebase onValue subscription in
+    // AppDataContext will pick up the new uploadedAt within a second or
+    // two and the pill's "Just now" / "1m ago" label updates itself.
+  };
+
   return (
     <View style={styles.headerRight}>
+      <TouchableOpacity
+        accessibilityLabel="Refresh Ferra data now"
+        onPress={onPressRefresh}
+        style={styles.ferraBtn}
+        hitSlop={6}
+        disabled={syncing}
+      >
+        {syncing ? (
+          <ActivityIndicator size="small" color="white" />
+        ) : (
+          <Text style={styles.ferraIcon}>↻</Text>
+        )}
+        <Text style={styles.ferraAge} numberOfLines={1}>
+          {syncing
+            ? "syncing…"
+            : ferraLastSyncedAt
+              ? formatRelativeTime(ferraLastSyncedAt)
+              : "—"}
+        </Text>
+      </TouchableOpacity>
       <TouchableOpacity
         accessibilityLabel="Settings"
         onPress={() => nav.navigate("Settings")}
@@ -136,6 +191,25 @@ function HeaderRight() {
       <LogoutButton />
     </View>
   );
+}
+
+// v1.212: WhatsApp-ish truncated relative time. "Just now" for < 60s,
+// "Nm" for < 60m, "Nh" for < 24h, "Nd" for older. Kept short so the pill
+// stays narrow in the header — full timestamp would crowd out the gear.
+function formatRelativeTime(ts: number): string {
+  const diff = Date.now() - ts;
+  if (diff < 0) return "just now"; // clock drift safety
+  const sec = Math.floor(diff / 1000);
+  if (sec < 60) return "just now";
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 30) return `${day}d ago`;
+  // Beyond a month, the timestamp itself isn't useful for staleness
+  // judgment — show ">30d" so it's obvious the auto-sync stopped.
+  return ">30d";
 }
 
 function TabsNav() {
@@ -360,6 +434,34 @@ const styles = StyleSheet.create({
   gearTxt: {
     color: "white",
     fontSize: 18,
+  },
+  // v1.212: Ferra refresh pill. Wider than the gear because it has two
+  // stacked rows — the ↻ glyph and the "30m ago" label. Same translucent
+  // chip background as the gear/logout so the three buttons read as a
+  // unit. Slight extra right margin pushes the gear away by 4px more
+  // than the default so the pill doesn't crowd it.
+  ferraBtn: {
+    minWidth: 56,
+    height: 36,
+    paddingHorizontal: 8,
+    borderRadius: 14,
+    marginRight: 6,
+    backgroundColor: "rgba(255,255,255,0.18)",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  ferraIcon: {
+    color: "white",
+    fontSize: 14,
+    fontWeight: "600",
+    lineHeight: 16,
+  },
+  ferraAge: {
+    color: "rgba(255,255,255,0.85)",
+    fontSize: 9,
+    lineHeight: 11,
+    marginTop: 1,
   },
   headerTitleRow: {
     flexDirection: "row",

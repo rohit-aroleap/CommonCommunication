@@ -198,6 +198,30 @@ export function mediaProxyUrl(url: string): string {
   return `${WORKER_URL}/media?u=${encodeURIComponent(url)}`;
 }
 
+// v1.212: Triggers a one-shot Ferra refresh. The Ferra-sync worker pulls
+// the latest subscription / habit data from Ferra's backend and rewrites
+// ferraSubscriptions/v1 + ferraHabitData/v1 in Firebase. The Firebase
+// listener already attached in AppDataContext picks up the new data
+// (including the bumped uploadedAt) automatically — caller doesn't need
+// to await or refresh anything afterwards.
+//
+// This is the SAME endpoint the desktop dashboard's ↻ button hits (see
+// FERRA_SYNC_WORKER constant in index.html). Idempotent — running it
+// twice in a row just refreshes twice in a row. Fire-and-forget from
+// the UI's perspective; we still return the response so callers can
+// surface "synced" vs "failed" toast if they want.
+const FERRA_SYNC_WORKER =
+  "https://ferra-sync.rohitpatel-mailid297.workers.dev/";
+export async function refreshFerraNow(): Promise<{ ok: boolean }> {
+  try {
+    const r = await fetch(FERRA_SYNC_WORKER, { method: "POST" });
+    const j = await r.json().catch(() => ({}));
+    return { ok: !!(r.ok && j?.ok !== false) };
+  } catch {
+    return { ok: false };
+  }
+}
+
 // v1.205: notify a teammate that they've just been assigned a ticket.
 // Called from CreateTicketModal (type: "created") and ReassignModal
 // (type: "reassigned"). The worker skips the push if assigneeUid ===
