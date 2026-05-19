@@ -13,7 +13,10 @@ import { ChatRowItem } from "@/components/ChatRow";
 import { FilterBar } from "@/components/FilterBar";
 import { AddCustomerModal } from "@/components/AddCustomerModal";
 import { DAILY_SENTINEL } from "@/types";
-import { FERRA_TAG_STAGE } from "@/config";
+import { FERRA_TAG_STAGE, ROOT } from "@/config";
+import { db } from "@/firebase";
+import { encodeKey } from "@/lib/encodeKey";
+import { ref, set } from "firebase/database";
 import { normalizeFerraPhone } from "@/lib/ferra";
 import { shouldSuggestPin } from "@/lib/favorites";
 import { getDisplayVersion } from "@/lib/version";
@@ -32,6 +35,7 @@ export function ChatsScreen() {
   const { isAdmin } = useAuth();
   const {
     chatRows,
+    chatMetaByKey,
     habitUsers,
     cancelledUsers,
     ferraIndex,
@@ -82,6 +86,59 @@ export function ChatsScreen() {
   );
 
   const myUid = user?.uid;
+
+  // v1.199: when the search input looks like a phone number, normalize it
+  // for the "Start a new chat" affordance. Returns null for non-phone
+  // inputs (names, partial numbers under 7 digits, etc.) so the affordance
+  // stays hidden in those cases. 10-digit Indian mobile numbers get +91
+  // auto-prefixed — same heuristic the AddCustomerModal uses.
+  const searchPhoneNormalized = useMemo<string | null>(() => {
+    if (!search.trim()) return null;
+    const digits = search.replace(/\D/g, "");
+    if (digits.length < 7) return null;
+    let normalized = digits;
+    if (digits.length === 10 && /^[6-9]/.test(digits)) {
+      normalized = "91" + digits;
+    }
+    return normalized;
+  }, [search]);
+
+  // v1.199: "Start a new chat" handler. Creates a chat skeleton if one
+  // doesn't already exist (so the chat row appears in the list and the
+  // worker has a target chatId), writes a userGrant for limited trainers
+  // so the new chat surfaces in their filtered list, then navigates to
+  // the Thread screen.
+  const startChatWithPhone = useCallback(async () => {
+    if (!searchPhoneNormalized || !user) return;
+    const chatId = `${searchPhoneNormalized}@c.us`;
+    const chatKey = encodeKey(chatId);
+    try {
+      if (!chatMetaByKey[chatKey]) {
+        await set(ref(db, `${ROOT}/chats/${chatKey}/meta`), {
+          chatId,
+          phone: searchPhoneNormalized,
+          chatType: "user",
+          lastMsgAt: Date.now(),
+          lastMsgPreview: "",
+        });
+      }
+      if (isLimited) await grantChatAccess(chatKey);
+      setSearch("");
+      navigation.navigate("Thread", {
+        chatKey,
+        initialTitle: "+" + searchPhoneNormalized,
+      });
+    } catch (e) {
+      Alert.alert("Couldn't start chat", (e as Error)?.message ?? String(e));
+    }
+  }, [
+    searchPhoneNormalized,
+    user,
+    chatMetaByKey,
+    isLimited,
+    grantChatAccess,
+    navigation,
+  ]);
 
   const myTicketChatKeys = useMemo(() => {
     const out = new Set<string>();
@@ -332,10 +389,26 @@ export function ChatsScreen() {
                 ? "Loading chats…"
                 : favoritesOnly
                 ? "No favorites yet."
+                : searchPhoneNormalized
+                ? "No existing chat for this number."
                 : isLimited
                 ? "Your chat list is empty. Tap + Add customer above to unlock a customer's chat, or wait for a teammate to assign you a ticket."
                 : "No chats match."}
             </Text>
+            {/* v1.199: when the search input looks like a phone and no
+                existing chat matches, offer a one-tap "start new chat"
+                affordance. Saves having a separate "+" button on the
+                main UI (which the desktop has but the mobile app didn't). */}
+            {searchPhoneNormalized && dataReady && (
+              <TouchableOpacity
+                style={styles.startChatBtn}
+                onPress={startChatWithPhone}
+              >
+                <Text style={styles.startChatTxt}>
+                  ＋  Start a new chat with +{searchPhoneNormalized}
+                </Text>
+              </TouchableOpacity>
+            )}
           </View>
         }
         ListFooterComponent={
@@ -394,6 +467,21 @@ function makeStyles(colors: Colors) {
     },
     addCustomerTxt: {
       color: colors.green,
+      fontSize: 14,
+      fontWeight: "600",
+    },
+    // v1.199: "Start a new chat" button shown in the empty state when the
+    // search input parses as a phone number. Replaces the missing-from-
+    // mobile "+ new chat" affordance the desktop has in its rail.
+    startChatBtn: {
+      marginTop: 16,
+      paddingHorizontal: 18,
+      paddingVertical: 12,
+      backgroundColor: colors.green,
+      borderRadius: 10,
+    },
+    startChatTxt: {
+      color: "white",
       fontSize: 14,
       fontWeight: "600",
     },
