@@ -31,6 +31,11 @@ interface Props {
   // instead of Linking.openURL'ing out to Safari/Chrome. Non-image media
   // still uses Linking via the default path inside MediaBlock.
   onImagePress?: (url: string) => void;
+  // v1.206: set true briefly when the screen scrolls to this message (e.g.
+  // tapped a ticket in the My Tickets tab → opened thread → scrolled to
+  // the anchor message). Triggers a yellow flash + ring so the trainer
+  // can see what they were anchored on.
+  highlighted?: boolean;
 }
 
 export function MessageBubble({
@@ -40,6 +45,7 @@ export function MessageBubble({
   onPress,
   onLongPress,
   onImagePress,
+  highlighted,
 }: Props) {
   const styles = useStyles(makeStyles);
   const out = m.direction === "out";
@@ -78,6 +84,7 @@ export function MessageBubble({
           styles.bubble,
           out ? styles.bubbleOut : styles.bubbleIn,
           isDeleted && styles.bubbleDeleted,
+          highlighted && styles.bubbleHighlighted,
         ]}
       >
         {senderTag && <Text style={styles.senderTag}>{senderTag}</Text>}
@@ -338,6 +345,14 @@ function makeStyles(colors: Colors) {
     // washed-out bubble background so it reads as "tombstone" without
     // disappearing entirely.
     bubbleDeleted: { opacity: 0.7 },
+    // v1.206: brief flash on the message a ticket anchor scrolled to. Yellow
+    // tint + thick border so the trainer's eye lands on it immediately. Held
+    // for ~2.5s by the parent (highlightedMsgId state), then cleared.
+    bubbleHighlighted: {
+      borderWidth: 2,
+      borderColor: "#fcd34d",
+      backgroundColor: "#fef3c7",
+    },
     deletedTxt: {
       fontSize: 14,
       color: colors.muted,

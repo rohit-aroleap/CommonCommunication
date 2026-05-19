@@ -63,9 +63,14 @@ export function TicketsScreen() {
               style={styles.row}
               activeOpacity={0.6}
               onPress={() =>
+                // v1.206: pass the ticket's anchorMsgKey so the thread
+                // scrolls back to the message this ticket was created
+                // on instead of just landing at the latest. Trainer
+                // reported the chat wasn't scrolling to the ticket.
                 navigation.navigate("Thread", {
                   chatKey,
                   initialTitle: name,
+                  anchorMsgKey: t.anchorMsgKey,
                 })
               }
             >

@@ -113,7 +113,7 @@ try {
 type Props = NativeStackScreenProps<RootStackParamList, "Thread">;
 
 export function ThreadScreen({ route, navigation }: Props) {
-  const { chatKey, initialTitle } = route.params;
+  const { chatKey, initialTitle, anchorMsgKey } = route.params;
   const { user } = useAuth();
   // Bottom inset = the home indicator / gesture-nav pill on iPhones with
   // notches and Androids with the bottom swipe-up bar. Without this padding
@@ -534,6 +534,39 @@ export function ThreadScreen({ route, navigation }: Props) {
     () => [...dedupMessages(messages)].reverse(),
     [messages],
   );
+
+  // v1.206: scroll to the ticket's anchor message when the screen is
+  // opened from the My Tickets list (or any future deep-link). The
+  // route carries anchorMsgKey; we look it up in `visible`, scroll the
+  // inverted FlatList to that index, and briefly highlight the bubble
+  // so the trainer can see what message the ticket was anchored on.
+  const [scrolledToAnchor, setScrolledToAnchor] = useState(false);
+  const [highlightedMsgId, setHighlightedMsgId] = useState<string | null>(null);
+  // Reset the "scrolled" latch when the route changes — opening a new
+  // ticket on the same chat key must re-fire the scroll.
+  useEffect(() => {
+    setScrolledToAnchor(false);
+  }, [chatKey, anchorMsgKey]);
+  useEffect(() => {
+    if (!anchorMsgKey || scrolledToAnchor || !visible.length) return;
+    const idx = visible.findIndex((m) => m.id === anchorMsgKey);
+    if (idx < 0) return;
+    setScrolledToAnchor(true);
+    // Wait a tick so FlatList has finished its initial layout pass.
+    setTimeout(() => {
+      try {
+        listRef.current?.scrollToIndex({
+          index: idx,
+          animated: true,
+          viewPosition: 0.5,
+        });
+        setHighlightedMsgId(anchorMsgKey);
+        setTimeout(() => setHighlightedMsgId(null), 2500);
+      } catch {
+        /* swallow — onScrollToIndexFailed will retry */
+      }
+    }, 200);
+  }, [visible, anchorMsgKey, scrolledToAnchor]);
 
   const banner = useMemo<Ticket[]>(
     () => (isDm ? [] : openTicketsForChat(tickets, chatKey)),
@@ -1533,6 +1566,7 @@ export function ThreadScreen({ route, navigation }: Props) {
             message={item}
             isGroup={isGroup}
             resolveSenderName={resolveSenderName}
+            highlighted={item.id === highlightedMsgId}
             onImagePress={(url) => setMediaViewerUrl(url)}
             onPress={(m) => {
               // Single tap → open "Create ticket from this message" flow.
@@ -1566,7 +1600,7 @@ export function ThreadScreen({ route, navigation }: Props) {
         </View>
       );
     },
-    [visible, isGroup, resolveSenderName],
+    [visible, isGroup, resolveSenderName, highlightedMsgId],
   );
 
   return (
@@ -1619,6 +1653,21 @@ export function ThreadScreen({ route, navigation }: Props) {
         // position is preserved when the user has scrolled up to read
         // older messages — no manual scrollToEnd needed anywhere.
         inverted
+        // v1.206: scroll-to-anchor retry. scrollToIndex can fail when the
+        // target item hasn't been measured yet (it's outside the current
+        // virtualization window). Retry on the next frame — by then the
+        // intermediate rows are rendered and the second attempt lands.
+        onScrollToIndexFailed={(info) => {
+          setTimeout(() => {
+            try {
+              listRef.current?.scrollToIndex({
+                index: info.index,
+                animated: false,
+                viewPosition: 0.5,
+              });
+            } catch { /* give up silently */ }
+          }, 300);
+        }}
       />
       {/* Slash-command template picker (v1.126). Visible whenever composer
           starts with "/". Sits BETWEEN the message list and the composer so
