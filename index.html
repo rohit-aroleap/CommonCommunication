@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.199</title>
+<title>CommonCommunication v1.200</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -751,6 +751,114 @@
   }
   .bubble .status.sending { color: #99a5ad; }
   .bubble .status.failed  { color: #d9534f; }
+  /* v1.200: chat-action UI parity with mobile (react / reply / forward /
+     copy / edit / delete). The bubble-wrap stacks the bubble and the
+     reactions pill so both stay aligned to the same edge. */
+  .bubble-wrap { display: flex; flex-direction: column; max-width: 70%; }
+  .msg-row.out .bubble-wrap { align-items: flex-end; }
+  .msg-row.in  .bubble-wrap { align-items: flex-start; }
+  .bubble-wrap .bubble { max-width: 100%; }
+  /* Hover-revealed kebab trigger on each bubble. Right side for outbound,
+     left side for inbound, so it never hides the bubble corner that
+     contains the time/status. */
+  .bubble .msg-actions-trigger {
+    position: absolute; top: 2px; right: 4px;
+    width: 22px; height: 22px; line-height: 22px;
+    border: none; background: rgba(0,0,0,0.06); border-radius: 11px;
+    cursor: pointer; opacity: 0;
+    transition: opacity 0.15s;
+    font-size: 14px; font-weight: 700;
+    color: var(--muted);
+    padding: 0; text-align: center;
+    z-index: 2;
+  }
+  .msg-row.in .bubble .msg-actions-trigger { right: auto; left: 4px; }
+  .bubble:hover .msg-actions-trigger { opacity: 1; }
+  .bubble .msg-actions-trigger:hover { background: rgba(0,0,0,0.14); color: var(--text); }
+  /* Floating action popover spawned near the trigger. */
+  .msg-actions-popover {
+    position: fixed; z-index: 200;
+    background: white; border: 1px solid var(--border);
+    border-radius: 10px; box-shadow: 0 6px 18px rgba(0,0,0,0.14);
+    padding: 6px; min-width: 200px;
+    font-size: 13px;
+  }
+  .msg-actions-popover .emoji-row {
+    display: flex; gap: 2px;
+    padding-bottom: 6px; margin-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+  }
+  .msg-actions-popover .emoji-row button {
+    background: transparent; border: none; cursor: pointer;
+    font-size: 19px; padding: 4px 6px; border-radius: 6px;
+    transition: background 0.1s; line-height: 1;
+  }
+  .msg-actions-popover .emoji-row button:hover { background: var(--hover); }
+  .msg-actions-popover .item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 8px; cursor: pointer; border-radius: 6px;
+    color: var(--text);
+  }
+  .msg-actions-popover .item:hover { background: var(--hover); }
+  .msg-actions-popover .item.danger:hover { background: #fee2e2; color: #d9534f; }
+  .msg-actions-popover .item .icon { width: 18px; text-align: center; flex-shrink: 0; }
+  /* Reactions pill — sits just under the bubble, slightly overlapping. */
+  .bubble-wrap .reactions {
+    background: white; border: 1px solid var(--border);
+    border-radius: 12px; padding: 1px 8px;
+    font-size: 12px;
+    margin-top: -7px; cursor: pointer;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    z-index: 1; user-select: none;
+  }
+  .bubble-wrap .reactions:hover { background: var(--hover); }
+  /* Reply-quote card inside the bubble, above the body. */
+  .bubble .reply-quote {
+    border-left: 3px solid var(--green);
+    background: rgba(0,168,132,0.08);
+    border-radius: 4px; padding: 4px 8px; margin-bottom: 4px;
+    font-size: 12px;
+  }
+  .bubble .reply-quote .label { color: var(--green-dark); font-weight: 600; font-size: 11px; }
+  .bubble .reply-quote .quoted-text {
+    color: var(--muted);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  /* Forwarded header inside the bubble, above the body. */
+  .bubble .forwarded-header {
+    font-size: 11px; color: var(--muted);
+    font-style: italic; margin-bottom: 3px;
+  }
+  /* Edited tag in the footer. */
+  .bubble .footer .edited-tag {
+    font-style: italic; color: var(--muted); font-size: 10px;
+  }
+  /* Deleted-message placeholder body. */
+  .bubble.deleted .deleted-body {
+    font-style: italic; color: var(--muted); opacity: 0.75;
+  }
+  /* Composer reply bar (above the textarea when user picks "Reply"). */
+  .composer-reply-bar {
+    display: none; align-items: center; gap: 8px;
+    padding: 6px 10px;
+    background: rgba(0,168,132,0.08);
+    border-left: 3px solid var(--green);
+    border-radius: 6px;
+    margin: 0 12px 6px;
+    font-size: 12px;
+  }
+  .composer-reply-bar.visible { display: flex; }
+  .composer-reply-bar .body { flex: 1; min-width: 0; }
+  .composer-reply-bar .label { color: var(--green-dark); font-weight: 600; font-size: 11px; }
+  .composer-reply-bar .snippet {
+    color: var(--muted); white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  .composer-reply-bar .close {
+    background: transparent; border: none; cursor: pointer;
+    color: var(--muted); font-size: 14px; padding: 0 4px;
+  }
+  .composer-reply-bar .close:hover { color: #d9534f; }
 
   .day-divider {
     align-self: center;
@@ -1679,7 +1787,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.199</div>
+    <div class="login-version">v1.200</div>
   </div>
 </div>
 
@@ -1687,7 +1795,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.199</span>
+    <span class="ver">v1.200</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -1835,6 +1943,10 @@
           <button class="fmt-btn" data-marker="~" title="Strikethrough"><s>S</s></button>
           <button class="fmt-btn" data-marker="`" title="Code"><code>&lt;/&gt;</code></button>
         </div>
+        <!-- v1.200: composer reply bar. Hidden by default; populated by
+             handleReply() when the user picks "Reply" from a message's
+             action popover. ✕ clears the reply target. -->
+        <div class="composer-reply-bar" id="composerReplyBar"></div>
         <div class="composer">
           <button class="emoji-btn" id="emojiBtn" title="Insert emoji">😀</button>
           <!-- v1.183 formatting hint. Hover for cheat sheet; click pops the
@@ -2008,6 +2120,24 @@
   <img class="media-viewer-img" id="mediaViewerImg" alt="" />
 </div>
 
+<!-- ============== FORWARD MESSAGE MODAL (v1.200) ============== -->
+<!-- Picker that lists every teammate. Click one to forward the
+     currently-selected message into a DM with them. Limited trainers
+     don't appear here as targets unless they're real allowlist entries
+     (they're still teammates, just gated on customer access). -->
+<div class="modal-back" id="forwardModal">
+  <div class="modal" style="width:380px; max-width:92vw;">
+    <h3 style="margin-bottom:6px;">Forward to teammate</h3>
+    <div style="font-size:12px; color:var(--muted); margin-bottom:14px;">
+      Pick a teammate. A copy of the message will land in your DM with them, tagged with the source customer's name.
+    </div>
+    <div id="forwardPickerList" style="max-height:300px; overflow-y:auto; border:1px solid var(--border); border-radius:6px; padding:4px;"></div>
+    <div class="actions" style="margin-top:14px;">
+      <button class="btn btn-secondary" id="forwardClose">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <!-- ============== ADD CUSTOMER MODAL (v1.196) ============== -->
 <!-- Limited-trainer entry to unlock a customer chat. Type a phone number,
      a /userGrants/{uid}/{chatKey} record is written, the chat appears in
@@ -2160,7 +2290,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.199";
+const APP_VERSION = "v1.200";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -2311,6 +2441,20 @@ const privateToggleBtn = $("privateToggleBtn");
 const chatBackfillBtn = $("chatBackfillBtn");
 const summarizeBtn = $("summarizeBtn");
 const summaryModal = $("summaryModal");
+// v1.200: forward-modal refs + dismiss handler.
+const forwardModal = $("forwardModal");
+const forwardPickerList = $("forwardPickerList");
+const forwardClose = $("forwardClose");
+if (forwardClose) forwardClose.onclick = () => {
+  _forwardMessage = null;
+  forwardModal.classList.remove("visible");
+};
+if (forwardModal) forwardModal.addEventListener("click", (e) => {
+  if (e.target === forwardModal) {
+    _forwardMessage = null;
+    forwardModal.classList.remove("visible");
+  }
+});
 const summaryBody = $("summaryBody");
 const summarySub = $("summarySub");
 const summaryCopy = $("summaryCopy");
@@ -6318,20 +6462,72 @@ function renderMessages(list) {
     const status = out
       ? `<span class="status ${m.status || "sent"}">${statusLabel(m.status)}</span>`
       : "";
-    const mediaHtml = renderMediaHtml(m);
-    const textHtml = m.text ? `<div class="text">${formatWhatsApp(m.text)}</div>` : "";
+    const isDeleted = !!m.deleted;
+    const isEdited = !!m.editedAt;
+    const mediaHtml = isDeleted ? "" : renderMediaHtml(m);
+    const textHtml = (!isDeleted && m.text)
+      ? `<div class="text">${formatWhatsApp(m.text)}</div>`
+      : "";
     const ribbon = renderTicketRibbon(m.id);
+    // v1.200: forwarded-from header above the body (mirrors mobile MessageBubble).
+    let forwardedHtml = "";
+    if (!isDeleted && m.forwardedFrom) {
+      const fromName = m.forwardedFrom.customerName || "customer";
+      forwardedHtml = `<div class="forwarded-header">↪️ Forwarded from ${escapeHtml(fromName)}</div>`;
+    }
+    // v1.200: reply quote card above the body when this message is a reply.
+    let replyHtml = "";
+    if (!isDeleted && m.replyTo) {
+      const label = m.replyTo.isFromMe ? "You" : (m.replyTo.senderName || "Customer");
+      const quoted = (m.replyTo.text || "(media)").slice(0, 200);
+      replyHtml = `<div class="reply-quote">
+        <div class="label">${escapeHtml(label)}</div>
+        <div class="quoted-text">${escapeHtml(quoted)}</div>
+      </div>`;
+    }
+    // v1.200: deleted body replaces media/text.
+    const bodyHtml = isDeleted
+      ? `<div class="text deleted-body">🚫 This message was deleted</div>`
+      : `${mediaHtml}${textHtml}`;
+    // v1.200: edited tag in footer when m.editedAt is set.
+    const editedTag = (isEdited && !isDeleted) ? `<span class="edited-tag">edited</span>` : "";
+    // v1.200: reactions pill aggregated by emoji. Click → toggle MY reaction
+    // (whichever emoji is currently most-reacted, or no-op if mine wasn't set).
+    let reactionsHtml = "";
+    if (m.reactions) {
+      const counts = {};
+      for (const r of Object.values(m.reactions)) {
+        if (r?.emoji) counts[r.emoji] = (counts[r.emoji] || 0) + 1;
+      }
+      const items = Object.entries(counts)
+        .map(([e, c]) => `${e}${c > 1 ? c : ""}`)
+        .join(" ");
+      if (items) {
+        reactionsHtml = `<div class="reactions" data-msg-key="${escapeHtml(m.id)}" title="Click to remove your reaction">${escapeHtml(items)}</div>`;
+      }
+    }
+    // v1.200: hover-revealed ⋯ trigger that opens the action popover.
+    // Deleted messages get no trigger (you can't react / reply / edit a tombstone).
+    const actionsTrigger = !isDeleted
+      ? `<button class="msg-actions-trigger" data-msg-key="${escapeHtml(m.id)}" title="React, reply, forward, more">⋯</button>`
+      : "";
     html += `
     <div class="msg-row ${out ? "out" : "in"}" data-msg-key="${escapeHtml(m.id)}">
-      <div class="bubble ${out ? "out" : "in"}" data-msg-key="${escapeHtml(m.id)}">
-        ${senderTag}
-        ${ribbon}
-        ${mediaHtml}
-        ${textHtml}
-        <div class="footer">
-          <span>${formatClock(m.ts)}</span>
-          ${status}
+      <div class="bubble-wrap">
+        <div class="bubble ${out ? "out" : "in"} ${isDeleted ? "deleted" : ""}" data-msg-key="${escapeHtml(m.id)}">
+          ${actionsTrigger}
+          ${senderTag}
+          ${ribbon}
+          ${forwardedHtml}
+          ${replyHtml}
+          ${bodyHtml}
+          <div class="footer">
+            ${editedTag}
+            <span>${formatClock(m.ts)}</span>
+            ${status}
+          </div>
         </div>
+        ${reactionsHtml}
       </div>
     </div>`;
   }
@@ -6346,11 +6542,38 @@ function renderMessages(list) {
       if (window.getSelection().toString().length > 0) return;
       // Don't trigger if clicking inside the ticket ribbon (we'll handle separately later)
       if (e.target.closest(".msg-ticket-ribbon")) return;
+      // v1.200: don't trigger if the click landed on the ⋯ action trigger
+      // or anywhere inside an open actions popover — those have their
+      // own click handlers and must not double-fire the ticket flow.
+      if (e.target.closest(".msg-actions-trigger")) return;
+      // Skip clicks on DM bubbles (DMs don't have tickets).
+      if (isDmKey(currentChatId)) return;
       const msgKey = b.dataset.msgKey;
       if (!msgKey) return;
       const message = list.find(m => m.id === msgKey);
       if (!message) return;
       openTicketPicker(b, message, "create");
+    });
+  });
+  // v1.200: wire the action triggers (⋯ kebab on each bubble) to open the
+  // floating action popover.
+  messagesEl.querySelectorAll(".msg-actions-trigger").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const msgKey = btn.dataset.msgKey;
+      const message = list.find((m) => m.id === msgKey);
+      if (!message) return;
+      openMessageActionsPopover(btn, message);
+    });
+  });
+  // v1.200: wire the reactions pill to remove my reaction on click.
+  messagesEl.querySelectorAll(".reactions[data-msg-key]").forEach((pill) => {
+    pill.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const msgKey = pill.dataset.msgKey;
+      const message = list.find((m) => m.id === msgKey);
+      if (!message) return;
+      handleRemoveMyReaction(message);
     });
   });
 
@@ -6377,6 +6600,379 @@ function statusLabel(s) {
   if (s === "sending") return "…";
   if (s === "failed") return "✕ failed";
   return "✓";
+}
+
+// ====== MESSAGE ACTIONS (v1.200, parity with mobile) ======
+// Hover-reveal ⋯ on each bubble → opens a floating popover with the same
+// six actions the mobile app shows: emoji react row + Reply + Forward +
+// Copy + Edit + Delete. Edit/Delete only show on your own outbound
+// messages. For customer chats actions round-trip through the worker
+// (/edit-message, /delete-message, /react-to-message). For DMs they
+// write to Firebase directly since DMs never touch Periskope.
+const REACT_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+let _activeActionsPopover = null;
+let _replyTarget = null; // current message being replied to (composer reply bar)
+
+function openMessageActionsPopover(triggerBtn, message) {
+  closeMessageActionsPopover();
+  const isDm = isDmKey(currentChatId);
+  const isMine = message.direction === "out";
+  // Customer-chat edit/delete need a periskopeMsgId to round-trip; DM
+  // edit/delete go direct to Firebase by msgKey.
+  const canEditDelete = isMine && !message.deleted && (isDm || message.periskopeMsgId);
+
+  const pop = document.createElement("div");
+  pop.className = "msg-actions-popover";
+  pop.innerHTML = `
+    <div class="emoji-row">
+      ${REACT_EMOJIS.map(e => `<button data-emoji="${escapeHtml(e)}" title="React with ${escapeHtml(e)}">${e}</button>`).join("")}
+    </div>
+    <div class="item" data-action="reply"><span class="icon">↩</span><span>Reply</span></div>
+    <div class="item" data-action="forward"><span class="icon">↪</span><span>Forward to teammate</span></div>
+    <div class="item" data-action="copy"><span class="icon">📋</span><span>Copy</span></div>
+    ${canEditDelete ? `<div class="item" data-action="edit"><span class="icon">✏</span><span>Edit</span></div>` : ""}
+    ${canEditDelete ? `<div class="item danger" data-action="delete"><span class="icon">🗑</span><span>Delete</span></div>` : ""}
+  `;
+  document.body.appendChild(pop);
+
+  // Position near the trigger, clamped to viewport.
+  const r = triggerBtn.getBoundingClientRect();
+  const pw = pop.offsetWidth, ph = pop.offsetHeight;
+  let top = r.bottom + 6;
+  let left = r.left;
+  if (top + ph > window.innerHeight - 8) top = r.top - ph - 6;
+  if (left + pw > window.innerWidth - 8) left = window.innerWidth - pw - 8;
+  if (left < 8) left = 8;
+  pop.style.top = top + "px";
+  pop.style.left = left + "px";
+
+  // Emoji react buttons.
+  pop.querySelectorAll(".emoji-row button").forEach((btn) => {
+    btn.onclick = (ev) => {
+      ev.stopPropagation();
+      handleReact(message, btn.dataset.emoji);
+      closeMessageActionsPopover();
+    };
+  });
+  // Action items.
+  pop.querySelectorAll(".item").forEach((item) => {
+    item.onclick = (ev) => {
+      ev.stopPropagation();
+      const a = item.dataset.action;
+      closeMessageActionsPopover();
+      if (a === "reply") handleReply(message);
+      else if (a === "forward") handleForward(message);
+      else if (a === "copy") handleCopy(message);
+      else if (a === "edit") handleEdit(message);
+      else if (a === "delete") handleDelete(message);
+    };
+  });
+
+  _activeActionsPopover = pop;
+  // Close on outside click. Bind on next frame so the click that OPENED
+  // the popover doesn't immediately close it.
+  setTimeout(() => {
+    document.addEventListener("mousedown", _onActionsOutside, true);
+  }, 0);
+}
+function closeMessageActionsPopover() {
+  if (_activeActionsPopover) {
+    _activeActionsPopover.remove();
+    _activeActionsPopover = null;
+    document.removeEventListener("mousedown", _onActionsOutside, true);
+  }
+}
+function _onActionsOutside(e) {
+  if (!_activeActionsPopover) return;
+  if (_activeActionsPopover.contains(e.target)) return;
+  closeMessageActionsPopover();
+}
+
+// ---- React ----
+async function handleReact(message, emoji) {
+  if (!currentUser) return;
+  const isDm = isDmKey(currentChatId);
+  if (isDm) {
+    const pairKey = pairKeyFromChatKey(currentChatId);
+    const path = `${ROOT}/dms/${pairKey}/messages/${message.id}/reactions/${currentUser.uid}`;
+    await set(ref(db, path), {
+      emoji,
+      ts: Date.now(),
+      byName: currentUser.displayName || currentUser.email || null,
+      source: "dm",
+    });
+    return;
+  }
+  // Customer chat — round-trip via worker so the reaction also lands on
+  // WhatsApp for the customer to see.
+  if (!message.periskopeMsgId) {
+    alert("Can't react to this message yet — still syncing with WhatsApp.");
+    return;
+  }
+  // Optimistic local write so the UI updates immediately.
+  await set(ref(db, `${ROOT}/chats/${currentChatId}/messages/${message.id}/reactions/${currentUser.uid}`), {
+    emoji,
+    ts: Date.now(),
+    byName: currentUser.displayName || currentUser.email || null,
+    source: "local",
+  });
+  try {
+    const meta = chatsCache[currentChatId] || {};
+    const chatId = meta.chatId || currentChatId;
+    await fetch(`${WORKER_URL}/react-to-message`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId, periskopeMsgId: message.periskopeMsgId, emoji }),
+    });
+  } catch (e) {
+    // Worker failure leaves the optimistic local reaction in place.
+    console.warn("react-to-message failed:", e);
+  }
+}
+async function handleRemoveMyReaction(message) {
+  if (!currentUser) return;
+  const isDm = isDmKey(currentChatId);
+  const path = isDm
+    ? `${ROOT}/dms/${pairKeyFromChatKey(currentChatId)}/messages/${message.id}/reactions/${currentUser.uid}`
+    : `${ROOT}/chats/${currentChatId}/messages/${message.id}/reactions/${currentUser.uid}`;
+  await remove(ref(db, path));
+  // For customer chats, also tell WhatsApp to clear. Empty-string emoji is
+  // the convention Periskope uses to mean "remove."
+  if (!isDm && message.periskopeMsgId && WORKER_URL) {
+    try {
+      const meta = chatsCache[currentChatId] || {};
+      const chatId = meta.chatId || currentChatId;
+      await fetch(`${WORKER_URL}/react-to-message`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chatId, periskopeMsgId: message.periskopeMsgId, emoji: "" }),
+      });
+    } catch (e) { /* swallow */ }
+  }
+}
+
+// ---- Reply ----
+function handleReply(message) {
+  _replyTarget = message;
+  showComposerReplyBar(message);
+  composerInput.focus();
+}
+function clearReply() {
+  _replyTarget = null;
+  showComposerReplyBar(null);
+}
+function showComposerReplyBar(message) {
+  const bar = $("composerReplyBar");
+  if (!bar) return;
+  if (!message) {
+    bar.classList.remove("visible");
+    bar.innerHTML = "";
+    return;
+  }
+  const label = message.direction === "out"
+    ? "Replying to yourself"
+    : `Replying to ${message.sentByName || message.senderPhone || "customer"}`;
+  const snippet = (message.text || message.media?.caption || message.media?.fileName || "(media)").slice(0, 140);
+  bar.innerHTML = `
+    <div class="body">
+      <div class="label">${escapeHtml(label)}</div>
+      <div class="snippet">${escapeHtml(snippet)}</div>
+    </div>
+    <button class="close" title="Cancel reply">✕</button>`;
+  bar.querySelector(".close").onclick = clearReply;
+  bar.classList.add("visible");
+}
+
+// ---- Forward ----
+let _forwardMessage = null;
+function handleForward(message) {
+  _forwardMessage = message;
+  renderForwardPicker();
+  forwardModal.classList.add("visible");
+}
+function renderForwardPicker() {
+  const me = currentUser?.uid;
+  const myEmail = (currentUser?.email || "").toLowerCase();
+  // Allowed-email set so removed/orphan team users don't show as targets.
+  const allowedTeamEmails = new Set();
+  for (const m of Object.values(teamMembersCache || {})) {
+    if (m?.email) allowedTeamEmails.add(m.email.toLowerCase());
+  }
+  for (const a of BOOTSTRAP_ADMINS) allowedTeamEmails.add(a.toLowerCase());
+  const seenEmails = new Set();
+  const targets = [];
+  for (const [uid, u] of Object.entries(teamUsers || {})) {
+    if (uid === me) continue;
+    const e = String(u?.email || "").toLowerCase();
+    if (e && !allowedTeamEmails.has(e)) continue;
+    if (e && seenEmails.has(e)) continue;
+    if (e) seenEmails.add(e);
+    targets.push({ uid, name: resolveTeammateName(uid, u?.email), email: u?.email || "" });
+  }
+  targets.sort((a, b) => a.name.localeCompare(b.name));
+  if (!targets.length) {
+    forwardPickerList.innerHTML = `<i style="color:var(--muted); font-size:12px;">No teammates yet.</i>`;
+    return;
+  }
+  forwardPickerList.innerHTML = targets.map((t) => `
+    <div class="dm-picker-item" data-uid="${escapeHtml(t.uid)}" data-name="${escapeHtml(t.name)}">
+      <div class="av">${escapeHtml(avatarInitial(t.name))}</div>
+      <div>
+        <div class="nm">${escapeHtml(t.name)}</div>
+        <div class="em">${escapeHtml(t.email)}</div>
+      </div>
+    </div>`).join("");
+  forwardPickerList.querySelectorAll(".dm-picker-item").forEach((el) => {
+    el.onclick = () => executeForward(el.dataset.uid, el.dataset.name);
+  });
+}
+async function executeForward(toUid, toName) {
+  if (!_forwardMessage || !currentUser) return;
+  const targetPairKey = getPairKey(currentUser.uid, toUid);
+  const ts = Date.now();
+  const fromName = currentUser.displayName || currentUser.email || "(team)";
+  const srcText = _forwardMessage.text || _forwardMessage.media?.caption || _forwardMessage.media?.fileName || "(media)";
+  const sourceMeta = chatsCache[currentChatId] || {};
+  const sourceLabel = isDmKey(currentChatId)
+    ? (dmRows.find((r) => r.chatKey === currentChatId)?.name || "teammate")
+    : (sourceMeta.contactName || sourceMeta.displayName || sourceMeta.groupName || sourceMeta.phone || "customer");
+  try {
+    const msgRef = push(ref(db, `${ROOT}/dms/${targetPairKey}/messages`));
+    await set(msgRef, {
+      text: srcText,
+      ts,
+      fromUid: currentUser.uid,
+      fromName,
+      forwardedFrom: {
+        chatId: isDmKey(currentChatId) ? null : sourceMeta.chatId || null,
+        customerName: sourceLabel,
+        customerPhone: isDmKey(currentChatId) ? null : sourceMeta.phone || null,
+        originalText: srcText.slice(0, 500),
+        originalTs: _forwardMessage.ts || 0,
+        originalDirection: _forwardMessage.direction || "in",
+      },
+    });
+    await update(ref(db, `${ROOT}/dms/${targetPairKey}/meta`), {
+      participants: { [currentUser.uid]: true, [toUid]: true },
+      lastMsgAt: ts,
+      lastMsgPreview: `↪️ ${srcText.slice(0, 100)}`,
+      lastMsgFromUid: currentUser.uid,
+      lastMsgFromName: fromName,
+    });
+    if (WORKER_URL) {
+      fetch(`${WORKER_URL}/dm-notify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pairKey: targetPairKey, fromUid: currentUser.uid, fromName, toUid,
+          text: `↪️ Forwarded from ${sourceLabel}: ${srcText.slice(0, 140)}`,
+        }),
+      }).catch(() => {});
+    }
+    _forwardMessage = null;
+    forwardModal.classList.remove("visible");
+    alert(`Forwarded to ${toName}.`);
+  } catch (e) {
+    alert("Forward failed: " + (e?.message || e));
+  }
+}
+
+// ---- Copy ----
+async function handleCopy(message) {
+  const t = message.text || message.media?.caption || message.media?.fileName || "";
+  if (!t) return;
+  try {
+    await navigator.clipboard.writeText(t);
+  } catch (e) {
+    alert("Couldn't copy.");
+  }
+}
+
+// ---- Edit ----
+async function handleEdit(message) {
+  const oldText = message.text || "";
+  const newText = window.prompt("Edit message:", oldText);
+  if (newText === null) return;
+  const trimmed = newText.trim();
+  if (!trimmed || trimmed === oldText.trim()) return;
+  const isDm = isDmKey(currentChatId);
+  const ts = Date.now();
+  const editPatch = {
+    text: trimmed,
+    editedAt: ts,
+    editedByUid: currentUser.uid,
+    editedByName: currentUser.displayName || currentUser.email || null,
+  };
+  if (!message.originalText) editPatch.originalText = oldText;
+  if (isDm) {
+    const msgPath = `${ROOT}/dms/${pairKeyFromChatKey(currentChatId)}/messages/${message.id}`;
+    await update(ref(db, msgPath), editPatch);
+    // Refresh meta preview if this was the latest message.
+    const pairKey = pairKeyFromChatKey(currentChatId);
+    const pair = dmsCache[pairKey];
+    if (pair?.meta?.lastMsgAt === message.ts) {
+      await update(ref(db, `${ROOT}/dms/${pairKey}/meta`), {
+        lastMsgPreview: trimmed.slice(0, 120),
+      });
+    }
+    return;
+  }
+  // Customer-chat — local write + worker round-trip so WhatsApp also updates.
+  await update(ref(db, `${ROOT}/chats/${currentChatId}/messages/${message.id}`), editPatch);
+  if (!message.periskopeMsgId) {
+    alert("Edited locally — WhatsApp copy can't update yet (still syncing).");
+    return;
+  }
+  try {
+    const meta = chatsCache[currentChatId] || {};
+    const chatId = meta.chatId || currentChatId;
+    await fetch(`${WORKER_URL}/edit-message`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId, periskopeMsgId: message.periskopeMsgId, newText: trimmed }),
+    });
+  } catch (e) {
+    console.warn("edit-message failed:", e);
+  }
+}
+
+// ---- Delete ----
+async function handleDelete(message) {
+  if (!confirm("Delete this message? Your teammate will see a 'Message deleted' placeholder.")) return;
+  const isDm = isDmKey(currentChatId);
+  const tombstone = {
+    deleted: true,
+    deletedAt: Date.now(),
+    deletedByUid: currentUser.uid,
+    deletedByName: currentUser.displayName || currentUser.email || null,
+  };
+  if (!message.originalText && message.text) tombstone.originalText = message.text;
+  if (isDm) {
+    const pairKey = pairKeyFromChatKey(currentChatId);
+    await update(ref(db, `${ROOT}/dms/${pairKey}/messages/${message.id}`), tombstone);
+    const pair = dmsCache[pairKey];
+    if (pair?.meta?.lastMsgAt === message.ts) {
+      await update(ref(db, `${ROOT}/dms/${pairKey}/meta`), {
+        lastMsgPreview: "🚫 message deleted",
+      });
+    }
+    return;
+  }
+  // Customer chat — call worker /delete-message so WhatsApp also removes
+  // the message. Local tombstone goes in regardless so the UI updates.
+  await update(ref(db, `${ROOT}/chats/${currentChatId}/messages/${message.id}`), tombstone);
+  if (!message.periskopeMsgId) return;
+  try {
+    const meta = chatsCache[currentChatId] || {};
+    const chatId = meta.chatId || currentChatId;
+    await fetch(`${WORKER_URL}/delete-message`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId, periskopeMsgId: message.periskopeMsgId }),
+    });
+  } catch (e) {
+    console.warn("delete-message failed:", e);
+  }
 }
 
 // Render media inside a message bubble. Periskope media URLs need auth, so
@@ -7653,6 +8249,15 @@ async function doSend() {
   // v1.132: snapshot mentions before we clear the composer. snapshotMentions
   // filters out anyone whose name was erased between picking and sending.
   const mentionUids = snapshotMentions(text);
+  // v1.200: snapshot the reply target before we clear it so a chat change
+  // mid-flight can't drop the attachment.
+  const replySnapshot = _replyTarget ? {
+    msgKey: _replyTarget.id,
+    periskopeMsgId: _replyTarget.periskopeMsgId || null,
+    text: (_replyTarget.text || _replyTarget.media?.caption || "").slice(0, 500),
+    isFromMe: _replyTarget.direction === "out",
+    senderName: _replyTarget.sentByName || null,
+  } : null;
 
   // Optimistic write
   const msgRef = push(ref(db, `${ROOT}/chats/${currentChatId}/messages`));
@@ -7667,6 +8272,7 @@ async function doSend() {
     status: "sending",
   };
   if (mentionUids.length > 0) optimisticRec.mentions = mentionUids;
+  if (replySnapshot) optimisticRec.replyTo = replySnapshot;
   await set(msgRef, optimisticRec);
   await updateChatMeta(currentChatId, {
     chatId, phone,
@@ -7679,6 +8285,7 @@ async function doSend() {
   composerInput.style.height = "auto";
   _mentions.clear();
   closeMentionPicker();
+  clearReply();
 
   try {
     const res = await fetch(`${WORKER_URL}/send`, {
@@ -7690,6 +8297,7 @@ async function doSend() {
         sentByName: currentUser.displayName || currentUser.email,
         localMsgId,
         ...(mentionUids.length > 0 ? { mentions: mentionUids } : {}),
+        ...(replySnapshot ? { replyTo: replySnapshot } : {}),
       }),
     });
     if (!res.ok) {
@@ -7712,15 +8320,25 @@ async function doSendDm(text) {
   if (!otherUid) return;
   const ts = Date.now();
   const fromName = currentUser.displayName || currentUser.email || "(team)";
+  // v1.200: snapshot reply target if set, attach to the new DM message.
+  const replySnapshot = _replyTarget ? {
+    msgKey: _replyTarget.id,
+    periskopeMsgId: _replyTarget.periskopeMsgId || null,
+    text: (_replyTarget.text || _replyTarget.media?.caption || "").slice(0, 500),
+    isFromMe: _replyTarget.direction === "out",
+    senderName: _replyTarget.sentByName || null,
+  } : null;
 
   const msgRef = push(ref(db, `${ROOT}/dms/${pairKey}/messages`));
   const msgKey = msgRef.key;
-  await set(msgRef, {
+  const dmRec = {
     text,
     ts,
     fromUid: currentUser.uid,
     fromName,
-  });
+  };
+  if (replySnapshot) dmRec.replyTo = replySnapshot;
+  await set(msgRef, dmRec);
   await update(ref(db, `${ROOT}/dms/${pairKey}/meta`), {
     participants: {
       [currentUser.uid]: true,
@@ -7735,6 +8353,7 @@ async function doSendDm(text) {
   markChatSeen(currentChatId);
   composerInput.value = "";
   composerInput.style.height = "auto";
+  clearReply();
 
   // Fire-and-forget push fan-out. The DM itself is already in Firebase; the
   // recipient will see it on the dashboard either way — this just wakes
