@@ -36,6 +36,13 @@ interface Props {
   // the anchor message). Triggers a yellow flash + ring so the trainer
   // can see what they were anchored on.
   highlighted?: boolean;
+  // v1.208: tap the reply-quote card → jump to the quoted message in the
+  // same chat. Optional — when absent the card stays non-interactive.
+  onReplyQuoteTap?: (quotedMsgKey: string) => void;
+  // v1.208: tap the forwarded-from header → open the source customer chat
+  // (and scroll to the original message if originalMsgKey is present).
+  // Optional — when absent the header stays non-interactive.
+  onForwardedTap?: (forwardedFrom: NonNullable<Message["forwardedFrom"]>) => void;
 }
 
 export function MessageBubble({
@@ -46,6 +53,8 @@ export function MessageBubble({
   onLongPress,
   onImagePress,
   highlighted,
+  onReplyQuoteTap,
+  onForwardedTap,
 }: Props) {
   const styles = useStyles(makeStyles);
   const out = m.direction === "out";
@@ -92,29 +101,75 @@ export function MessageBubble({
             DM message was forwarded from a customer thread. Shows ↪️
             with the source customer's name so the recipient sees the
             context at a glance. */}
-        {!isDeleted && m.forwardedFrom && (
-          <View style={styles.forwardedHeader}>
-            <Text style={styles.forwardedTxt} numberOfLines={1}>
-              ↪️ Forwarded from {m.forwardedFrom.customerName || "customer"}
+        {/* v1.208: forwarded-header is tappable when we have a source chatId
+            and the parent passed a handler. Tap → opens the source customer
+            chat (and scrolls to the original bubble if originalMsgKey is
+            set on v1.208+ forwards). Wrap in TouchableOpacity only when
+            interactive so older callers stay non-interactive. */}
+        {!isDeleted && m.forwardedFrom && (() => {
+          const ff = m.forwardedFrom!;
+          const canTap = !!(onForwardedTap && ff.chatId);
+          const inner = (
+            <Text
+              style={[styles.forwardedTxt, canTap && styles.forwardedTxtTap]}
+              numberOfLines={1}
+            >
+              ↪️ Forwarded from {ff.customerName || "customer"}
+              {canTap ? " ›" : ""}
             </Text>
-          </View>
-        )}
+          );
+          if (canTap) {
+            return (
+              <TouchableOpacity
+                style={styles.forwardedHeader}
+                onPress={(e) => {
+                  e.stopPropagation?.();
+                  onForwardedTap!(ff);
+                }}
+                hitSlop={6}
+                accessibilityLabel="Open the chat this was forwarded from"
+              >
+                {inner}
+              </TouchableOpacity>
+            );
+          }
+          return <View style={styles.forwardedHeader}>{inner}</View>;
+        })()}
         {/* v1.153 quoted card. If this message was sent as a reply,
             render a snippet of the parent above the body so the trainer
             (and the customer, mirroring WhatsApp) can see what's being
-            answered without scrolling. */}
-        {!isDeleted && m.replyTo && (
-          <View style={styles.replyQuote}>
-            <Text style={styles.replyQuoteLabel} numberOfLines={1}>
-              {m.replyTo.isFromMe
-                ? "You"
-                : m.replyTo.senderName || "Customer"}
-            </Text>
-            <Text style={styles.replyQuoteTxt} numberOfLines={2}>
-              {m.replyTo.text || "(media)"}
-            </Text>
-          </View>
-        )}
+            answered without scrolling.
+            v1.208: tappable when a handler is wired → jumps the same chat
+            to the quoted message. */}
+        {!isDeleted && m.replyTo && (() => {
+          const rt = m.replyTo!;
+          const canTap = !!(onReplyQuoteTap && rt.msgKey);
+          const inner = (
+            <>
+              <Text style={styles.replyQuoteLabel} numberOfLines={1}>
+                {rt.isFromMe ? "You" : rt.senderName || "Customer"}
+              </Text>
+              <Text style={styles.replyQuoteTxt} numberOfLines={2}>
+                {rt.text || "(media)"}
+              </Text>
+            </>
+          );
+          if (canTap) {
+            return (
+              <TouchableOpacity
+                style={styles.replyQuote}
+                onPress={(e) => {
+                  e.stopPropagation?.();
+                  onReplyQuoteTap!(rt.msgKey);
+                }}
+                accessibilityLabel="Jump to the quoted message"
+              >
+                {inner}
+              </TouchableOpacity>
+            );
+          }
+          return <View style={styles.replyQuote}>{inner}</View>;
+        })()}
         {isDeleted ? (
           <Text style={styles.deletedTxt}>🚫 This message was deleted</Text>
         ) : (
@@ -412,6 +467,12 @@ function makeStyles(colors: Colors) {
       fontSize: 12,
       color: colors.muted,
       fontStyle: "italic",
+    },
+    // v1.208: when the header is tappable, give it a subtle underline so
+    // trainers spot the affordance without making the metadata text loud.
+    forwardedTxtTap: {
+      textDecorationLine: "underline",
+      color: senderTagColor,
     },
     image: {
       width: 220,

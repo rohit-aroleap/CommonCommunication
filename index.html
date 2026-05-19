@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.207</title>
+<title>CommonCommunication v1.208</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -929,10 +929,32 @@
     color: var(--muted);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
+  /* v1.208: clickable reply quote — pointer + subtle hover so the
+     affordance reads "jump to the quoted message". */
+  .bubble .reply-quote.tappable { cursor: pointer; }
+  .bubble .reply-quote.tappable:hover { background: rgba(0,168,132,0.16); }
   /* Forwarded header inside the bubble, above the body. */
   .bubble .forwarded-header {
     font-size: 11px; color: var(--muted);
     font-style: italic; margin-bottom: 3px;
+  }
+  /* v1.208: clickable forwarded header — pointer + slight tint so trainers
+     realise tapping it opens the source customer chat. */
+  .bubble .forwarded-header.tappable {
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-underline-offset: 2px;
+  }
+  .bubble .forwarded-header.tappable:hover { color: var(--green-dark); }
+  /* v1.208: brief flash when scrollToBubbleInThread targets a bubble — same
+     visual language as the mobile app's anchorMsgKey highlight. */
+  @keyframes bubbleFlash {
+    0% { background: #fef3c7; box-shadow: 0 0 0 2px #fcd34d; }
+    100% { background: inherit; box-shadow: none; }
+  }
+  .bubble.bubble-flash {
+    animation: bubbleFlash 2.4s ease-out;
   }
   /* Edited tag in the footer. */
   .bubble .footer .edited-tag {
@@ -2424,7 +2446,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.207";
+const APP_VERSION = "v1.208";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -6017,6 +6039,9 @@ function renderFerraPills(phone) {
 function applyChatDeepLink() {
   const params = new URLSearchParams(location.search);
   const ck = params.get("chat");
+  // v1.208: optional ?msg=<msgKey> param scrolls the opened thread to that
+  // exact bubble. Used by the new-tab opened from a forwarded-header click.
+  const msgKey = params.get("msg") || "";
   if (!ck) return;
   const start = Date.now();
   const tryOpen = () => {
@@ -6024,7 +6049,12 @@ function applyChatDeepLink() {
     if (Date.now() - start > 15000) return;
     if (chatsCache && chatsCache[ck]) {
       openChat(ck);
-      // Clear the param so a hard-refresh of this tab doesn't re-fire.
+      if (msgKey) {
+        // Give the messages listener a couple of ticks to render before we
+        // try to scroll. Falls back gracefully if the message isn't loaded.
+        setTimeout(() => scrollToBubbleInThread(msgKey), 800);
+      }
+      // Clear the params so a hard-refresh of this tab doesn't re-fire.
       try {
         history.replaceState(null, "", location.pathname);
       } catch {}
@@ -6033,6 +6063,19 @@ function applyChatDeepLink() {
     }
   };
   tryOpen();
+}
+
+// v1.208: scroll the open thread to a specific bubble (by msgKey) and give
+// it a brief yellow flash so the eye lands on it. Used by reply-quote taps
+// (same chat) and the ?msg= deep link arriving from a forwarded-header
+// click (different chat, new tab).
+function scrollToBubbleInThread(msgKey) {
+  if (!msgKey) return;
+  const el = document.querySelector(`.bubble[data-msg-key="${CSS.escape(msgKey)}"]`);
+  if (!el) return;
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  el.classList.add("bubble-flash");
+  setTimeout(() => el.classList.remove("bubble-flash"), 2500);
 }
 
 // ====== THREAD ======
@@ -6825,17 +6868,33 @@ function renderMessages(list) {
       : "";
     const ribbon = renderTicketRibbon(m.id);
     // v1.200: forwarded-from header above the body (mirrors mobile MessageBubble).
+    // v1.208: clickable when we have the source chatId — tapping it opens the
+    // source customer chat in a new tab (and scrolls to the originalMsgKey if
+    // we have it, for forwards written from v1.208 onwards).
     let forwardedHtml = "";
     if (!isDeleted && m.forwardedFrom) {
       const fromName = m.forwardedFrom.customerName || "customer";
-      forwardedHtml = `<div class="forwarded-header">↪️ Forwarded from ${escapeHtml(fromName)}</div>`;
+      const srcChatId = m.forwardedFrom.chatId || "";
+      const srcMsgKey = m.forwardedFrom.originalMsgKey || "";
+      const tappable = !!srcChatId;
+      forwardedHtml = `<div class="forwarded-header${tappable ? " tappable" : ""}"${
+        tappable
+          ? ` data-source-chat-id="${escapeHtml(srcChatId)}"${
+              srcMsgKey ? ` data-source-msg-key="${escapeHtml(srcMsgKey)}"` : ""
+            } title="Open the chat this was forwarded from"`
+          : ""
+      }>↪️ Forwarded from ${escapeHtml(fromName)}${tappable ? " ›" : ""}</div>`;
     }
     // v1.200: reply quote card above the body when this message is a reply.
+    // v1.208: clickable — tapping scrolls the thread to the quoted message.
     let replyHtml = "";
     if (!isDeleted && m.replyTo) {
       const label = m.replyTo.isFromMe ? "You" : (m.replyTo.senderName || "Customer");
       const quoted = (m.replyTo.text || "(media)").slice(0, 200);
-      replyHtml = `<div class="reply-quote">
+      const quotedKey = m.replyTo.msgKey || "";
+      replyHtml = `<div class="reply-quote${quotedKey ? " tappable" : ""}"${
+        quotedKey ? ` data-reply-msg-key="${escapeHtml(quotedKey)}" title="Jump to the quoted message"` : ""
+      }>
         <div class="label">${escapeHtml(label)}</div>
         <div class="quoted-text">${escapeHtml(quoted)}</div>
       </div>`;
@@ -6904,6 +6963,11 @@ function renderMessages(list) {
       // or anywhere inside an open actions popover — those have their
       // own click handlers and must not double-fire the ticket flow.
       if (e.target.closest(".msg-actions-trigger")) return;
+      // v1.208: reply-quote / forwarded-header have their own click handlers
+      // (jump to quoted msg / open source chat). Don't double-fire the
+      // ticket flow when those are clicked.
+      if (e.target.closest(".reply-quote.tappable")) return;
+      if (e.target.closest(".forwarded-header.tappable")) return;
       // Skip clicks on DM bubbles (DMs don't have tickets).
       if (isDmKey(currentChatId)) return;
       const msgKey = b.dataset.msgKey;
@@ -6911,6 +6975,36 @@ function renderMessages(list) {
       const message = list.find(m => m.id === msgKey);
       if (!message) return;
       openTicketPicker(b, message, "create");
+    });
+  });
+  // v1.208: jump-to-quoted-message on reply-quote click. Scrolls the same
+  // chat to the parent bubble and gives it a brief yellow flash so the eye
+  // lands on it. No-op if the parent isn't rendered (paginated out).
+  messagesEl.querySelectorAll(".reply-quote.tappable").forEach((q) => {
+    q.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const targetKey = q.dataset.replyMsgKey;
+      if (!targetKey) return;
+      scrollToBubbleInThread(targetKey);
+    });
+  });
+  // v1.208: open-source-chat on forwarded-header click. Opens the customer
+  // chat the message was forwarded from in a new browser tab via the
+  // ?chat=<encodedChatKey> deep link the dashboard already understands.
+  // If we also have the original message key (v1.208+ forwards), pass it
+  // as &msg=<key> so the new tab can scroll to that exact bubble.
+  messagesEl.querySelectorAll(".forwarded-header.tappable").forEach((h) => {
+    h.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const srcChatId = h.dataset.sourceChatId;
+      if (!srcChatId) return;
+      const srcMsgKey = h.dataset.sourceMsgKey || "";
+      const ck = encodeKey(srcChatId);
+      const url = new URL(location.href);
+      url.searchParams.set("chat", ck);
+      if (srcMsgKey) url.searchParams.set("msg", srcMsgKey);
+      else url.searchParams.delete("msg");
+      window.open(url.toString(), "_blank", "noopener");
     });
   });
   // v1.200: wire the action triggers (⋯ kebab on each bubble) to open the
@@ -7216,6 +7310,11 @@ async function executeForward(toUid, toName) {
         chatId: isDmKey(currentChatId) ? null : sourceMeta.chatId || null,
         customerName: sourceLabel,
         customerPhone: isDmKey(currentChatId) ? null : sourceMeta.phone || null,
+        // v1.208: persist the source msg key so the recipient can tap the
+        // forwarded-header and land on the exact message in the source
+        // chat, not just the source chat's tail. Historical forwards (pre
+        // v1.208) won't have this — they fall back to opening the chat.
+        originalMsgKey: _forwardMessage.id || null,
         originalText: srcText.slice(0, 500),
         originalTs: _forwardMessage.ts || 0,
         originalDirection: _forwardMessage.direction || "in",

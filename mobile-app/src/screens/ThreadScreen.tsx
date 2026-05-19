@@ -57,7 +57,7 @@ import {
 import { useAuth } from "@/auth/AuthContext";
 import { resolveDisplayName } from "@/lib/displayName";
 import { dayLabel } from "@/lib/format";
-import { chatKeyToChatId } from "@/lib/encodeKey";
+import { chatKeyToChatId, encodeKey } from "@/lib/encodeKey";
 import {
   fetchChatInfo,
   sendMessage,
@@ -1032,6 +1032,12 @@ export function ThreadScreen({ route, navigation }: Props) {
             chatId: isDm ? null : meta.chatId || null,
             customerName: sourceLabel,
             customerPhone: isDm ? null : meta.phone || null,
+            // v1.208: persist the source bubble's msgKey so the recipient
+            // can tap the forwarded-header card and jump straight to the
+            // exact original message in the source chat. Historical
+            // forwards (pre v1.208) won't have this — the tap still works
+            // but lands at the source chat's tail instead of the bubble.
+            originalMsgKey: src.id || null,
             originalText: srcText.slice(0, 500),
             originalTs: src.ts || 0,
             originalDirection: src.direction,
@@ -1573,6 +1579,28 @@ export function ThreadScreen({ route, navigation }: Props) {
             resolveSenderName={resolveSenderName}
             highlighted={item.id === highlightedMsgId}
             onImagePress={(url) => setMediaViewerUrl(url)}
+            // v1.208: tap the reply-quote → scroll to the quoted message in
+            // the same chat. If it's not in the rendered slice (paginated
+            // away or hasn't loaded yet) the scroll silently no-ops.
+            onReplyQuoteTap={(quotedMsgKey) => scrollToMessage(quotedMsgKey)}
+            // v1.208: tap the forwarded-header → open the source customer
+            // chat. Pass anchorMsgKey when we have it (v1.208+ forwards) so
+            // the source thread scrolls to the exact original message.
+            onForwardedTap={(ff) => {
+              if (!ff.chatId) return;
+              const srcChatKey = encodeKey(ff.chatId);
+              if (srcChatKey === chatKey) {
+                // Same chat (rare — forwarding inside its own chat). Just
+                // scroll instead of pushing a duplicate Thread.
+                if (ff.originalMsgKey) scrollToMessage(ff.originalMsgKey);
+                return;
+              }
+              navigation.push("Thread", {
+                chatKey: srcChatKey,
+                initialTitle: ff.customerName || undefined,
+                anchorMsgKey: ff.originalMsgKey || undefined,
+              });
+            }}
             onPress={(m) => {
               // Single tap → open "Create ticket from this message" flow.
               // Matches webapp behaviour where clicking a bubble is the
@@ -1605,7 +1633,16 @@ export function ThreadScreen({ route, navigation }: Props) {
         </View>
       );
     },
-    [visible, isGroup, resolveSenderName, highlightedMsgId],
+    [
+      visible,
+      isGroup,
+      resolveSenderName,
+      highlightedMsgId,
+      isDm,
+      chatKey,
+      navigation,
+      scrollToMessage,
+    ],
   );
 
   return (

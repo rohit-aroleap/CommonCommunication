@@ -99,6 +99,11 @@ export interface Message {
     chatId?: string | null; // source customer chat
     customerName?: string | null;
     customerPhone?: string | null;
+    // v1.208: source-message identifier so the recipient can tap the
+    // forwarded-header card and land on the exact bubble in the source
+    // chat. Historical forwards (pre v1.208) won't have this — the tap
+    // still works but lands at the source chat's tail instead.
+    originalMsgKey?: string | null;
     originalText: string;
     originalTs: number;
     originalDirection?: "in" | "out"; // "in" = forwarded a customer's message; "out" = forwarded our own reply
