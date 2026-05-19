@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.196</title>
+<title>CommonCommunication v1.197</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -383,49 +383,80 @@
   }
   .dm-picker-empty { padding: 24px; text-align: center; color: var(--muted); font-size: 13px; }
   /* Team-member phone editor inside the existing Team modal */
+  /* v1.197: redesigned Team modal rows. Two-line compact layout:
+       Line 1 — name input (with email subtitle) + actions cluster
+       Line 2 — phones inline + tiny + add-phone, expands on click
+     Targets ~60-70px per row, down from ~140px in the previous layout. */
   .team-member-row {
-    border: 1px solid var(--border); border-radius: 6px;
-    padding: 8px 10px; margin-bottom: 6px;
-    background: #fafafa;
+    border-bottom: 1px solid var(--border);
+    padding: 8px 10px;
+    background: transparent;
+    transition: background 0.12s;
   }
-  .team-member-row .top {
-    display: flex; align-items: center; gap: 8px;
+  .team-member-row:hover { background: var(--hover); }
+  .team-member-row:last-child { border-bottom: none; }
+  .team-member-row .head {
+    display: flex; align-items: center; gap: 10px;
   }
-  .team-member-row .em { flex: 1; font-size: 13px; }
+  .team-member-row .name-stack {
+    flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px;
+  }
+  .team-member-row .name-input {
+    width: 100%; font-size: 13px; font-weight: 600;
+    padding: 3px 6px;
+    border: 1px solid transparent; border-radius: 4px;
+    background: transparent; color: var(--text);
+    transition: border-color 0.12s, background 0.12s;
+  }
+  .team-member-row .name-input:hover {
+    border-color: var(--border); background: white;
+  }
+  .team-member-row .name-input:focus {
+    outline: none; border-color: var(--green); background: white;
+  }
+  .team-member-row .em {
+    font-size: 11px; color: var(--muted);
+    padding-left: 6px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .team-member-row .actions {
+    display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+  }
+  /* v1.196 → v1.197: pill-style toggle for "Limited access" instead of
+     a checkbox + label. Clicked state: green pill, white text. */
+  .team-member-row .limited-toggle {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; color: var(--muted);
+    cursor: pointer; user-select: none;
+    padding: 3px 8px; border-radius: 10px;
+    border: 1px solid var(--border);
+    background: white;
+    transition: all 0.12s;
+  }
+  .team-member-row .limited-toggle:hover { border-color: var(--green); color: var(--green); }
+  .team-member-row .limited-toggle input { display: none; }
+  .team-member-row .limited-toggle.on {
+    background: var(--green); color: white; border-color: var(--green);
+    font-weight: 600;
+  }
   .team-member-row .rm {
     background: transparent; border: none; cursor: pointer;
     color: var(--muted); font-size: 16px; padding: 0 4px;
+    line-height: 1;
   }
   .team-member-row .rm:hover { color: #d9534f; }
-  /* v1.196: limited-access toggle. Sits inline between the email and the
-     × remove button. Off by default; on flips trainer to the gated chat
-     list mode. */
-  .team-member-row .limited-toggle {
-    display: flex; align-items: center; gap: 4px;
-    font-size: 11px; color: var(--muted);
-    cursor: pointer;
-    user-select: none;
+  .team-member-row .body {
+    display: flex; align-items: center; gap: 6px;
+    margin-top: 4px;
+    padding-left: 6px;
+    flex-wrap: wrap;
   }
-  .team-member-row .limited-toggle input { cursor: pointer; margin: 0; }
-  /* v1.132: inline display-name editor. Feeds the @mention picker
-     and other UIs that show "who said this" so we don't have to
-     stare at full emails. Optional — falls back to email when blank. */
-  .team-member-row .name-row {
-    display: flex; gap: 6px; align-items: center; margin-top: 6px;
-  }
-  .team-member-row .name-row label {
-    font-size: 11px; color: var(--muted); min-width: 38px;
-  }
-  .team-member-row .name-input {
-    flex: 1; font-size: 12px; padding: 4px 8px;
-    border: 1px solid var(--border); border-radius: 4px;
-  }
-  .team-member-row .phones {
-    margin-top: 6px; display: flex; gap: 4px; flex-wrap: wrap;
+  .team-member-row .phones-empty {
+    color: var(--muted); font-size: 11px; font-style: italic;
   }
   .team-member-row .phone-pill {
     background: white; border: 1px solid var(--border);
-    border-radius: 12px; padding: 2px 4px 2px 8px;
+    border-radius: 10px; padding: 1px 4px 1px 8px;
     font-size: 11px; display: inline-flex; align-items: center; gap: 2px;
     font-family: monospace;
   }
@@ -435,18 +466,25 @@
     line-height: 1;
   }
   .team-member-row .phone-pill button:hover { color: #d9534f; }
-  .team-member-row .add-phone {
-    display: flex; gap: 4px; margin-top: 6px;
+  .team-member-row .add-phone-btn {
+    background: transparent; border: 1px dashed var(--border);
+    border-radius: 10px; padding: 1px 8px; font-size: 11px;
+    color: var(--muted); cursor: pointer; line-height: 1.6;
   }
-  .team-member-row .add-phone input {
-    flex: 1; font-size: 12px; padding: 4px 8px;
-    border: 1px solid var(--border); border-radius: 4px;
+  .team-member-row .add-phone-btn:hover { color: var(--green); border-color: var(--green); }
+  .team-member-row .add-phone-row {
+    display: none; align-items: center; gap: 4px; flex-wrap: nowrap;
+    margin-left: 2px;
+  }
+  .team-member-row .add-phone-row.open { display: inline-flex; }
+  .team-member-row .add-phone-row input {
+    font-size: 11px; padding: 3px 8px; width: 160px;
+    border: 1px solid var(--border); border-radius: 10px;
     font-family: monospace;
   }
-  .team-member-row .add-phone button {
-    background: var(--green); color: white; border: none; border-radius: 4px;
-    padding: 4px 10px; font-size: 11px; cursor: pointer;
-    font-weight: 600;
+  .team-member-row .add-phone-row button.go {
+    background: var(--green); color: white; border: none; border-radius: 10px;
+    padding: 3px 10px; font-size: 11px; cursor: pointer; font-weight: 600;
   }
   /* DM thread header: small "Internal" badge so it's obvious this won't
      leave the dashboard. */
@@ -1628,7 +1666,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.196</div>
+    <div class="login-version">v1.197</div>
   </div>
 </div>
 
@@ -1636,7 +1674,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.196</span>
+    <span class="ver">v1.197</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -1822,21 +1860,22 @@
 
 <!-- ============== TEAM MODAL ============== -->
 <div class="modal-back" id="teamModal">
-  <div class="modal" style="width:520px;">
-    <h3>Team — Allowed emails</h3>
-    <div style="font-size:12px; color:var(--muted); margin-bottom:14px;">
-      Only signed-in users with an allowed email can use this dashboard. Bootstrap admins (hardcoded) are always allowed. Add each teammate's WhatsApp number so customer-inbox rows for that number get redirected to a direct internal chat instead of routing through Periskope.
+  <div class="modal" style="width:600px; max-width:96vw;">
+    <h3 style="margin-bottom:4px;">Team</h3>
+    <!-- v1.197: intro tightened to a single line. The longer explanation
+         (admin role, phone-suppression rule) used to live here but added
+         no decisions for the user — they already know what the modal is
+         for once they've opened it. Bootstrap admins moved inline. -->
+    <div style="font-size:11px; color:var(--muted); margin-bottom:14px; line-height:1.45;">
+      Allowed emails sign in here. Add each teammate's WhatsApp number to redirect their inbound to internal DMs.
+      <span id="bootstrapInline" style="margin-left:4px;"></span>
     </div>
-    <label style="margin-bottom:6px;">Bootstrap admins</label>
-    <div id="bootstrapList" style="margin-bottom:14px;"></div>
-    <label style="margin-bottom:6px;">Allowed emails</label>
     <div id="allowedList" style="margin-bottom:12px; min-height:20px;"></div>
-    <label>Add email</label>
-    <div style="display:flex; gap:8px;">
-      <input id="newAllowEmail" placeholder="trainer@example.com" style="flex:1;" />
-      <button class="btn btn-primary" id="addAllowBtn">Add</button>
+    <div style="display:flex; gap:8px; align-items:center;">
+      <input id="newAllowEmail" placeholder="trainer@example.com — add a new teammate" style="flex:1; padding:6px 10px; font-size:12px;" />
+      <button class="btn btn-primary" id="addAllowBtn" style="padding:6px 14px;">Add</button>
     </div>
-    <div class="actions" style="margin-top:18px;">
+    <div class="actions" style="margin-top:14px;">
       <button class="btn btn-secondary" id="teamClose">Close</button>
     </div>
   </div>
@@ -2108,7 +2147,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.196";
+const APP_VERSION = "v1.197";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -2276,7 +2315,10 @@ const aiQueryClose = $("aiQueryClose");
 const teamBtn = $("teamBtn");
 const teamModal = $("teamModal");
 const teamClose = $("teamClose");
-const bootstrapList = $("bootstrapList");
+// v1.197: bootstrapList element is gone — admins are inlined into the
+// intro paragraph as a single bold mention via bootstrapInline.
+const bootstrapList = null;
+const bootstrapInline = $("bootstrapInline");
 const allowedListEl = $("allowedList");
 const newAllowEmail = $("newAllowEmail");
 const addAllowBtn = $("addAllowBtn");
@@ -2639,9 +2681,11 @@ addAllowBtn.onclick = addAllowedEmail;
 newAllowEmail.addEventListener("keydown", e => { if (e.key === "Enter") addAllowedEmail(); });
 
 function openTeamModal() {
-  // Render bootstrap admins (read-only)
-  bootstrapList.innerHTML = BOOTSTRAP_ADMINS
-    .map(e => `<span class="bootstrap-pill">${escapeHtml(e)}</span>`).join("") || "<i style='color:var(--muted); font-size:12px;'>None</i>";
+  // v1.197: bootstrap admins shown inline at the end of the intro line,
+  // not as a separate section with its own label + pill row.
+  if (bootstrapInline) {
+    bootstrapInline.innerHTML = `Admins: ${BOOTSTRAP_ADMINS.map(e => `<b style="color:var(--text);">${escapeHtml(e)}</b>`).join(", ")}.`;
+  }
   // Live-render dynamic allowlist
   onValue(ref(db, `${ROOT}/config/allowedEmails`), snap => {
     allowedEmailsCache = snap.val() || {};
@@ -2656,10 +2700,11 @@ function renderAllowedList() {
     allowedListEl.innerHTML = "<i style='color:var(--muted); font-size:12px;'>None yet. Add team emails below.</i>";
     return;
   }
-  // Each row shows the email + its mapped phone numbers (from teamMembers).
-  // Phones are how we suppress teammates from the customer inbox; adding the
-  // teammate's WhatsApp number here is what closes the "Shobhit shows up
-  // twice" loophole.
+  // v1.197: compact 2-line row.
+  // Line 1: [Name input]   email · Limited-pill · ×
+  // Line 2: phone pills + tiny + add-phone (collapsed input, expands on click)
+  // The name input visually carries the row's identity — email gets demoted
+  // to small subtitle since the admin already knows who they're editing.
   allowedListEl.innerHTML = entries.map(([key, val]) => {
     const display = (typeof val === "string") ? val : key;
     const member = teamMembersCache[key] || {};
@@ -2670,36 +2715,53 @@ function renderAllowedList() {
       .join("");
     const nameVal = member.name || "";
     const limited = !!member.limited;
-    // v1.196: limited-access toggle. Off (default) = full trainer, sees
-    // everything. On = chat list starts empty; trainer unlocks customers
-    // one-by-one via the Add Customer flow OR by being assigned a ticket.
+    const phonesHtml = phonePills ||
+      `<span class="phones-empty">No phones mapped</span>`;
     return `<div class="team-member-row">
-      <div class="top">
-        <span class="em">${escapeHtml(display)}</span>
-        <label class="limited-toggle" title="Limited access: chat list starts empty; trainer manually adds customers (14-day window) or is assigned tickets">
-          <input type="checkbox" class="limited-input" data-key="${escapeHtml(key)}" ${limited ? "checked" : ""} />
-          <span>Limited access</span>
-        </label>
-        <button class="rm" data-key="${escapeHtml(key)}" title="Remove from team">×</button>
+      <div class="head">
+        <div class="name-stack">
+          <input class="name-input" data-key="${escapeHtml(key)}" value="${escapeHtml(nameVal)}" placeholder="Display name…" title="${escapeHtml(display)}" />
+          <span class="em">${escapeHtml(display)}</span>
+        </div>
+        <div class="actions">
+          <label class="limited-toggle ${limited ? "on" : ""}" title="Limited access: chat list starts empty; trainer manually adds customers (14-day window) or is assigned tickets">
+            <input type="checkbox" class="limited-input" data-key="${escapeHtml(key)}" ${limited ? "checked" : ""} />
+            <span>${limited ? "Limited" : "Limit"}</span>
+          </label>
+          <button class="rm" data-key="${escapeHtml(key)}" title="Remove from team">×</button>
+        </div>
       </div>
-      <div class="name-row">
-        <label>Name</label>
-        <input class="name-input" data-key="${escapeHtml(key)}" value="${escapeHtml(nameVal)}" placeholder="e.g. Ashima — shown in Team list, DMs, @mentions, ticket pickers" />
-      </div>
-      <div class="phones">${phonePills || `<i style="color:var(--muted); font-size:11px;">No phones mapped — customer-inbox rows for this teammate's number will still show as customers.</i>`}</div>
-      <div class="add-phone">
-        <input class="add-phone-input" data-key="${escapeHtml(key)}" placeholder="e.g. +91 98765 43210" />
-        <button class="add-phone-btn" data-key="${escapeHtml(key)}">Add phone</button>
+      <div class="body">
+        ${phonesHtml}
+        <button class="add-phone-btn" data-key="${escapeHtml(key)}" data-action="open-phone">+ phone</button>
+        <span class="add-phone-row" data-key="${escapeHtml(key)}">
+          <input class="add-phone-input" data-key="${escapeHtml(key)}" placeholder="+91 98765 43210" />
+          <button class="go" data-key="${escapeHtml(key)}" data-action="save-phone">Add</button>
+        </span>
       </div>
     </div>`;
   }).join("");
-  // v1.196: persist limited-access toggle changes immediately.
+  // v1.196/v1.197: pill-style limited-access toggle. Click → persist.
   allowedListEl.querySelectorAll(".limited-input").forEach((inp) => {
     inp.onchange = async () => {
       await set(
         ref(db, `${ROOT}/config/teamMembers/${inp.dataset.key}/limited`),
         inp.checked ? true : null,
       );
+    };
+  });
+  // v1.197: "+ phone" button toggles the inline input visibility instead
+  // of always showing it. Saves vertical space for rows where you don't
+  // need to add a phone right now.
+  allowedListEl.querySelectorAll("[data-action='open-phone']").forEach((btn) => {
+    btn.onclick = () => {
+      const row = allowedListEl.querySelector(`.add-phone-row[data-key="${btn.dataset.key}"]`);
+      if (!row) return;
+      row.classList.toggle("open");
+      if (row.classList.contains("open")) {
+        const i = row.querySelector("input");
+        if (i) setTimeout(() => i.focus(), 50);
+      }
     };
   });
   allowedListEl.querySelectorAll(".rm").forEach(b => {
@@ -2744,22 +2806,34 @@ function renderAllowedList() {
       });
     };
   });
-  allowedListEl.querySelectorAll(".add-phone-btn").forEach(btn => {
-    btn.onclick = async () => {
-      const input = allowedListEl.querySelector(`.add-phone-input[data-key="${btn.dataset.key}"]`);
-      const raw = (input?.value || "").trim();
-      const digits = normalizePhone(raw);
-      if (digits.length < 8) { alert("Enter a valid phone number with country code (digits only or with +/spaces)."); return; }
-      const phoneKey = "+" + digits;
-      // Also stash email + name into teamMembers so the picker has rich data.
-      const emailKey_ = btn.dataset.key;
-      const emailDisplay = (typeof allowedEmailsCache[emailKey_] === "string") ? allowedEmailsCache[emailKey_] : emailKey_;
-      await update(ref(db, `${ROOT}/config/teamMembers/${emailKey_}`), {
-        email: emailDisplay,
-        [`phones/${phoneKey}`]: true,
-      });
-      if (input) input.value = "";
-    };
+  // v1.197: save-phone handler — fires when user clicks the green Add
+  // button inside the expanded phone input row, or hits Enter.
+  const savePhone = async (key) => {
+    const input = allowedListEl.querySelector(`.add-phone-input[data-key="${key}"]`);
+    const raw = (input?.value || "").trim();
+    const digits = normalizePhone(raw);
+    if (digits.length < 8) {
+      alert("Enter a valid phone number with country code (digits only or with +/spaces).");
+      return;
+    }
+    const phoneKey = "+" + digits;
+    const emailDisplay = (typeof allowedEmailsCache[key] === "string") ? allowedEmailsCache[key] : key;
+    await update(ref(db, `${ROOT}/config/teamMembers/${key}`), {
+      email: emailDisplay,
+      [`phones/${phoneKey}`]: true,
+    });
+    if (input) input.value = "";
+    // Collapse the input after a successful save.
+    const row = allowedListEl.querySelector(`.add-phone-row[data-key="${key}"]`);
+    if (row) row.classList.remove("open");
+  };
+  allowedListEl.querySelectorAll("[data-action='save-phone']").forEach((btn) => {
+    btn.onclick = () => savePhone(btn.dataset.key);
+  });
+  allowedListEl.querySelectorAll(".add-phone-input").forEach((inp) => {
+    inp.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") savePhone(inp.dataset.key);
+    });
   });
 }
 async function addAllowedEmail() {
