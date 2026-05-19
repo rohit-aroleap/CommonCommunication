@@ -37,6 +37,10 @@ interface Props {
   currentUid: string;
   currentName: string;
   onReassign: (ticketId: string) => void;
+  // v1.207: tap the banner pill (NOT the inline Reassign/Resolve links)
+  // to scroll the thread back to the message this ticket was anchored
+  // on. Optional — when absent, the banner text is plain.
+  onTap?: (ticket: Ticket) => void;
 }
 
 export function TicketBanner({
@@ -44,6 +48,7 @@ export function TicketBanner({
   currentUid,
   currentName,
   onReassign,
+  onTap,
 }: Props) {
   const styles = useStyles(makeStyles);
   const { colors } = useTheme();
@@ -142,15 +147,26 @@ export function TicketBanner({
               { backgroundColor: bg, borderBottomColor: border },
             ]}
           >
-            <Text style={[styles.txt, { color: fg }]} numberOfLines={1}>
-              🎫{" "}
-              {t.assigneeName ? (
-                <Text style={styles.assignee}>{t.assigneeName}</Text>
-              ) : (
-                <Text style={styles.unassigned}>Unassigned</Text>
-              )}
-              {t.title ? ` · ${t.title}` : ""}
-            </Text>
+            {/* v1.207: the text portion is its own touchable so tapping the
+                banner scrolls the thread to the ticket's anchor message.
+                Reassign / Resolve are separate touchables to the right so
+                they keep their action behavior and don't trigger scroll. */}
+            <TouchableOpacity
+              style={styles.txtTap}
+              onPress={() => onTap?.(t)}
+              activeOpacity={onTap ? 0.6 : 1}
+              accessibilityLabel="Scroll to the message this ticket is about"
+            >
+              <Text style={[styles.txt, { color: fg }]} numberOfLines={1}>
+                🎫{" "}
+                {t.assigneeName ? (
+                  <Text style={styles.assignee}>{t.assigneeName}</Text>
+                ) : (
+                  <Text style={styles.unassigned}>Unassigned</Text>
+                )}
+                {t.title ? ` · ${t.title}` : ""}
+              </Text>
+            </TouchableOpacity>
             <TouchableOpacity
               onPress={() => onReassign(t.id)}
               hitSlop={8}
@@ -230,7 +246,11 @@ function makeStyles(colors: Colors) {
       borderBottomWidth: StyleSheet.hairlineWidth,
       gap: 6,
     },
-    txt: { fontSize: 12, flex: 1 },
+    // v1.207: the tappable wrapper for the banner text. flex:1 so the
+    // text fills the available space pushing Reassign/Resolve to the
+    // right edge — same layout the plain Text used to have.
+    txtTap: { flex: 1 },
+    txt: { fontSize: 12 },
     assignee: { fontWeight: "600" },
     unassigned: { fontStyle: "italic", opacity: 0.85 },
     linkBtn: { paddingHorizontal: 2 },

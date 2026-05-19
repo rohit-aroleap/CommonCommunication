@@ -535,13 +535,31 @@ export function ThreadScreen({ route, navigation }: Props) {
     [messages],
   );
 
-  // v1.206: scroll to the ticket's anchor message when the screen is
-  // opened from the My Tickets list (or any future deep-link). The
-  // route carries anchorMsgKey; we look it up in `visible`, scroll the
-  // inverted FlatList to that index, and briefly highlight the bubble
-  // so the trainer can see what message the ticket was anchored on.
+  // v1.206: scroll to a specific message in the thread (the inverted
+  // FlatList) and briefly highlight it. Used both for the route-param
+  // anchor (TicketsScreen tap → Thread) and for in-thread banner taps
+  // (v1.207: tapping the ticket banner pill at the top of a chat).
   const [scrolledToAnchor, setScrolledToAnchor] = useState(false);
   const [highlightedMsgId, setHighlightedMsgId] = useState<string | null>(null);
+  const scrollToMessage = useCallback(
+    (msgKey: string) => {
+      if (!msgKey) return;
+      const idx = visible.findIndex((m) => m.id === msgKey);
+      if (idx < 0) return;
+      try {
+        listRef.current?.scrollToIndex({
+          index: idx,
+          animated: true,
+          viewPosition: 0.5,
+        });
+        setHighlightedMsgId(msgKey);
+        setTimeout(() => setHighlightedMsgId(null), 2500);
+      } catch {
+        /* swallow — onScrollToIndexFailed will retry */
+      }
+    },
+    [visible],
+  );
   // Reset the "scrolled" latch when the route changes — opening a new
   // ticket on the same chat key must re-fire the scroll.
   useEffect(() => {
@@ -549,24 +567,11 @@ export function ThreadScreen({ route, navigation }: Props) {
   }, [chatKey, anchorMsgKey]);
   useEffect(() => {
     if (!anchorMsgKey || scrolledToAnchor || !visible.length) return;
-    const idx = visible.findIndex((m) => m.id === anchorMsgKey);
-    if (idx < 0) return;
+    if (visible.findIndex((m) => m.id === anchorMsgKey) < 0) return;
     setScrolledToAnchor(true);
     // Wait a tick so FlatList has finished its initial layout pass.
-    setTimeout(() => {
-      try {
-        listRef.current?.scrollToIndex({
-          index: idx,
-          animated: true,
-          viewPosition: 0.5,
-        });
-        setHighlightedMsgId(anchorMsgKey);
-        setTimeout(() => setHighlightedMsgId(null), 2500);
-      } catch {
-        /* swallow — onScrollToIndexFailed will retry */
-      }
-    }, 200);
-  }, [visible, anchorMsgKey, scrolledToAnchor]);
+    setTimeout(() => scrollToMessage(anchorMsgKey), 200);
+  }, [visible, anchorMsgKey, scrolledToAnchor, scrollToMessage]);
 
   const banner = useMemo<Ticket[]>(
     () => (isDm ? [] : openTicketsForChat(tickets, chatKey)),
@@ -1633,6 +1638,12 @@ export function ThreadScreen({ route, navigation }: Props) {
           tickets={banner}
           currentUid={user?.uid ?? ""}
           currentName={user?.displayName || user?.email || ""}
+          onTap={(t) => {
+            // v1.207: scroll the thread back to the message this ticket
+            // was anchored on. Same flash highlight as the route-param
+            // anchor flow.
+            if (t.anchorMsgKey) scrollToMessage(t.anchorMsgKey);
+          }}
           onReassign={(id) => {
             const t = banner.find((x) => x.id === id);
             if (t) setReassignTicket(t);
