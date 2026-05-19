@@ -122,6 +122,12 @@ export default {
       if (url.pathname === "/ai-inbox" && request.method === "POST") {
         return cors(env, await handleAiInbox(request, env));
       }
+      // v1.205: push notification on ticket assignment. Called by the
+      // client right after a /tickets create or reassign write — Firebase
+      // RTDB writes don't trigger any server-side hook of their own.
+      if (url.pathname === "/notify-ticket-assignee" && request.method === "POST") {
+        return cors(env, await handleNotifyTicketAssignee(request, env));
+      }
       // v1.176: internal-DM attachments via Cloudflare R2. Upload is a
       // multipart POST; download is a GET on the path we returned at
       // upload-time. R2 doesn't expose public URLs by default (and r2.dev
@@ -2590,6 +2596,92 @@ async function handleDmNotify(request, env) {
       title: fromName || "Team",
       body: String(text || "").slice(0, 200) || "[new message]",
       data: { dmPairKey: pairKey, kind: "dm" },
+      sound: "default",
+      priority: "high",
+      channelId: "default",
+    });
+  }
+  if (!messages.length) return json({ ok: true, delivered: 0 });
+
+  for (let i = 0; i < messages.length; i += 100) {
+    const batch = messages.slice(i, i + 100);
+    const headers = { "Content-Type": "application/json", "Accept": "application/json" };
+    if (env.EXPO_ACCESS_TOKEN) headers["Authorization"] = `Bearer ${env.EXPO_ACCESS_TOKEN}`;
+    try {
+      await fetch("https://exp.host/--/api/v2/push/send", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(batch),
+      });
+    } catch { /* swallow — push is best-effort */ }
+  }
+  return json({ ok: true, delivered: messages.length });
+}
+
+// ---------- /notify-ticket-assignee (v1.205) ----------
+// Fire a push to the assignee when a ticket is created or reassigned.
+// Called by clients right after they write to /tickets — Firebase RTDB
+// writes don't trigger anything server-side on their own, so this is the
+// hook to make ticket assignments push-noticeable on the phone.
+//
+// Body:
+//   { ticketId, assigneeUid, assigneeName, fromUid, fromName,
+//     chatId, customerName, title, type: "created"|"reassigned" }
+//
+// Behavior:
+//   - Skips if assigneeUid === fromUid (don't wake yourself up for a
+//     ticket you just assigned to yourself).
+//   - Fetches assignee's Expo push tokens from /pushTokens/{uid}.
+//   - Sends one Expo push per token. Data payload includes ticketId +
+//     chatId so the mobile app can deep-link the user to the relevant
+//     thread on tap (future work; v1 just opens the app).
+async function handleNotifyTicketAssignee(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const {
+    ticketId,
+    assigneeUid,
+    assigneeName,
+    fromUid,
+    fromName,
+    chatId,
+    customerName,
+    title,
+    type,
+  } = body || {};
+  if (!ticketId || !assigneeUid) {
+    return json({ error: "missing ticketId/assigneeUid" }, 400);
+  }
+  // Don't push yourself.
+  if (fromUid && fromUid === assigneeUid) {
+    return json({ ok: true, delivered: 0, skipped: "self-assign" });
+  }
+
+  const tokensMap = await fbGet(env, `${ROOT}/pushTokens/${assigneeUid}`);
+  if (!tokensMap || typeof tokensMap !== "object") {
+    return json({ ok: true, delivered: 0 });
+  }
+
+  const verb = type === "reassigned" ? "reassigned to you" : "assigned to you";
+  const customer = customerName || "a customer";
+  const titleTxt = `🎫 Ticket ${verb}`;
+  const ticketPart = title ? `${title} · ` : "";
+  const bodyTxt =
+    `${fromName ? `${fromName} → ` : ""}${ticketPart}${customer}`.slice(0, 200);
+
+  const messages = [];
+  for (const entry of Object.values(tokensMap)) {
+    if (!entry || !entry.token) continue;
+    if (!/^ExponentPushToken\[.+\]$/.test(entry.token)) continue;
+    messages.push({
+      to: entry.token,
+      title: titleTxt,
+      body: bodyTxt,
+      data: {
+        kind: "ticket",
+        ticketId,
+        chatId: chatId || null,
+        type: type || "created",
+      },
       sound: "default",
       priority: "high",
       channelId: "default",

@@ -198,6 +198,32 @@ export function mediaProxyUrl(url: string): string {
   return `${WORKER_URL}/media?u=${encodeURIComponent(url)}`;
 }
 
+// v1.205: notify a teammate that they've just been assigned a ticket.
+// Called from CreateTicketModal (type: "created") and ReassignModal
+// (type: "reassigned"). The worker skips the push if assigneeUid ===
+// fromUid (no self-pinging). Best-effort; failures swallowed.
+export async function notifyTicketAssignee(body: {
+  ticketId: string;
+  assigneeUid: string;
+  assigneeName: string;
+  fromUid: string;
+  fromName: string;
+  chatId: string;
+  customerName: string;
+  title: string;
+  type: "created" | "reassigned";
+}): Promise<void> {
+  try {
+    await fetch(`${WORKER_URL}/notify-ticket-assignee`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    /* swallow — push is best-effort */
+  }
+}
+
 // Fire a push notification for a freshly-sent DM. The message itself is
 // already in Firebase by the time we call this — the worker just fans out
 // to the recipient's Expo tokens. Best-effort; failures don't roll back.

@@ -20,6 +20,8 @@ import { db } from "@/firebase";
 import { ROOT } from "@/config";
 import { encodeKey } from "@/lib/encodeKey";
 import { resolveTeammateName } from "@/lib/teamFilter";
+import { notifyTicketAssignee } from "@/lib/worker";
+import { useAppData } from "@/data/AppDataContext";
 import { space, useStyles, type Colors } from "@/theme";
 import type { Message, TeamMember, TeamUser } from "@/types";
 
@@ -51,6 +53,8 @@ export function CreateTicketModal({
   const [assignee, setAssignee] = useState(currentUid);
   const [busy, setBusy] = useState(false);
   const styles = useStyles(makeStyles);
+  // v1.205: chatMetaByKey lookup for the customer name in the push body.
+  const { chatMetaByKey } = useAppData();
 
   const assignees = useMemo(() => {
     const out: Array<{ uid: string; name: string }> = [];
@@ -115,6 +119,23 @@ export function CreateTicketModal({
       updates[`${ROOT}/tickets/${id}`] = ticket;
       updates[`${ROOT}/chats/${encodeKey(chatId)}/tickets/${id}`] = true;
       await update(ref(db), updates);
+      // v1.205: push notification to the assignee. Worker skips the push
+      // if the user assigned the ticket to themselves. Best-effort —
+      // we don't wait on it before closing the modal.
+      const meta = chatMetaByKey[encodeKey(chatId)] || {};
+      const customerName =
+        meta.contactName || meta.displayName || meta.groupName || meta.phone || "customer";
+      notifyTicketAssignee({
+        ticketId: id,
+        assigneeUid: selected.uid,
+        assigneeName: selected.name,
+        fromUid: currentUid,
+        fromName: currentName,
+        chatId,
+        customerName,
+        title: ticket.title,
+        type: "created",
+      });
       onClose();
     } finally {
       setBusy(false);

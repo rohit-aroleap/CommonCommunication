@@ -16,7 +16,10 @@ import {
 import { ref, update } from "firebase/database";
 import { db } from "@/firebase";
 import { ROOT } from "@/config";
+import { encodeKey } from "@/lib/encodeKey";
 import { resolveTeammateName } from "@/lib/teamFilter";
+import { notifyTicketAssignee } from "@/lib/worker";
+import { useAppData } from "@/data/AppDataContext";
 import { useStyles, type Colors } from "@/theme";
 import type { TeamMember, TeamUser, Ticket } from "@/types";
 
@@ -43,6 +46,8 @@ export function ReassignModal({
   const [assignee, setAssignee] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const styles = useStyles(makeStyles);
+  // v1.205: chatMetaByKey lookup for the customer name in the push body.
+  const { chatMetaByKey } = useAppData();
 
   const assignees = useMemo(() => {
     const out: Array<{ uid: string; name: string }> = [];
@@ -97,6 +102,24 @@ export function ReassignModal({
         reassignEntry,
       ];
       await update(ref(db), updates);
+      // v1.205: notify the new assignee. Worker skips the push if the
+      // new assignee is the same person doing the reassign.
+      const meta = ticket.anchorChatId
+        ? chatMetaByKey[encodeKey(ticket.anchorChatId)] || {}
+        : {};
+      const customerName =
+        meta.contactName || meta.displayName || meta.groupName || meta.phone || "customer";
+      notifyTicketAssignee({
+        ticketId: ticket.id,
+        assigneeUid: target.uid,
+        assigneeName: target.name,
+        fromUid: currentUid,
+        fromName: currentName,
+        chatId: ticket.anchorChatId || "",
+        customerName,
+        title: ticket.title || "",
+        type: "reassigned",
+      });
       onClose();
     } catch (e: any) {
       Alert.alert("Reassign failed", e?.message ?? String(e));
