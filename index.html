@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.209</title>
+<title>CommonCommunication v1.210</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -842,9 +842,14 @@
   }
   .bubble .status {
     font-size: 11px;
+    color: #99a5ad;          /* default grey for sent / delivered */
+    letter-spacing: -1px;    /* tighten the double tick so ✓✓ reads as one glyph */
   }
   .bubble .status.sending { color: #99a5ad; }
-  .bubble .status.failed  { color: #d9534f; }
+  .bubble .status.failed  { color: #d9534f; letter-spacing: normal; }
+  /* v1.210: read = WhatsApp's blue. Applies to outbound bubbles only
+     because inbound bubbles never render a .status span. */
+  .bubble .status.read    { color: #53bdeb; }
   /* v1.200: chat-action UI parity with mobile (react / reply / forward /
      copy / edit / delete). The bubble-wrap stacks the bubble and the
      reactions pill so both stay aligned to the same edge. */
@@ -2446,7 +2451,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.209";
+const APP_VERSION = "v1.210";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -7054,9 +7059,18 @@ function renderTicketRibbon(msgKey) {
   return `<div class="${cls}" title="${escapeHtml(t.title || "")}">${label}${more}</div>`;
 }
 
+// v1.210: WhatsApp-style ticks.
+//   sending   → ⏱     (queued in worker / Periskope hasn't acked yet)
+//   sent      → ✓      (Periskope queued it, WhatsApp hasn't confirmed delivery)
+//   delivered → ✓✓     (reached the customer's device — double grey)
+//   read      → ✓✓     (read by the customer — coloured blue via .read class)
+//   failed    → ✕ failed
+// "read" colour is applied via the parent <span class="status read">; this
+// function only returns the glyph.
 function statusLabel(s) {
-  if (s === "sending") return "…";
+  if (s === "sending") return "⏱";
   if (s === "failed") return "✕ failed";
+  if (s === "delivered" || s === "read") return "✓✓";
   return "✓";
 }
 

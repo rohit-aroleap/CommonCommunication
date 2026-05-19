@@ -48,7 +48,16 @@ export interface Message {
   ts: number;
   sentByUid?: string;
   sentByName?: string | null;
-  status?: "sending" | "sent" | "failed";
+  // v1.210: extend the status ladder with WhatsApp's delivered / read
+  // levels. Driven by Periskope's `message.ack.updated` webhook; older
+  // messages stay at "sent". MessageBubble renders:
+  //   sending → ⏱  | sent → ✓  | delivered → ✓✓ grey | read → ✓✓ blue
+  status?: "sending" | "sent" | "delivered" | "read" | "failed";
+  // v1.210: timestamps the worker records when the corresponding ack
+  // event arrives — useful for "Delivered at 3:42pm" tooltips in a
+  // future build. Not surfaced in the UI yet.
+  deliveredAt?: number;
+  readAt?: number;
   periskopeMsgId?: string | null;
   periskopeUniqueId?: string | null;
   messageType?: string;

@@ -240,18 +240,35 @@ function ReactionsPill({
   );
 }
 
+// v1.210: WhatsApp-style ticks.
+//   sending   → ⏱            (queued in worker, Periskope hasn't acked yet)
+//   sent      → ✓ grey        (Periskope queued it, WhatsApp hasn't confirmed delivery)
+//   delivered → ✓✓ grey       (reached customer's device)
+//   read      → ✓✓ blue       (read by customer — WhatsApp blue)
+//   failed    → ✗ red
+// Periskope's `message.ack.updated` webhook drives status transitions
+// (handled in worker.js). Anything not matched below falls back to the
+// single grey ✓ so older messages render the same as before.
 function Status({ status }: { status: Message["status"] }) {
   const { colors } = useTheme();
   const styles = useStyles(makeStyles);
   let txt = "✓";
   let color: string = colors.muted;
   if (status === "sending") {
-    txt = "⏳";
+    txt = "⏱";
   } else if (status === "failed") {
     txt = "✗";
     color = colors.red;
+  } else if (status === "read") {
+    txt = "✓✓";
+    color = "#53bdeb"; // WhatsApp read-blue
+  } else if (status === "delivered") {
+    txt = "✓✓";
+    color = colors.muted; // grey double tick
   } else {
-    color = "#53bdeb";
+    // "sent" or anything unknown — single grey tick.
+    txt = "✓";
+    color = colors.muted;
   }
   return <Text style={[styles.status, { color }]}>{txt}</Text>;
 }

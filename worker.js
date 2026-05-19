@@ -715,6 +715,77 @@ async function handleWebhook(request, env) {
     return json({ ok: true, kind: "reaction" });
   }
 
+  // v1.210: WhatsApp-style delivery / read receipts. Periskope publishes a
+  // `message.ack.updated` event when WhatsApp confirms delivery / read for a
+  // message we previously sent. Detect the event by name (defensive: also
+  // check for an `ack` field on a `message.updated`-shaped payload), look
+  // the message up via /byPeriskopeId, and patch its status. Webhook docs
+  // aren't public for the exact ack field shape, so we accept several
+  // plausible signals — `ack` (numeric 0-3, where 2=delivered 3=read),
+  // `ack_name` ("delivered"/"read"), or a top-level status string. The raw
+  // payload is logged to /_debug/ack/<key> so we can iterate on parsing if
+  // it ever lands as something unexpected.
+  const isAckEvent =
+    /ack/i.test(String(evtType)) ||
+    msg.ack != null ||
+    msg.ack_name != null;
+  if (isAckEvent) {
+    try {
+      const ackPeriskopeMsgId =
+        msg.message_id || msg.unique_id || msg.id?.serialized || msg.id || null;
+      const ackNum =
+        typeof msg.ack === "number"
+          ? msg.ack
+          : typeof msg.ack === "string"
+            ? parseInt(msg.ack, 10)
+            : null;
+      const ackName = String(msg.ack_name || msg.status || "").toLowerCase();
+      // Map to the WhatsApp ladder. We collapse 4 (played, voice notes)
+      // down to "read" — same blue tick, no separate icon planned.
+      let newStatus = null;
+      if (ackName === "read" || ackNum === 3 || ackNum === 4) newStatus = "read";
+      else if (ackName === "delivered" || ackNum === 2) newStatus = "delivered";
+      else if (ackName === "sent" || ackName === "server" || ackNum === 1) newStatus = "sent";
+      await fbPut(env, `${ROOT}/_debug/ack/${debugKey}`, {
+        evtType,
+        ackPeriskopeMsgId,
+        ackNum,
+        ackName,
+        mappedTo: newStatus,
+        receivedAt: Date.now(),
+      });
+      if (newStatus && ackPeriskopeMsgId) {
+        const parentRef = await fbGet(
+          env,
+          `${ROOT}/byPeriskopeId/${encodeKey(ackPeriskopeMsgId)}`,
+        );
+        if (parentRef?.chatId && parentRef?.msgKey) {
+          // Only ever ratchet status FORWARD. If we already saw "read",
+          // don't downgrade to "delivered" because of a late event.
+          const RANK = { sending: 0, sent: 1, delivered: 2, read: 3, failed: -1 };
+          const existing = await fbGet(
+            env,
+            `${ROOT}/chats/${encodeKey(parentRef.chatId)}/messages/${parentRef.msgKey}/status`,
+          );
+          const cur = typeof existing === "string" ? existing : "sent";
+          if ((RANK[newStatus] ?? 0) > (RANK[cur] ?? 0)) {
+            const patch = { status: newStatus };
+            if (newStatus === "delivered") patch.deliveredAt = Date.now();
+            if (newStatus === "read") patch.readAt = Date.now();
+            await fbPatch(
+              env,
+              `${ROOT}/chats/${encodeKey(parentRef.chatId)}/messages/${parentRef.msgKey}`,
+              patch,
+            );
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[ack-event] failed:", e);
+    }
+    return json({ ok: true, kind: "ack" });
+  }
+
   const isFromMe = msg.from_me === true || msg.fromMe === true;
   const text = msg.body || msg.message || msg.text || "";
   const ts = parseTs(msg.timestamp);
