@@ -19,6 +19,7 @@ import {
   Modal,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -1733,8 +1734,21 @@ export function ThreadScreen({ route, navigation }: Props) {
               </Text>
             </View>
           ) : (
-            <>
-              {slashMatches.slice(0, 6).map((t) => (
+            // v1.211: wrap matches in a ScrollView so trainers with more
+            // templates than fit in the picker's maxHeight can actually
+            // scroll through them. Before this, the picker was a plain
+            // <View maxHeight=240> and anything past the visible 4-5
+            // items just got clipped — and the slice cap of 6 hid the
+            // rest of the library entirely. Now we show the full list
+            // and let the user scroll. keyboardShouldPersistTaps="handled"
+            // keeps a tap-to-insert working without dismissing the
+            // keyboard first.
+            <ScrollView
+              style={styles.tplScroll}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator
+            >
+              {slashMatches.map((t) => (
                 <TouchableOpacity
                   key={t.id}
                   style={styles.tplItem}
@@ -1752,11 +1766,13 @@ export function ThreadScreen({ route, navigation }: Props) {
               <Text style={styles.tplHint}>
                 Tap to insert — variables fill from this chat
               </Text>
-            </>
+            </ScrollView>
           )}
           {/* + New template action sits at the bottom of the picker so it
               doesn't shift around when filtering. Pre-fills the keyword
-              with whatever the user has already typed after the slash. */}
+              with whatever the user has already typed after the slash.
+              Stays OUTSIDE the ScrollView so it remains accessible even
+              when the list above is mid-scroll. */}
           <TouchableOpacity
             style={styles.tplNewBtn}
             onPress={() =>
@@ -1785,8 +1801,15 @@ export function ThreadScreen({ route, navigation }: Props) {
               </Text>
             </View>
           ) : (
-            <>
-              {mentionCandidates.slice(0, 6).map((c) => (
+            // v1.211: same scroll fix as the slash picker — was clipped at
+            // 6 entries and the underlying View wouldn't scroll. Larger
+            // teams need to be able to scroll through everyone.
+            <ScrollView
+              style={styles.tplScroll}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator
+            >
+              {mentionCandidates.map((c) => (
                 <TouchableOpacity
                   key={c.uid}
                   style={styles.tplItem}
@@ -1808,7 +1831,7 @@ export function ThreadScreen({ route, navigation }: Props) {
                 Tap to insert — they'll get a push even if it's not their
                 ticket
               </Text>
-            </>
+            </ScrollView>
           )}
         </View>
       )}
@@ -2758,12 +2781,23 @@ function makeStyles(colors: Colors) {
   // Slash-command template picker (v1.126). Anchored above the composer,
   // dark surface so it pops against the message list. Capped at ~240px so
   // the list itself stays visible behind it on short screens.
+  //
+  // v1.211: the height cap moved from the outer container down to the
+  // inner ScrollView (tplScroll). Capping the OUTER view at 240 was the
+  // bug — the inner content overflowed and just got clipped because
+  // <View> doesn't scroll. Now the outer view is whatever-height-it-needs
+  // and the scroll view inside it is what's bounded.
   tplPicker: {
-    maxHeight: 240,
     backgroundColor: "#1f2933",
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: "rgba(255,255,255,0.15)",
     paddingVertical: 4,
+  },
+  // v1.211: bounded scroll container for the template / mention rows.
+  // 240 ≈ four full rows visible at once on a standard phone — enough to
+  // see what's there without dominating the screen above the composer.
+  tplScroll: {
+    maxHeight: 240,
   },
   tplItem: {
     paddingHorizontal: 14,
