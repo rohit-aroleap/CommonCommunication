@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.202</title>
+<title>CommonCommunication v1.203</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -486,6 +486,82 @@
     background: var(--green); color: white; border: none; border-radius: 10px;
     padding: 3px 10px; font-size: 11px; cursor: pointer; font-weight: 600;
   }
+  /* v1.203: AI Inbox modal styles. */
+  .ai-inbox-presets {
+    display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px;
+  }
+  .ai-inbox-presets .preset {
+    background: white; border: 1px solid var(--border);
+    border-radius: 14px; padding: 4px 10px;
+    font-size: 11px; cursor: pointer;
+    color: var(--text); font-family: inherit;
+    transition: all 0.12s;
+  }
+  .ai-inbox-presets .preset:hover { border-color: var(--green); color: var(--green); }
+  .ai-inbox-loading {
+    color: var(--muted); font-style: italic; padding: 18px 4px;
+    text-align: center;
+  }
+  .ai-inbox-empty {
+    color: var(--muted); padding: 18px 4px; text-align: center;
+  }
+  .ai-inbox-summary { margin-bottom: 14px; }
+  .ai-inbox-summary p { margin: 0 0 8px; }
+  .ai-inbox-summary h3, .ai-inbox-summary h4, .ai-inbox-summary h5 {
+    margin: 12px 0 6px; font-size: 13px; font-weight: 700;
+    color: var(--text);
+  }
+  .ai-inbox-summary ul { margin: 4px 0 8px 20px; padding: 0; }
+  .ai-inbox-summary li { margin: 2px 0; }
+  .ai-inbox-chats {
+    display: flex; flex-direction: column; gap: 6px;
+    margin-top: 10px;
+  }
+  .ai-inbox-chat-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 10px; background: white;
+    border: 1px solid var(--border); border-radius: 8px;
+    cursor: pointer;
+    transition: border-color 0.12s, transform 0.05s;
+  }
+  .ai-inbox-chat-row:hover {
+    border-color: var(--green);
+  }
+  .ai-inbox-chat-row:active { transform: scale(0.99); }
+  .ai-inbox-chat-row .cat-pill {
+    flex-shrink: 0;
+    border-radius: 10px;
+    padding: 1px 7px;
+    font-size: 10px; font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .ai-inbox-chat-row .cat-urgent {
+    background: #fee2e2; color: #991b1b;
+  }
+  .ai-inbox-chat-row .cat-waiting {
+    background: #fef3c7; color: #92400e;
+  }
+  .ai-inbox-chat-row .cat-attention {
+    background: #e0f2fe; color: #075985;
+  }
+  .ai-inbox-chat-row .body { flex: 1; min-width: 0; }
+  .ai-inbox-chat-row .name {
+    font-weight: 600; font-size: 13px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .ai-inbox-chat-row .name .phone {
+    color: var(--muted); font-weight: 400; font-size: 11px;
+    margin-left: 4px;
+  }
+  .ai-inbox-chat-row .reason {
+    color: var(--muted); font-size: 12px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .ai-inbox-chat-row .open {
+    color: var(--muted); font-size: 16px; padding: 0 4px;
+  }
+
   /* v1.198: section divider between full trainers and limited-access
      trainers in the Team modal. Subtle uppercase label + a hairline
      separator above. Lives between two .team-member-row blocks. */
@@ -1798,7 +1874,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version">v1.202</div>
+    <div class="login-version">v1.203</div>
   </div>
 </div>
 
@@ -1806,7 +1882,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver">v1.202</span>
+    <span class="ver">v1.203</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -1822,7 +1898,10 @@
       <button class="logout" id="templatesBtn" style="display:none; margin-right:6px;" title="Manage quick reply templates">📋 Templates</button>
       <button class="logout" id="namesBtn" style="display:none; margin-right:6px;" title="Name unknown contacts">📝 Names</button>
       <button class="logout" id="backfillBtn" style="display:none; margin-right:6px;" title="Import chat history from Periskope">📥 Backfill</button>
-      <button class="logout" id="triageBackfillBtn" style="display:none; margin-right:6px;" title="Run AI triage on every chat's latest inbound message">🚨 Triage all</button>
+      <!-- v1.203: repurposed from "🚨 Triage all" → "🧠 AI Inbox"
+           (cross-chat assistant) + new "📊 Brief" (start-of-shift summary). -->
+      <button class="logout" id="aiInboxBtn" style="display:none; margin-right:6px;" title="AI Inbox — surface chats needing attention, or ask anything about the inbox">🧠 AI Inbox</button>
+      <button class="logout" id="aiBriefBtn" style="display:none; margin-right:6px;" title="Daily brief — start-of-shift overview of the inbox">📊 Brief</button>
       <button class="logout" id="notifBtn" style="margin-right:6px;" title="Enable desktop notifications for new inbound messages">🔔</button>
       <button class="logout" id="teamBtn" style="display:none; margin-right:6px;" title="Manage team">👥 Team</button>
       <img id="userPhoto" alt="" />
@@ -2131,6 +2210,32 @@
   <img class="media-viewer-img" id="mediaViewerImg" alt="" />
 </div>
 
+<!-- ============== AI INBOX MODAL (v1.203) ============== -->
+<!-- Cross-chat Claude assistant. Opens via the 🧠 AI Inbox button (default
+     mode = "attention") or the 📊 Brief button (mode = "daily-brief").
+     Trainer can also type a free-form question at the bottom. -->
+<div class="modal-back" id="aiInboxModal">
+  <div class="modal" style="width:680px; max-width:96vw; max-height:86vh; display:flex; flex-direction:column;">
+    <h3 style="margin-bottom:2px;">🧠 AI Inbox</h3>
+    <div id="aiInboxSub" style="font-size:12px; color:var(--muted); margin-bottom:10px;"></div>
+    <div class="ai-inbox-presets" id="aiInboxPresets">
+      <button class="preset" data-mode="attention">What needs attention?</button>
+      <button class="preset" data-mode="daily-brief">Daily brief</button>
+      <button class="preset" data-q="What are customers complaining about this week?">Complaints this week</button>
+      <button class="preset" data-q="Which customers have I not replied to in the last 24 hours?">Unanswered &gt; 24h</button>
+      <button class="preset" data-q="Are there any customers showing signs of cancellation or churn?">Churn risk</button>
+    </div>
+    <div id="aiInboxBody" style="flex:1; overflow-y:auto; background:var(--header); border-radius:6px; padding:14px 16px; font-size:14px; line-height:1.55; min-height:240px;"></div>
+    <div style="display:flex; gap:8px; margin-top:10px;">
+      <textarea id="aiInboxInput" placeholder="Ask anything about the inbox… (Enter to send, Shift+Enter for newline)" rows="2" style="flex:1; border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-size:13px; font-family:inherit; resize:vertical; min-height:38px; max-height:120px; box-sizing:border-box;"></textarea>
+      <button class="btn btn-primary" id="aiInboxSend" style="height:38px;">Ask</button>
+    </div>
+    <div class="actions" style="margin-top:12px;">
+      <button class="btn btn-secondary" id="aiInboxClose">Close</button>
+    </div>
+  </div>
+</div>
+
 <!-- ============== FORWARD MESSAGE MODAL (v1.200) ============== -->
 <!-- Picker that lists every teammate. Click one to forward the
      currently-selected message into a DM with them. Limited trainers
@@ -2301,7 +2406,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.202";
+const APP_VERSION = "v1.203";
 
 // Bootstrap admins are always allowed AND can manage the team allowlist via the
 // Team modal. Add additional emails via the modal (stored in commonComm/config/allowedEmails).
@@ -2496,7 +2601,44 @@ const dmPickerModal = $("dmPickerModal");
 const dmPickerList = $("dmPickerList");
 const dmPickerClose = $("dmPickerClose");
 const backfillBtn = $("backfillBtn");
-const triageBackfillBtn = $("triageBackfillBtn");
+// v1.203: triageBackfillBtn was repurposed → aiInboxBtn + aiBriefBtn.
+const aiInboxBtn = $("aiInboxBtn");
+const aiBriefBtn = $("aiBriefBtn");
+const aiInboxModal = $("aiInboxModal");
+const aiInboxBody = $("aiInboxBody");
+const aiInboxSub = $("aiInboxSub");
+const aiInboxInput = $("aiInboxInput");
+const aiInboxSend = $("aiInboxSend");
+const aiInboxClose = $("aiInboxClose");
+const aiInboxPresets = $("aiInboxPresets");
+if (aiInboxClose) aiInboxClose.onclick = () => aiInboxModal.classList.remove("visible");
+if (aiInboxSend) aiInboxSend.onclick = () => {
+  const q = (aiInboxInput.value || "").trim();
+  if (!q) return;
+  runAiInbox("freeform", q);
+};
+if (aiInboxInput) {
+  aiInboxInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      aiInboxSend.click();
+    }
+  });
+}
+// Preset chips: clicking one either fires a preset mode (data-mode) or a
+// canned freeform question (data-q).
+if (aiInboxPresets) {
+  aiInboxPresets.querySelectorAll(".preset").forEach((btn) => {
+    btn.onclick = () => {
+      if (btn.dataset.mode) {
+        runAiInbox(btn.dataset.mode);
+      } else if (btn.dataset.q) {
+        aiInboxInput.value = btn.dataset.q;
+        runAiInbox("freeform", btn.dataset.q);
+      }
+    };
+  });
+}
 const notifBtn = $("notifBtn");
 const ferraSyncStatus = $("ferraSyncStatus");
 const ferraRefreshBtn = $("ferraRefreshBtn");
@@ -2680,7 +2822,8 @@ onAuthStateChanged(auth, async (user) => {
     userName.textContent = user.displayName || user.email;
     teamBtn.style.display = isAdmin(user.email) ? "" : "none";
     backfillBtn.style.display = isAdmin(user.email) ? "" : "none";
-    triageBackfillBtn.style.display = isAdmin(user.email) ? "" : "none";
+    aiInboxBtn.style.display = isAdmin(user.email) ? "" : "none";
+    aiBriefBtn.style.display = isAdmin(user.email) ? "" : "none";
     namesBtn.style.display = isAdmin(user.email) ? "" : "none";
     templatesBtn.style.display = isAdmin(user.email) ? "" : "none";
     ferraRefreshBtn.style.display = isAdmin(user.email) ? "" : "none";
@@ -6211,55 +6354,120 @@ async function sendAiQuery() {
   }
 }
 
-// Admin: triage every recent inbound chat in one pass. Chunks through the
-// worker's /triage-backfill in pages so a slow Haiku queue doesn't time the
-// worker request out. The button label doubles as a live progress indicator.
-triageBackfillBtn.onclick = async () => {
-  if (!WORKER_URL) return;
-  const sinceDaysStr = prompt("Triage chats with inbound activity in the last N days:", "30");
-  if (sinceDaysStr === null) return;
-  const sinceDays = Math.max(1, Math.min(365, parseInt(sinceDaysStr, 10) || 30));
-  const orig = triageBackfillBtn.textContent;
-  triageBackfillBtn.disabled = true;
-  let offset = 0;
-  let totalProcessed = 0;
-  let totalUrgent = 0;
-  let total = null;
-  try {
-    while (true) {
-      triageBackfillBtn.textContent = total === null
-        ? "⏳ Loading…"
-        : `⏳ ${totalProcessed}/${total} (${totalUrgent} urgent)`;
-      const res = await fetch(`${WORKER_URL}/triage-backfill`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ offset, limit: 20, sinceDays }),
-      });
-      const j = await res.json();
-      if (!res.ok) {
-        alert(`Triage failed: ${j?.error || res.statusText}`);
-        break;
-      }
-      total = j.total;
-      totalProcessed += j.processed;
-      for (const t of (j.triaged || [])) {
-        if (t.urgency === "urgent") totalUrgent++;
-      }
-      if (j.done) {
-        triageBackfillBtn.textContent = `✓ ${totalProcessed} done · ${totalUrgent} urgent`;
-        break;
-      }
-      offset = j.nextOffset;
-    }
-  } catch (e) {
-    alert(`Triage error: ${e?.message || e}`);
-  } finally {
-    setTimeout(() => {
-      triageBackfillBtn.textContent = orig;
-      triageBackfillBtn.disabled = false;
-    }, 4000);
+// ====== AI INBOX (v1.203) ======
+// Cross-chat AI assistant. The button opens a modal with a default
+// "Attention queue" view (auto-fired on open), a free-form text input
+// for ad-hoc questions, and a row of preset chips for common asks.
+// All three modes hit the same worker endpoint /ai-inbox — the
+// `mode` parameter swaps the system prompt.
+//
+// "📊 Brief" is a separate button that runs the daily-brief mode in
+// the same modal (just with a different initial prompt).
+aiInboxBtn.onclick = () => openAiInbox("attention");
+aiBriefBtn.onclick = () => openAiInbox("daily-brief");
+
+function openAiInbox(initialMode) {
+  aiInboxModal.classList.add("visible");
+  aiInboxInput.value = "";
+  // Auto-fire the default mode so the user sees something immediately.
+  runAiInbox(initialMode);
+}
+
+async function runAiInbox(mode, customQuestion) {
+  if (!WORKER_URL) {
+    aiInboxBody.innerHTML = `<div class="ai-inbox-empty">Worker URL not configured.</div>`;
+    return;
   }
-};
+  aiInboxBody.innerHTML = `<div class="ai-inbox-loading">⏳ Reading the inbox… (this takes ~5–10s)</div>`;
+  aiInboxSub.textContent =
+    mode === "attention" ? "Surfacing chats that need attention now…"
+    : mode === "daily-brief" ? "Generating start-of-shift brief…"
+    : `Answering: "${customQuestion}"`;
+  try {
+    const body = { mode };
+    if (mode === "freeform") body.question = customQuestion;
+    const res = await fetch(`${WORKER_URL}/ai-inbox`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const j = await res.json();
+    if (!res.ok) {
+      aiInboxBody.innerHTML = `<div class="ai-inbox-empty">Failed: ${escapeHtml(j?.error || res.statusText)}</div>`;
+      return;
+    }
+    renderAiInboxResult(j);
+  } catch (e) {
+    aiInboxBody.innerHTML = `<div class="ai-inbox-empty">Error: ${escapeHtml(String(e?.message || e))}</div>`;
+  }
+}
+
+function renderAiInboxResult(j) {
+  const summary = j?.answer || "";
+  const chats = Array.isArray(j?.chats) ? j.chats : [];
+  const scope = j?.scope || {};
+  const summaryHtml = renderMarkdownish(summary);
+  const chatsHtml = chats.length
+    ? `<div class="ai-inbox-chats">${chats.map((c) => {
+        const cat = c.category || "attention";
+        return `<div class="ai-inbox-chat-row ${escapeHtml(cat)}" data-chat-key="${escapeHtml(c.chatKey)}">
+          <div class="cat-pill cat-${escapeHtml(cat)}">${escapeHtml(cat)}</div>
+          <div class="body">
+            <div class="name">${escapeHtml(c.name || "")}${c.phone ? ` <span class="phone">${escapeHtml(c.phone)}</span>` : ""}</div>
+            <div class="reason">${escapeHtml(c.reason || "")}</div>
+          </div>
+          <div class="open">→</div>
+        </div>`;
+      }).join("")}</div>`
+    : "";
+  aiInboxBody.innerHTML = `
+    <div class="ai-inbox-summary">${summaryHtml}</div>
+    ${chatsHtml}
+  `;
+  aiInboxSub.textContent = scope?.chatCount
+    ? `${scope.chatCount} chats scanned · last ${scope.withinDays} days`
+    : "";
+  // Wire chat-click rows to jump straight into the thread.
+  aiInboxBody.querySelectorAll(".ai-inbox-chat-row").forEach((row) => {
+    row.onclick = () => {
+      const ck = row.dataset.chatKey;
+      if (!ck) return;
+      aiInboxModal.classList.remove("visible");
+      openChat(ck);
+    };
+  });
+}
+
+// Tiny markdown subset — paragraphs, headers (## prefix), bullet lists,
+// and bold (**x**). Enough to render Claude's brief without pulling in
+// a full library.
+function renderMarkdownish(text) {
+  if (!text) return "";
+  const lines = String(text).split("\n");
+  let html = "";
+  let inList = false;
+  const closeList = () => { if (inList) { html += "</ul>"; inList = false; } };
+  for (const line of lines) {
+    if (!line.trim()) { closeList(); continue; }
+    const h = line.match(/^(#{1,3})\s+(.+)$/);
+    if (h) {
+      closeList();
+      const lvl = h[1].length;
+      html += `<h${lvl + 2}>${escapeHtml(h[2])}</h${lvl + 2}>`;
+      continue;
+    }
+    const b = line.match(/^[-*]\s+(.+)$/);
+    if (b) {
+      if (!inList) { html += "<ul>"; inList = true; }
+      html += `<li>${escapeHtml(b[1]).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")}</li>`;
+      continue;
+    }
+    closeList();
+    html += `<p>${escapeHtml(line).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")}</p>`;
+  }
+  closeList();
+  return html;
+}
 
 // Bell button: request permission for desktop notifications, reflect state.
 function syncNotifBtn() {

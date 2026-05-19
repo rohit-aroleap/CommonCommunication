@@ -54,7 +54,7 @@ export default {
         return cors(env, json({
           service: "CommonCommunication Worker",
           status: "ok",
-          endpoints: ["/health", "/send (POST)", "/edit-message (POST)", "/delete-message (POST)", "/webhook (POST)", "/messages?chatId=... (GET)", "/transcribe (POST)", "/cleanup (POST)", "/register-push-token (POST)"],
+          endpoints: ["/health", "/send (POST)", "/edit-message (POST)", "/delete-message (POST)", "/webhook (POST)", "/messages?chatId=... (GET)", "/transcribe (POST)", "/cleanup (POST)", "/register-push-token (POST)", "/ai-inbox (POST)"],
         }));
       }
       if (url.pathname === "/messages" && request.method === "GET") {
@@ -113,6 +113,14 @@ export default {
       }
       if (url.pathname === "/react-to-message" && request.method === "POST") {
         return cors(env, await handleReactToMessage(request, env));
+      }
+      // v1.203: cross-chat AI assistant. Replaces the old "Triage all"
+      // one-shot batch labeller. Modes:
+      //   "attention"   — surface chats needing the team's attention
+      //   "freeform"    — answer a custom question over the inbox
+      //   "daily-brief" — start-of-shift overview paragraph
+      if (url.pathname === "/ai-inbox" && request.method === "POST") {
+        return cors(env, await handleAiInbox(request, env));
       }
       // v1.176: internal-DM attachments via Cloudflare R2. Upload is a
       // multipart POST; download is a GET on the path we returned at
@@ -1991,6 +1999,296 @@ ${lines.join("\n")}`;
     usage: claudeJson?.usage || null,
   });
 }
+
+// ---------- /ai-inbox (v1.203) ----------
+// Cross-chat AI assistant. Builds a context blob of the last N customer chats
+// (recent activity, last few messages each, team note hints, ferra metadata)
+// and asks Claude to either surface attention-needing chats, answer a free-
+// form question, or generate a daily brief.
+//
+// Caller passes:
+//   { mode: "attention" | "freeform" | "daily-brief",
+//     question?: string,             // required for "freeform"
+//     scope?: {
+//       chatCount?: number,          // default 100, capped at 200
+//       msgsPerChat?: number,        // default 10, capped at 20
+//       withinDays?: number,         // default 14, capped at 90
+//     }
+//   }
+//
+// Returns:
+//   { answer: string,                // markdown the UI renders
+//     chats: [                       // structured chat references for click-through
+//       { chatKey, name, phone, category, reason }
+//     ],
+//     usage, model, scope
+//   }
+async function handleAiInbox(request, env) {
+  if (!env.CLAUDE_API_KEY) {
+    return json({ error: "CLAUDE_API_KEY not configured on worker" }, 500);
+  }
+  const body = await request.json().catch(() => ({}));
+  const mode = body?.mode || "attention";
+  const question = String(body?.question || "").trim();
+  const scope = body?.scope || {};
+  const chatCount = Math.min(200, Math.max(20, Number(scope.chatCount) || 100));
+  const msgsPerChat = Math.min(20, Math.max(3, Number(scope.msgsPerChat) || 10));
+  const withinDays = Math.min(90, Math.max(1, Number(scope.withinDays) || 14));
+
+  if (mode === "freeform" && !question) {
+    return json({ error: "freeform mode requires a question" }, 400);
+  }
+
+  // 1) Read /chats and pick the top N by lastMsgAt within the window.
+  const chatsBlob = await fbGet(env, `${ROOT}/chats`);
+  if (!chatsBlob || typeof chatsBlob !== "object") {
+    return json({ answer: "No chats yet.", chats: [], scope: { chatCount: 0 } });
+  }
+  const cutoffMs = Date.now() - withinDays * 24 * 60 * 60 * 1000;
+  const candidates = [];
+  for (const [chatKey, chat] of Object.entries(chatsBlob)) {
+    const meta = chat?.meta || {};
+    const lastMsgAt = meta.lastMsgAt || 0;
+    if (lastMsgAt < cutoffMs) continue;
+    // Skip team-internal DMs that snuck into /chats. Phone-prefixed chatIds
+    // (digits-only before @c.us / @g.us) are customer threads.
+    const phone = meta.phone || "";
+    candidates.push({
+      chatKey,
+      chatId: meta.chatId || chatKey,
+      phone,
+      name:
+        meta.contactName ||
+        meta.displayName ||
+        meta.groupName ||
+        phone ||
+        chatKey,
+      lastMsgAt,
+      lastMsgPreview: meta.lastMsgPreview || "",
+      lastMsgDirection: meta.lastMsgDirection || "in",
+      lastMsgSentByName: meta.lastMsgSentByName || "",
+      chatType: meta.chatType || "user",
+      isGroup: String(meta.chatId || "").endsWith("@g.us"),
+      private: !!meta.private,
+      messages: chat?.messages || null,
+    });
+  }
+  candidates.sort((a, b) => b.lastMsgAt - a.lastMsgAt);
+  const picked = candidates.slice(0, chatCount);
+
+  // 2) For each picked chat, take the last msgsPerChat text messages and
+  // build a compact transcript line. Skip groups + private chats to keep
+  // the context tight on real customer 1:1s.
+  const chatBlocks = [];
+  for (const c of picked) {
+    if (c.isGroup) continue;
+    if (c.private) continue;
+    if (!c.messages || typeof c.messages !== "object") continue;
+    const all = Object.values(c.messages)
+      .filter((m) => m && m.text && !m.deleted)
+      .sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    if (!all.length) continue;
+    const recent = all.slice(-msgsPerChat);
+    const lines = recent.map((m) => {
+      const when = m.ts
+        ? humanRelativeTime(m.ts)
+        : "?";
+      const speaker = m.direction === "out"
+        ? `Agent${m.sentByName ? `(${m.sentByName})` : ""}`
+        : "Customer";
+      // Trim each line to keep the context budget reasonable.
+      const text = String(m.text).slice(0, 240).replace(/\s+/g, " ");
+      return `  [${when}] ${speaker}: ${text}`;
+    });
+    chatBlocks.push({
+      chatKey: c.chatKey,
+      name: c.name,
+      phone: c.phone,
+      lastDirection: c.lastMsgDirection,
+      lastMsgAt: c.lastMsgAt,
+      lastMsgSentByName: c.lastMsgSentByName,
+      block:
+        `### ${c.name} (${c.phone || "no-phone"}) [chatKey: ${c.chatKey}]\n` +
+        `Last activity: ${humanRelativeTime(c.lastMsgAt)}, last msg direction: ${c.lastMsgDirection}` +
+        (c.lastMsgDirection === "out" && c.lastMsgSentByName
+          ? ` (sent by ${c.lastMsgSentByName})`
+          : "") +
+        `\n` +
+        lines.join("\n"),
+    });
+  }
+
+  if (!chatBlocks.length) {
+    return json({
+      answer: "No active customer chats in the selected window.",
+      chats: [],
+      scope: { chatCount: 0, msgsPerChat, withinDays },
+    });
+  }
+
+  const context = chatBlocks.map((c) => c.block).join("\n\n");
+
+  // 3) System prompt + user message vary by mode.
+  let systemPrompt;
+  let userMessage;
+  if (mode === "attention") {
+    systemPrompt = AI_INBOX_ATTENTION_PROMPT;
+    userMessage =
+      `Inbox snapshot (${chatBlocks.length} active customer chats, last ` +
+      `${withinDays} days, last ${msgsPerChat} messages each):\n\n${context}\n\n` +
+      `Identify the chats that need the team's attention right now. Return JSON only.`;
+  } else if (mode === "daily-brief") {
+    systemPrompt = AI_INBOX_DAILY_BRIEF_PROMPT;
+    userMessage =
+      `Inbox snapshot (${chatBlocks.length} active customer chats, last ` +
+      `${withinDays} days, last ${msgsPerChat} messages each):\n\n${context}\n\n` +
+      `Generate the daily brief now. Return JSON only.`;
+  } else {
+    // freeform
+    systemPrompt = AI_INBOX_FREEFORM_PROMPT;
+    userMessage =
+      `Inbox snapshot (${chatBlocks.length} active customer chats, last ` +
+      `${withinDays} days, last ${msgsPerChat} messages each):\n\n${context}\n\n` +
+      `Question from the trainer: ${question}\n\nAnswer in JSON.`;
+  }
+
+  // 4) Call Claude (Haiku — cheap, fast enough for this).
+  const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": env.CLAUDE_API_KEY,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 2000,
+      system: systemPrompt,
+      messages: [{ role: "user", content: userMessage }],
+    }),
+  });
+  const claudeJson = await safeJson(claudeRes);
+  if (!claudeRes.ok) {
+    return json({ error: "claude_api_failed", details: claudeJson, status: claudeRes.status }, 502);
+  }
+  const raw = claudeJson?.content?.[0]?.text || "";
+  let parsed;
+  try {
+    const cleaned = raw.replace(/```(?:json)?/gi, "").trim();
+    parsed = JSON.parse(cleaned);
+  } catch {
+    parsed = { summary: raw, chats: [] };
+  }
+
+  // 5) Sanitize the chats array — only keep entries with a chatKey that
+  // matches one we actually sent in context. Stops Claude from inventing
+  // chats that don't exist.
+  const validKeys = new Set(chatBlocks.map((c) => c.chatKey));
+  const safeChats = Array.isArray(parsed?.chats)
+    ? parsed.chats
+        .filter((c) => c && c.chatKey && validKeys.has(c.chatKey))
+        .map((c) => {
+          const src = chatBlocks.find((x) => x.chatKey === c.chatKey);
+          return {
+            chatKey: c.chatKey,
+            name: src?.name || c.name || "(unknown)",
+            phone: src?.phone || c.phone || "",
+            category: String(c.category || "attention").toLowerCase(),
+            reason: String(c.reason || "").slice(0, 200),
+          };
+        })
+    : [];
+
+  return json({
+    answer: String(parsed?.summary || raw).slice(0, 4000),
+    chats: safeChats,
+    scope: {
+      chatCount: chatBlocks.length,
+      msgsPerChat,
+      withinDays,
+    },
+    model: claudeJson?.model || null,
+    usage: claudeJson?.usage || null,
+  });
+}
+
+// Human-friendly relative time for chat-context lines. "3h ago", "2d ago",
+// "just now". Keeps the context terse and lets Claude reason about freshness
+// without us serializing ISO timestamps everywhere.
+function humanRelativeTime(ts) {
+  if (!ts) return "?";
+  const now = Date.now();
+  const diff = now - ts;
+  if (diff < 60 * 1000) return "just now";
+  if (diff < 60 * 60 * 1000) return `${Math.floor(diff / 60000)}m ago`;
+  if (diff < 24 * 60 * 60 * 1000) return `${Math.floor(diff / 3600000)}h ago`;
+  const days = Math.floor(diff / 86400000);
+  if (days < 14) return `${days}d ago`;
+  return new Date(ts).toISOString().slice(0, 10);
+}
+
+const AI_INBOX_ATTENTION_PROMPT = `You are an Aroleap fitness team assistant scanning the team's WhatsApp customer inbox. The trainer wants a short, ranked list of chats that need their attention RIGHT NOW.
+
+Categorize each flagged chat into ONE of:
+- "urgent": explicit urgency (cancellations, refunds, anger, injuries, today-deadline), churn risk signals, safety
+- "waiting": customer's last message has gone unanswered for >12 hours
+- "attention": complaints, repeated questions, customer waiting on a commitment the team made, unclear status
+
+Be CONSERVATIVE. Don't flag chats that look fine. Aim for 5–15 entries — quality over coverage. Skip chats where the team has clearly already handled the issue.
+
+Respond with JSON ONLY (no prose outside the JSON, no code fences). Schema:
+{
+  "summary": "<1–2 sentence overview of the inbox state, e.g. 'Mostly quiet — 3 urgent items, 6 chats waiting on replies.'>",
+  "chats": [
+    {
+      "chatKey": "<exact chatKey string from the context>",
+      "category": "urgent" | "waiting" | "attention",
+      "reason": "<1 short sentence explaining WHY this needs attention>"
+    }
+  ]
+}
+
+Order chats by category (urgent first, then waiting, then attention) and within each by recency / severity. Use chatKey EXACTLY as given. Never invent chats.`;
+
+const AI_INBOX_FREEFORM_PROMPT = `You are an Aroleap fitness team assistant. The trainer will ask a question about the customer inbox. Answer using ONLY the inbox snapshot below — don't invent facts, customer names, prices, or events that aren't in the data.
+
+Respond with JSON ONLY (no prose outside the JSON, no code fences). Schema:
+{
+  "summary": "<answer to the question, in plain English. Use short paragraphs or bullets. Match the question's shape — a count gets a number, a list gets a list, a yes/no gets a yes/no with the supporting context.>",
+  "chats": [
+    {
+      "chatKey": "<exact chatKey string from the context — only chats relevant to the answer>",
+      "category": "attention",
+      "reason": "<1 short sentence on why this chat is mentioned>"
+    }
+  ]
+}
+
+The "chats" array is for clickable references the trainer can use to jump into specific chats — only include chats you actually referenced in the summary. Use chatKey EXACTLY as given. Never invent chats.`;
+
+const AI_INBOX_DAILY_BRIEF_PROMPT = `You are an Aroleap fitness team assistant generating a start-of-shift daily brief from the customer inbox.
+
+Produce a brief, scannable summary that helps the team prioritize the day. Cover:
+- Recent volume (rough sense of inbound, customers active in the last 24h)
+- Top themes / recurring topics (what are customers talking about, asking about, complaining about)
+- Notable chats — anything urgent, churn-risk, or stuck waiting for a reply
+- Recommended focus — concrete 2–4 things the team should tackle first
+
+Be concise. The trainer reads this in 30 seconds. Use bullets and short lines. Don't pad with platitudes.
+
+Respond with JSON ONLY (no prose outside the JSON, no code fences). Schema:
+{
+  "summary": "<markdown text. Use ## section headers like '## Volume', '## Themes', '## Notable', '## Focus today'.>",
+  "chats": [
+    {
+      "chatKey": "<chatKey of any chat referenced in the summary>",
+      "category": "urgent" | "waiting" | "attention",
+      "reason": "<short reason>"
+    }
+  ]
+}
+
+The chats array is for clickable links from the brief — only include chats you actually called out by name. Use chatKey EXACTLY as given. Never invent chats.`;
 
 // ---------- /suggest-reply (Claude drafts a short reply for the trainer) ----------
 async function handleSuggestReply(request, env) {
