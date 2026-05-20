@@ -54,7 +54,15 @@ export const FERRA_TAG_STAGE: Record<string, string> = {
   "SA Reach Out Pending": "sa",
   "SA Follow Up": "sa",
   "All Steps Complete": "active",
-  "All Done": "active",
+  // v1.222: "All Done" moved from "active" → "offboarding". Originally
+  // grouped with Active because the tag implied "everything wrapped up",
+  // but in Ferra's data it actually flags customers winding down their
+  // engagement — they're done with the program, not actively using it.
+  // Belongs alongside Uninstallation / Pickup / Warehouse on the
+  // offboarding ramp. Must stay in lockstep with FERRA_TAG_STAGE in
+  // index.html — the comment at the top of this file flags this pair
+  // as a single source of truth.
+  "All Done": "offboarding",
   "Uninstallation Pending": "offboarding",
   "Pickup Pending": "offboarding",
   "Received in Warehouse": "offboarding",
