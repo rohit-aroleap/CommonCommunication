@@ -731,18 +731,17 @@ async function handleWebhook(request, env) {
 
   // v1.210: WhatsApp-style delivery / read receipts. Periskope publishes a
   // `message.ack.updated` event when WhatsApp confirms delivery / read for a
-  // message we previously sent. Detect the event by name (defensive: also
-  // check for an `ack` field on a `message.updated`-shaped payload), look
-  // the message up via /byPeriskopeId, and patch its status. Webhook docs
-  // aren't public for the exact ack field shape, so we accept several
-  // plausible signals — `ack` (numeric 0-3, where 2=delivered 3=read),
-  // `ack_name` ("delivered"/"read"), or a top-level status string. The raw
-  // payload is logged to /_debug/ack/<key> so we can iterate on parsing if
-  // it ever lands as something unexpected.
-  const isAckEvent =
-    /ack/i.test(String(evtType)) ||
-    msg.ack != null ||
-    msg.ack_name != null;
+  // message we previously sent.
+  //
+  // v1.213 HOTFIX: detection MUST be strict on the event type. Regular
+  // `message.created` payloads include an `ack` field on the message
+  // itself (the current ack level — usually `1` for a freshly-sent
+  // message), so any heuristic that fires on `msg.ack != null` would
+  // misclassify every inbound message as an ack event and drop it on
+  // the floor. Trainers reported customers' messages not appearing live
+  // — backfill was the only way to see them. Now we only treat a
+  // payload as ack-only when the EVENT NAME itself says so.
+  const isAckEvent = /ack\.updated/i.test(String(evtType));
   if (isAckEvent) {
     try {
       const ackPeriskopeMsgId =
