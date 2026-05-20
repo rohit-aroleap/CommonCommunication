@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.216</title>
+<title>CommonCommunication v1.217</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -165,17 +165,42 @@
 
   /* v1.172 filters button + popover. The popover floats from the rail's
      right edge over the chat-list area when open.
-     v1.216: removed the `margin-top: auto` that pushed this button to
+     v1.217: removed the `margin-top: auto` that pushed this button to
      the bottom of the rail — trainers found the orphaned bottom-left
      icon hard to associate with the chat list, so the button now sits
      right below Team in the nav cluster (DOM order moved to match). */
   .rail-filters.has-filter .rail-dot { display: block; }
   .rail-filters.active { background: var(--hover); }
-  /* v1.216: stages button is a parallel button to the filter button.
+  /* v1.217: stages button is a parallel button to the filter button.
      Same has-filter / active styling so the two read as a matched
      pair in the rail. */
   .rail-stages.has-filter .rail-dot { display: block; }
   .rail-stages.active { background: var(--hover); }
+  /* v1.217: per-stage quick-access buttons. Each renders a 2-3 letter
+     abbreviation rather than an emoji because the 5 stages don't have
+     unambiguous emoji representations (and small emojis at this size
+     would read as noise). Default state: subtle bg-tinted-with-stage-
+     color text on transparent. Active state: solid stage color, white
+     text — same "I am the filter" visual the rail-tickets / rail-team
+     buttons use. */
+  .rail-stage-txt {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+    line-height: 1;
+    color: var(--text);
+  }
+  .rail-stage { transition: background .12s, color .12s; }
+  .rail-stage:hover { background: var(--hover); }
+  /* Active states — one per bucket. Colors mirror the rough lifecycle
+     phase semantics: amber = "in progress", blue = "learning", purple
+     = "assessing", green = "healthy", gray = "leaving". */
+  .rail-stage-setup.active        { background: #f59e0b; }
+  .rail-stage-onboarding.active   { background: #3b82f6; }
+  .rail-stage-sa.active           { background: #a855f7; }
+  .rail-stage-active.active       { background: #10b981; }
+  .rail-stage-offboarding.active  { background: #6b7280; }
+  .rail-stage.active .rail-stage-txt { color: white; }
   .rail-dot {
     position: absolute;
     top: 6px; right: 6px;
@@ -187,7 +212,7 @@
   }
   .filter-popover {
     position: fixed;
-    /* v1.216: anchored to the TOP of the viewport now that the 🎚️
+    /* v1.217: anchored to the TOP of the viewport now that the 🎚️
        button moved up into the nav cluster below Team. Top:96px puts
        the popover just below the topbar and roughly level with the
        button itself; left:64px keeps it flush against the rail's right
@@ -206,7 +231,7 @@
     display: none;
   }
   .filter-popover.visible { display: block; }
-  /* v1.216: stage popover is a sibling popover anchored ~50px lower
+  /* v1.217: stage popover is a sibling popover anchored ~50px lower
      than the filter popover so it visually floats next to its OWN rail
      button (one row down from the filter button). Same chrome
      otherwise — same border, shadow, width, etc. */
@@ -1933,7 +1958,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version" id="loginVersionLabel">v1.216</div>
+    <div class="login-version" id="loginVersionLabel">v1.217</div>
   </div>
 </div>
 
@@ -1941,7 +1966,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver" id="headerVersionLabel">v1.216</span>
+    <span class="ver" id="headerVersionLabel">v1.217</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -1989,14 +2014,14 @@
         <span class="rail-icon">👥</span>
         <span class="rail-badge" id="teamUnreadCount">0</span>
       </button>
-      <!-- v1.216: filter popover trigger moved here (was at the very
+      <!-- v1.217: filter popover trigger moved here (was at the very
            bottom of the rail until trainers complained the icon felt
            orphaned and hard to associate with the chat list). Sits
            right below Team so the nav cluster reads as a single group.
            CSS rule `.rail-filters { margin-top: auto }` was also dropped
            in the same release so the button flows naturally with the
            rest of the rail instead of being pushed to the bottom.
-           v1.216: split into TWO buttons — Filters (status pills:
+           v1.217: split into TWO buttons — Filters (status pills:
            All/Favorites/Urgent/Live/Active/Cancelled/Daily Groups)
            and Stages (subscription stages: Setup/Onboarding/SA/Active/
            Offboarding). Trainers were finding it hard to remember
@@ -2011,6 +2036,18 @@
         <span class="rail-icon">🏷️</span>
         <span class="rail-dot"></span>
       </button>
+      <!-- v1.217: quick-access shortcuts for each of the 5 stage
+           buckets. Tap a button → narrows the chat list to ALL customers
+           in that bucket (the 5 buckets each cover 2-5 specific Ferra
+           tags — see FERRA_TAG_STAGE). Tap the same button again to
+           clear. The 🏷️ Stages popover is still there for trainers who
+           want per-tag granularity; these are bucket-level shortcuts
+           because that's what most filtering is actually about. -->
+      <button class="rail-btn rail-stage rail-stage-setup" data-stage="setup" title="Setup — Order/Payment/Approval/Installation pending"><span class="rail-stage-txt">Set</span></button>
+      <button class="rail-btn rail-stage rail-stage-onboarding" data-stage="onboarding" title="Onboarding — Persona/Exercises/Handoff pending"><span class="rail-stage-txt">On</span></button>
+      <button class="rail-btn rail-stage rail-stage-sa" data-stage="sa" title="Strength Assessment — SA Reach-Out / SA Follow-Up"><span class="rail-stage-txt">SA</span></button>
+      <button class="rail-btn rail-stage rail-stage-active" data-stage="active" title="Active — All Steps Complete / All Done"><span class="rail-stage-txt">Act</span></button>
+      <button class="rail-btn rail-stage rail-stage-offboarding" data-stage="offboarding" title="Offboarding — Uninstallation / Pickup / Warehouse"><span class="rail-stage-txt">Off</span></button>
       <button class="rail-btn rail-new" id="newChatBtn" title="New chat by phone">
         <span class="rail-icon">+</span>
       </button>
@@ -2026,7 +2063,7 @@
       </div>
       <div class="filter-row" id="filterRow"></div>
     </div>
-    <!-- v1.216: separate popover for the subscription-stage dropdown so
+    <!-- v1.217: separate popover for the subscription-stage dropdown so
          it sits flush against its own rail button (🏷️) instead of being
          crammed below the status pills. tagFilterRow render logic is
          unchanged — it still writes into #tagFilterRow by ID and the
@@ -2489,8 +2526,8 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.216";
-// v1.216: paint APP_VERSION into the two visible header/login chips at
+const APP_VERSION = "v1.217";
+// v1.217: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
 // header chip stayed frozen at "v1.207" for 5+ releases because the
@@ -2611,7 +2648,7 @@ const newChatNameEl = $("newChatName");
 const filtersBtn = $("filtersBtn");
 const filterPopover = $("filterPopover");
 const filterPopoverClose = $("filterPopoverClose");
-// v1.216: parallel stages popover wired by the same toggle/close-on-
+// v1.217: parallel stages popover wired by the same toggle/close-on-
 // outside-click machinery as the filters popover. Mutually exclusive
 // with the filter popover so opening one closes the other (otherwise
 // the two cards would overlap at left:64px).
@@ -2625,7 +2662,7 @@ function toggleFilterPopover(force) {
     : !filterPopover.classList.contains("visible");
   filterPopover.classList.toggle("visible", next);
   filtersBtn.classList.toggle("active", next);
-  // v1.216: mutual exclusion — opening filters closes stages.
+  // v1.217: mutual exclusion — opening filters closes stages.
   if (next && stagePopover && stagePopover.classList.contains("visible")) {
     stagePopover.classList.remove("visible");
     if (stagesBtn) stagesBtn.classList.remove("active");
@@ -5559,6 +5596,16 @@ function renderChatList(rows) {
     return v;
   };
   const applyTagFilter = (rows) => {
+    // v1.217: apply bucket filter first when set (rail quick-access),
+    // otherwise fall back to specific-tag filter from the dropdown.
+    // The two are kept mutually exclusive at the setter side, so only
+    // one branch is ever active.
+    if (currentStageBucketFilter) {
+      return rows.filter(r => {
+        const tag = getSubscriptionTag(r.phone);
+        return tag && FERRA_TAG_STAGE[tag] === currentStageBucketFilter;
+      });
+    }
     if (currentTagFilter === "All") return rows;
     return rows.filter(r => getSubscriptionTag(r.phone) === currentTagFilter);
   };
@@ -5901,16 +5948,22 @@ function updateFiltersBtnIndicator() {
   // v1.172: null-safe — if the rail's filters button hasn't mounted
   // yet (or has been removed in a future redesign), don't crash the
   // renderFilterPills chain. The chat list still renders.
-  // v1.216: now drives the dot on TWO buttons independently — the
+  // v1.217: now drives the dot on TWO buttons independently — the
   // filters dot fires when a status pill is non-default, the stages
   // dot fires when the subscription-stage dropdown is non-default.
   // Previously a single dot covered both — trainers couldn't tell at
   // a glance which control was the source of the filter.
   const hasStatusFilter = currentStatusFilter !== "All";
   const hasStageFilter =
-    typeof currentTagFilter !== "undefined" &&
-    currentTagFilter &&
-    currentTagFilter !== "All";
+    (typeof currentTagFilter !== "undefined" &&
+      currentTagFilter &&
+      currentTagFilter !== "All") ||
+    // v1.217: also flag the dot when a rail quick-access bucket is
+    // active, even though the source isn't the dropdown. From the
+    // trainer's perspective both are "stages narrowing" — and the
+    // individual rail buttons' own colored backgrounds already show
+    // WHICH stage, so we don't need a more specific signal here.
+    !!currentStageBucketFilter;
   if (filtersBtn) filtersBtn.classList.toggle("has-filter", hasStatusFilter);
   if (stagesBtn) stagesBtn.classList.toggle("has-filter", hasStageFilter);
 }
@@ -5922,6 +5975,37 @@ myTicketsBtn.onclick = () => {
   renderChatList(lastChatRows);
   updateTeamUnreadBadge();
 };
+// v1.217: wire the 5 stage quick-access rail buttons. Each toggles
+// currentStageBucketFilter — clicking the same button again clears
+// the filter so this is a 1-tap on / 1-tap off interaction (not a
+// modal where you have to remember to reset).
+document.querySelectorAll(".rail-stage[data-stage]").forEach((btn) => {
+  btn.onclick = () => {
+    const target = btn.dataset.stage; // "setup" | "onboarding" | "sa" | ...
+    // Pull out of team view first so the filter has something to act on.
+    if (currentView === "team") currentView = "chats";
+    if (currentStageBucketFilter === target) {
+      // Same button clicked again → toggle off, back to "All stages".
+      currentStageBucketFilter = null;
+    } else {
+      currentStageBucketFilter = target;
+      // Setting a bucket overrides any specific-tag dropdown selection so
+      // the user gets the bucket view they just asked for.
+      currentTagFilter = "All";
+    }
+    updateRailStageActiveStates();
+    renderChatList(lastChatRows);
+  };
+});
+// Paints the .active class on whichever stage button matches the
+// current bucket. Called whenever the bucket changes — and also at
+// startup so initial state is correct.
+function updateRailStageActiveStates() {
+  document.querySelectorAll(".rail-stage[data-stage]").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.stage === currentStageBucketFilter);
+  });
+}
+updateRailStageActiveStates();
 renderFilterPills();
 
 // ====== TEAM VIEW + DM PICKER ======
@@ -6059,6 +6143,17 @@ const TAG_FILTERS = [
   "Uninstallation Pending", "Pickup Pending", "Received in Warehouse",
 ];
 let currentTagFilter = "All";
+// v1.217: separate "stage bucket" filter driven by the 5 quick-access rail
+// buttons (Setup / Onboarding / SA / Active / Offboarding). null = no bucket
+// narrowing; otherwise one of the 5 bucket strings from FERRA_TAG_STAGE.
+// This filter is ORTHOGONAL to currentTagFilter:
+//   - The rail buttons set THIS state (bucket level — 1 of 5).
+//   - The 🏷️ dropdown sets currentTagFilter (specific tag — 1 of 15).
+// They're not strictly mutually exclusive, but setting either resets the
+// other so the user always sees a coherent filter selection (clicking
+// "Setup" rail button = "I want to see everyone in setup", which would
+// be undermined by leaving a specific-tag filter active).
+let currentStageBucketFilter = null;
 
 function renderTagPills(counts) {
   // Render as a single <select> so the 15 tag options don't eat ~4 rows of
@@ -6075,6 +6170,11 @@ function renderTagPills(counts) {
   const sel = $("tagSelect");
   sel.onchange = () => {
     currentTagFilter = sel.value;
+    // v1.217: picking a specific tag in the dropdown clears any
+    // bucket filter set by the rail quick-access buttons. Keeps the
+    // two filter UIs coherent — only one filter "owns" the chat list
+    // at a time.
+    if (currentTagFilter !== "All") currentStageBucketFilter = null;
     renderChatList(lastChatRows);
   };
 }
