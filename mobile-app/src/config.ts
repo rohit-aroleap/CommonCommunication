@@ -76,4 +76,36 @@ export const STAGE_LABELS: Record<string, string> = {
   offboarding: "Offboarding",
 };
 
+// v1.223: team-tag membership system. Mirrors TEAM_TAGS + FERRA_TAG_TEAMS
+// in index.html — the comment at the top of this file flags these as a
+// single source of truth pair (must update both, in lockstep). Trainers
+// with a `teams` array set on their teamMembers record see ONLY customers
+// whose Ferra tag belongs to one of those teams, plus anyone with a
+// ticket assigned to them. Empty / missing `teams` = full visibility
+// (back-compat — existing trainers keep working with no change).
+export const TEAM_TAGS: Record<string, string> = {
+  installation: "Installation",
+  onboarding: "Onboarding",
+  sa: "Strength Assessment",
+  retention: "Retention",
+  sales: "Sales",
+};
+export const FERRA_TAG_TEAMS: Record<string, string[]> = {
+  "Order Pending":           ["sales"],
+  "Auto Pay Pending":        ["sales"],
+  "Approval Pending":        ["sales"],
+  "Machine Assign Pending":  ["installation"],
+  "Installation Pending":    ["installation"],
+  "Persona Call Pending":    ["onboarding"],
+  "Exercises Call Pending":  ["onboarding"],
+  "Hand Off Pending":        ["onboarding"],
+  "SA Reach Out Pending":    ["sa"],
+  "SA Follow Up":            ["sa"],
+  "All Steps Complete":      ["retention"],
+  "All Done":                ["retention"],
+  "Uninstallation Pending":  ["retention"],
+  "Pickup Pending":          ["retention"],
+  "Received in Warehouse":   ["retention"],
+};
+
 export const MAX_MEDIA_BYTES = 25 * 1024 * 1024; // 25 MB

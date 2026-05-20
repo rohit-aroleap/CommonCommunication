@@ -105,6 +105,9 @@ interface AppDataValue {
   //               older than 14 days no longer surface the chat.
   //   grantChatAccess(chatKey): writes a grant for the current user.
   isLimited: boolean;
+  // v1.223: team tags the current user is a member of (empty = no
+  // narrowing). Drives the team-visibility filter in ChatsScreen.
+  myTeamTags: Set<string> | null;
   myGrants: Record<string, UserGrant>;
   grantChatAccess: (chatKey: string) => Promise<void>;
 }
@@ -595,6 +598,33 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     return false;
   }, [teamMembers, user?.email]);
 
+  // v1.223: derive team-tag membership from the same teamMembers record.
+  // Empty Set = no team narrowing (full visibility — back-compat). Admin
+  // membership is NOT checked here because we don't have isAdmin on
+  // mobile; bootstrap admins are still in teamMembers with their email
+  // and just need their `teams` field unset (default behavior). Returns
+  // null when the user has no narrowing so the consumer can short-circuit.
+  const myTeamTags = useMemo<Set<string> | null>(() => {
+    const myEmail = (user?.email || "").toLowerCase();
+    if (!myEmail) return null;
+    for (const m of Object.values(teamMembers || {})) {
+      if (!m?.email || m.email.toLowerCase() !== myEmail) continue;
+      const raw = (m as unknown as { teams?: unknown }).teams;
+      if (Array.isArray(raw)) {
+        return raw.length === 0 ? null : new Set(raw as string[]);
+      }
+      if (raw && typeof raw === "object") {
+        const set = new Set<string>();
+        for (const [k, v] of Object.entries(raw)) {
+          if (v) set.add(k);
+        }
+        return set.size === 0 ? null : set;
+      }
+      return null;
+    }
+    return null;
+  }, [teamMembers, user?.email]);
+
   // v1.196: writes a grant for the current user on `chatKey`. Used by the
   // "Add customer" flow on the limited-trainer chat list.
   const grantChatAccess = async (chatKey: string) => {
@@ -633,6 +663,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       templates,
       dataReady,
       isLimited,
+      myTeamTags,
       myGrants,
       grantChatAccess,
     }),
@@ -661,6 +692,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       templates,
       dataReady,
       isLimited,
+      myTeamTags,
       myGrants,
     ],
   );

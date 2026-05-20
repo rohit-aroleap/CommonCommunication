@@ -13,7 +13,7 @@ import { ChatRowItem } from "@/components/ChatRow";
 import { FilterBar } from "@/components/FilterBar";
 import { AddCustomerModal } from "@/components/AddCustomerModal";
 import { DAILY_SENTINEL } from "@/types";
-import { FERRA_TAG_STAGE, ROOT } from "@/config";
+import { FERRA_TAG_STAGE, FERRA_TAG_TEAMS, ROOT } from "@/config";
 import { db } from "@/firebase";
 import { encodeKey } from "@/lib/encodeKey";
 import { ref, set } from "firebase/database";
@@ -49,6 +49,7 @@ export function ChatsScreen() {
     toggleFavorite,
     dataReady,
     isLimited,
+    myTeamTags,
     myGrants,
     grantChatAccess,
   } = useAppData();
@@ -197,11 +198,41 @@ export function ChatsScreen() {
     return visible;
   }, [isLimited, myGrants, myTicketChatKeys]);
 
+  // v1.223: team-tag visibility. Returns the set of chat keys a
+  // team-tagged trainer is allowed to see — customers whose Ferra tag
+  // belongs to one of their teams, plus any chat with an open ticket
+  // assigned to them (same override as limited). Returns null when the
+  // user has no team narrowing (full visibility), letting the consumer
+  // skip the filter cheaply. Only meaningful when the user isn't
+  // limited — limited is the more restrictive concept and wins.
+  const visibleChatKeysForTeams = useMemo<Set<string> | null>(() => {
+    if (isLimited) return null; // limited filter handles this case
+    if (!myTeamTags) return null;
+    const teams = myTeamTags;
+    const visible = new Set<string>();
+    for (const r of enriched) {
+      const tag = sharedSubsByPhone?.[normalizeFerraPhone(r.row.phone)];
+      if (!tag) continue;
+      const teamsForTag = FERRA_TAG_TEAMS[tag] || [];
+      for (const t of teamsForTag) {
+        if (teams.has(t)) { visible.add(r.row.chatKey); break; }
+      }
+    }
+    // Ticket override — same as limited.
+    for (const ck of myTicketChatKeys) visible.add(ck);
+    return visible;
+  }, [isLimited, myTeamTags, enriched, sharedSubsByPhone, myTicketChatKeys]);
+
   const filtered = useMemo(() => {
     let rows = enriched;
     if (!isAdmin) rows = rows.filter((r) => !r.row.private);
     if (visibleChatKeysForLimited) {
       const set = visibleChatKeysForLimited;
+      rows = rows.filter((r) => set.has(r.row.chatKey));
+    } else if (visibleChatKeysForTeams) {
+      // v1.223: team-tag narrowing. Only applies for non-limited
+      // trainers (limited is more restrictive and short-circuits above).
+      const set = visibleChatKeysForTeams;
       rows = rows.filter((r) => set.has(r.row.chatKey));
     }
 
@@ -244,6 +275,7 @@ export function ChatsScreen() {
     ferraIndex,
     sharedSubsByPhone,
     visibleChatKeysForLimited,
+    visibleChatKeysForTeams,
   ]);
 
   // Partition: chats with my open ticket anchor the very top, then

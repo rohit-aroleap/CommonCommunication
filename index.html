@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.222</title>
+<title>CommonCommunication v1.223</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -165,18 +165,18 @@
 
   /* v1.172 filters button + popover. The popover floats from the rail's
      right edge over the chat-list area when open.
-     v1.222: removed the `margin-top: auto` that pushed this button to
+     v1.223: removed the `margin-top: auto` that pushed this button to
      the bottom of the rail — trainers found the orphaned bottom-left
      icon hard to associate with the chat list, so the button now sits
      right below Team in the nav cluster (DOM order moved to match). */
   .rail-filters.has-filter .rail-dot { display: block; }
   .rail-filters.active { background: var(--hover); }
-  /* v1.222: stages button is a parallel button to the filter button.
+  /* v1.223: stages button is a parallel button to the filter button.
      Same has-filter / active styling so the two read as a matched
      pair in the rail. */
   .rail-stages.has-filter .rail-dot { display: block; }
   .rail-stages.active { background: var(--hover); }
-  /* v1.222: per-stage quick-access buttons. Each renders a 2-3 letter
+  /* v1.223: per-stage quick-access buttons. Each renders a 2-3 letter
      abbreviation rather than an emoji because the 5 stages don't have
      unambiguous emoji representations (and small emojis at this size
      would read as noise). Default state: subtle bg-tinted-with-stage-
@@ -212,7 +212,7 @@
   }
   .filter-popover {
     position: fixed;
-    /* v1.222: anchored to the TOP of the viewport now that the 🎚️
+    /* v1.223: anchored to the TOP of the viewport now that the 🎚️
        button moved up into the nav cluster below Team. Top:96px puts
        the popover just below the topbar and roughly level with the
        button itself; left:64px keeps it flush against the rail's right
@@ -231,7 +231,7 @@
     display: none;
   }
   .filter-popover.visible { display: block; }
-  /* v1.222: stage popover is a sibling popover anchored ~50px lower
+  /* v1.223: stage popover is a sibling popover anchored ~50px lower
      than the filter popover so it visually floats next to its OWN rail
      button (one row down from the filter button). Same chrome
      otherwise — same border, shadow, width, etc. */
@@ -477,6 +477,28 @@
   .team-member-row .limited-toggle.on {
     background: var(--green); color: white; border-color: var(--green);
     font-weight: 600;
+  }
+  /* v1.223: team-tag chip row. Chips sit between the .head row and the
+     .body (phone pills) row so admins read top-to-bottom as
+     identity → role permissions → contact details. Each chip is a
+     pill-shaped toggle — same visual language as the Limited pill but
+     wider to fit team names. */
+  .team-member-row .team-chip-row {
+    display: flex; flex-wrap: wrap; gap: 4px;
+    margin-top: 4px;
+    padding-left: 6px;
+  }
+  .team-chip {
+    background: white; border: 1px solid var(--border);
+    border-radius: 10px; padding: 2px 8px;
+    font-size: 11px; font-family: inherit;
+    color: var(--muted); cursor: pointer;
+    transition: all 0.12s;
+  }
+  .team-chip:hover { border-color: var(--green); color: var(--green); }
+  .team-chip.on {
+    background: var(--green); color: white;
+    border-color: var(--green); font-weight: 600;
   }
   .team-member-row .rm {
     background: transparent; border: none; cursor: pointer;
@@ -1958,7 +1980,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version" id="loginVersionLabel">v1.222</div>
+    <div class="login-version" id="loginVersionLabel">v1.223</div>
   </div>
 </div>
 
@@ -1966,7 +1988,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver" id="headerVersionLabel">v1.222</span>
+    <span class="ver" id="headerVersionLabel">v1.223</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -2014,14 +2036,14 @@
         <span class="rail-icon">👥</span>
         <span class="rail-badge" id="teamUnreadCount">0</span>
       </button>
-      <!-- v1.222: filter popover trigger moved here (was at the very
+      <!-- v1.223: filter popover trigger moved here (was at the very
            bottom of the rail until trainers complained the icon felt
            orphaned and hard to associate with the chat list). Sits
            right below Team so the nav cluster reads as a single group.
            CSS rule `.rail-filters { margin-top: auto }` was also dropped
            in the same release so the button flows naturally with the
            rest of the rail instead of being pushed to the bottom.
-           v1.222: split into TWO buttons — Filters (status pills:
+           v1.223: split into TWO buttons — Filters (status pills:
            All/Favorites/Urgent/Live/Active/Cancelled/Daily Groups)
            and Stages (subscription stages: Setup/Onboarding/SA/Active/
            Offboarding). Trainers were finding it hard to remember
@@ -2036,7 +2058,7 @@
         <span class="rail-icon">🏷️</span>
         <span class="rail-dot"></span>
       </button>
-      <!-- v1.222: quick-access shortcuts for each of the 5 stage
+      <!-- v1.223: quick-access shortcuts for each of the 5 stage
            buckets. Tap a button → narrows the chat list to ALL customers
            in that bucket (the 5 buckets each cover 2-5 specific Ferra
            tags — see FERRA_TAG_STAGE). Tap the same button again to
@@ -2063,7 +2085,7 @@
       </div>
       <div class="filter-row" id="filterRow"></div>
     </div>
-    <!-- v1.222: separate popover for the subscription-stage dropdown so
+    <!-- v1.223: separate popover for the subscription-stage dropdown so
          it sits flush against its own rail button (🏷️) instead of being
          crammed below the status pills. tagFilterRow render logic is
          unchanged — it still writes into #tagFilterRow by ID and the
@@ -2526,8 +2548,8 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.222";
-// v1.222: paint APP_VERSION into the two visible header/login chips at
+const APP_VERSION = "v1.223";
+// v1.223: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
 // header chip stayed frozen at "v1.207" for 5+ releases because the
@@ -2648,7 +2670,7 @@ const newChatNameEl = $("newChatName");
 const filtersBtn = $("filtersBtn");
 const filterPopover = $("filterPopover");
 const filterPopoverClose = $("filterPopoverClose");
-// v1.222: parallel stages popover wired by the same toggle/close-on-
+// v1.223: parallel stages popover wired by the same toggle/close-on-
 // outside-click machinery as the filters popover. Mutually exclusive
 // with the filter popover so opening one closes the other (otherwise
 // the two cards would overlap at left:64px).
@@ -2662,7 +2684,7 @@ function toggleFilterPopover(force) {
     : !filterPopover.classList.contains("visible");
   filterPopover.classList.toggle("visible", next);
   filtersBtn.classList.toggle("active", next);
-  // v1.222: mutual exclusion — opening filters closes stages.
+  // v1.223: mutual exclusion — opening filters closes stages.
   if (next && stagePopover && stagePopover.classList.contains("visible")) {
     stagePopover.classList.remove("visible");
     if (stagesBtn) stagesBtn.classList.remove("active");
@@ -3077,6 +3099,66 @@ function isLimitedUser() {
   }
   return false;
 }
+// v1.223: returns the current user's team tags as a Set, or null when
+// they have no team narrowing (= full visibility). Admin always returns
+// null. Reading the teams array off the same teamMembers record we
+// already use for `limited` so admin UI writes hit one consistent path.
+function myTeamTags() {
+  if (!currentUser) return null;
+  if (isAdmin(currentUser.email)) return null;
+  const myLower = String(currentUser.email || "").toLowerCase();
+  if (!myLower) return null;
+  for (const m of Object.values(teamMembersCache || {})) {
+    if (m?.email && String(m.email).toLowerCase() === myLower) {
+      // teams in Firebase is `{ onboarding: true, sa: true }` (object)
+      // when written via the chip UI. Tolerate both that and an array
+      // shape in case anyone writes via the JSON editor.
+      const raw = m.teams;
+      if (Array.isArray(raw)) {
+        return raw.length === 0 ? null : new Set(raw);
+      }
+      if (raw && typeof raw === "object") {
+        const set = new Set();
+        for (const [k, v] of Object.entries(raw)) {
+          if (v) set.add(k);
+        }
+        return set.size === 0 ? null : set;
+      }
+      return null;
+    }
+  }
+  return null;
+}
+// v1.223: chats visible to a team-tagged trainer. Returns null when the
+// user has no team narrowing (and the caller should skip filtering).
+// Matches the shape of visibleChatKeysForLimited() so renderChatList
+// can plumb both filters through the same fold. The ticket-assignee
+// override mirrors limited-access — a ticket on you ALWAYS unlocks
+// the chat regardless of team alignment.
+function visibleChatKeysForTeams() {
+  const teams = myTeamTags();
+  if (!teams) return null;
+  const visible = new Set();
+  // Auto-derived membership: customer's Ferra tag → set of teams that
+  // own that phase → intersect with my teams.
+  for (const r of lastChatRows || []) {
+    const tag = getSubscriptionTag(r.phone);
+    if (!tag) continue;
+    const teamsForTag = FERRA_TAG_TEAMS[tag] || [];
+    for (const t of teamsForTag) {
+      if (teams.has(t)) { visible.add(r.chatKey); break; }
+    }
+  }
+  // Ticket-assignee override — same logic as the limited path.
+  const myUid = currentUser?.uid;
+  if (myUid && ticketsCache) {
+    for (const t of Object.values(ticketsCache)) {
+      if (!t || t.status !== "open" || t.assignee !== myUid || !t.anchorChatId) continue;
+      visible.add(encodeKey(t.anchorChatId));
+    }
+  }
+  return visible;
+}
 // v1.196: chats visible to a limited trainer right now. Returns null when
 // the user isn't limited so the caller can skip filtering.
 function visibleChatKeysForLimited() {
@@ -3225,6 +3307,21 @@ function renderAllowedList() {
       .join("");
     const nameVal = member.name || "";
     const limited = !!member.limited;
+    // v1.223: team-tag chip row. Reads as an object (`{ sa: true }`) when
+    // written through the UI below; tolerates array shape too. Empty
+    // selection = trainer sees everyone (back-compat — no auto-restrict).
+    const memberTeams = (() => {
+      const raw = member.teams;
+      if (Array.isArray(raw)) return new Set(raw);
+      if (raw && typeof raw === "object") {
+        return new Set(Object.entries(raw).filter(([, v]) => v).map(([k]) => k));
+      }
+      return new Set();
+    })();
+    const teamChips = Object.entries(TEAM_TAGS).map(([id, label]) => {
+      const on = memberTeams.has(id);
+      return `<button class="team-chip ${on ? "on" : ""}" data-key="${escapeHtml(key)}" data-team="${escapeHtml(id)}" title="${escapeHtml(label)}">${escapeHtml(label)}</button>`;
+    }).join("");
     const phonesHtml = phonePills ||
       `<span class="phones-empty">No phones mapped</span>`;
     return `<div class="team-member-row">
@@ -3240,6 +3337,9 @@ function renderAllowedList() {
           </label>
           <button class="rm" data-key="${escapeHtml(key)}" title="Remove from team">×</button>
         </div>
+      </div>
+      <div class="team-chip-row" title="Teams: trainer sees only customers whose Ferra tag belongs to one of these teams. Empty = sees everyone.">
+        ${teamChips}
       </div>
       <div class="body">
         ${phonesHtml}
@@ -3270,6 +3370,27 @@ function renderAllowedList() {
       await set(
         ref(db, `${ROOT}/config/teamMembers/${inp.dataset.key}/limited`),
         inp.checked ? true : null,
+      );
+    };
+  });
+  // v1.223: team-tag chips. Each chip toggles one team's membership at
+  // /config/teamMembers/{emailKey}/teams/{teamId}. Writing `null` deletes
+  // the key so the resulting object stays compact (no orphan `false`
+  // values). Other tabs see the update via the existing teamMembers
+  // listener and refresh the visibility filter automatically.
+  allowedListEl.querySelectorAll(".team-chip").forEach((btn) => {
+    btn.onclick = async () => {
+      const key = btn.dataset.key;
+      const team = btn.dataset.team;
+      const turningOn = !btn.classList.contains("on");
+      // Optimistic UI — flip the chip immediately, then write. The
+      // teamMembers listener will re-render the whole list with
+      // authoritative state, but the optimistic flip avoids a visible
+      // lag on slow connections.
+      btn.classList.toggle("on", turningOn);
+      await set(
+        ref(db, `${ROOT}/config/teamMembers/${key}/teams/${team}`),
+        turningOn ? true : null,
       );
     };
   });
@@ -3543,7 +3664,7 @@ const FERRA_TAG_STAGE = {
   "SA Reach Out Pending": "sa",
   "SA Follow Up": "sa",
   "All Steps Complete": "active",
-  // v1.222: "All Done" moved from "active" → "offboarding". Originally
+  // v1.223: "All Done" moved from "active" → "offboarding". Originally
   // grouped with Active because the tag implied "everything wrapped up",
   // but in Ferra's data it actually flags customers winding down their
   // engagement — they're done with the program, not actively using it.
@@ -3553,6 +3674,47 @@ const FERRA_TAG_STAGE = {
   "Uninstallation Pending": "offboarding",
   "Pickup Pending": "offboarding",
   "Received in Warehouse": "offboarding",
+};
+// v1.223: team-tag membership system. Trainers can be tagged with one or
+// more of these team identities; the chat list then auto-narrows to
+// customers whose Ferra tag maps to one of their teams (via
+// FERRA_TAG_TEAMS below). Ticket assignment is the universal override
+// — a ticket assigned to you ALWAYS shows the chat regardless of team
+// membership. Trainers with NO teams set keep current behavior (full
+// visibility). Must stay in lockstep with TEAM_TAGS / FERRA_TAG_TEAMS
+// in mobile-app/src/config.ts — these are a single source of truth.
+const TEAM_TAGS = {
+  "installation": "Installation",
+  "onboarding":   "Onboarding",
+  "sa":           "Strength Assessment",
+  "retention":    "Retention",
+  "sales":        "Sales",
+};
+// Maps each Ferra subscription tag to the team(s) responsible for that
+// customer phase. A customer can be visible to multiple teams (array)
+// if their phase is jointly owned. Defaults follow Aroleap's actual
+// org structure — see the v1.223 design doc:
+//   Sales      → pre-machine pendings (Order/Payment/Approval)
+//   Install    → physical install pendings (Machine Assign / Install)
+//   Onboard    → first-call sequence (Persona / Exercises / Hand Off)
+//   SA         → strength-assessment phase
+//   Retention  → live members + every offboarding tag
+const FERRA_TAG_TEAMS = {
+  "Order Pending":            ["sales"],
+  "Auto Pay Pending":         ["sales"],
+  "Approval Pending":         ["sales"],
+  "Machine Assign Pending":   ["installation"],
+  "Installation Pending":     ["installation"],
+  "Persona Call Pending":     ["onboarding"],
+  "Exercises Call Pending":   ["onboarding"],
+  "Hand Off Pending":         ["onboarding"],
+  "SA Reach Out Pending":     ["sa"],
+  "SA Follow Up":             ["sa"],
+  "All Steps Complete":       ["retention"],
+  "All Done":                 ["retention"],
+  "Uninstallation Pending":   ["retention"],
+  "Pickup Pending":           ["retention"],
+  "Received in Warehouse":    ["retention"],
 };
 // Optional short label for pill (full tag stays in title= tooltip)
 const FERRA_TAG_SHORT = {
@@ -5577,6 +5739,17 @@ function renderChatList(rows) {
   }
   if (visibleSet) {
     afterPrivacy = afterPrivacy.filter(r => visibleSet.has(r.chatKey));
+  } else {
+    // v1.223: team-tag visibility filter. Only applies when the user
+    // ISN'T limited — limited is the more restrictive concept and wins
+    // outright (a limited trainer with team tags set still sees only
+    // their grants + tickets, not the full team-visible cohort). For
+    // unrestricted trainers with no team tags this also returns null
+    // and is a no-op.
+    const teamVisibleSet = visibleChatKeysForTeams();
+    if (teamVisibleSet) {
+      afterPrivacy = afterPrivacy.filter(r => teamVisibleSet.has(r.chatKey));
+    }
   }
 
   // Apply the status (row 1) filter first, separately from the tag (row 2)
@@ -5602,7 +5775,7 @@ function renderChatList(rows) {
     return v;
   };
   const applyTagFilter = (rows) => {
-    // v1.222: apply bucket filter when any rail bucket is in the Set,
+    // v1.223: apply bucket filter when any rail bucket is in the Set,
     // otherwise fall back to specific-tag filter from the dropdown.
     // Multi-bucket selection ORs across the selected buckets — a chat
     // matches if its stage is in the Set. Empty set = no narrowing.
@@ -5954,7 +6127,7 @@ function updateFiltersBtnIndicator() {
   // v1.172: null-safe — if the rail's filters button hasn't mounted
   // yet (or has been removed in a future redesign), don't crash the
   // renderFilterPills chain. The chat list still renders.
-  // v1.222: now drives the dot on TWO buttons independently — the
+  // v1.223: now drives the dot on TWO buttons independently — the
   // filters dot fires when a status pill is non-default, the stages
   // dot fires when the subscription-stage dropdown is non-default.
   // Previously a single dot covered both — trainers couldn't tell at
@@ -5964,7 +6137,7 @@ function updateFiltersBtnIndicator() {
     (typeof currentTagFilter !== "undefined" &&
       currentTagFilter &&
       currentTagFilter !== "All") ||
-    // v1.222: also flag the dot when a rail quick-access bucket is
+    // v1.223: also flag the dot when a rail quick-access bucket is
     // active, even though the source isn't the dropdown. From the
     // trainer's perspective both are "stages narrowing" — and the
     // individual rail buttons' own colored backgrounds already show
@@ -5973,7 +6146,7 @@ function updateFiltersBtnIndicator() {
   if (filtersBtn) filtersBtn.classList.toggle("has-filter", hasStatusFilter);
   if (stagesBtn) stagesBtn.classList.toggle("has-filter", hasStageFilter);
 }
-// v1.222: Tickets behaves like a temporary overlay, not a filter mutation.
+// v1.223: Tickets behaves like a temporary overlay, not a filter mutation.
 // When the user activates Tickets we SNAPSHOT whatever rail buckets +
 // dropdown tag they had selected (so the filter chrome shows clean
 // "everyone's tickets" without an unrelated stage narrowing); when they
@@ -6016,7 +6189,7 @@ myTicketsBtn.onclick = () => {
   renderChatList(lastChatRows);
   updateTeamUnreadBadge();
 };
-// v1.222.1 HOTFIX: this `let` USED to live further down next to
+// v1.223.1 HOTFIX: this `let` USED to live further down next to
 // currentTagFilter, but the rail-stage code below (which reads it)
 // runs at module top-level — declaring it later in the file put the
 // read inside the `let` TDZ and threw a silent ReferenceError that
@@ -6025,12 +6198,12 @@ myTicketsBtn.onclick = () => {
 // Moved up here so any reader code below this point hits a real
 // initialized value.
 //
-// v1.222: changed from single-value (string|null) to a Set<string>
+// v1.223: changed from single-value (string|null) to a Set<string>
 // so multiple stage buckets can be selected at once. Trainers wanted
 // to see, e.g., "everyone in Setup OR Onboarding" without bouncing
 // between filters. Empty set = no narrowing (was: null).
 const currentStageBucketFilter = new Set();
-// v1.222: wire the 5 stage quick-access rail buttons. Each tap toggles
+// v1.223: wire the 5 stage quick-access rail buttons. Each tap toggles
 // that bucket's membership in the Set. Multiple can be active at once;
 // the chat list shows ANY customer whose bucket is in the Set. Clearing
 // all buckets goes back to "All stages".
@@ -6048,14 +6221,14 @@ document.querySelectorAll(".rail-stage[data-stage]").forEach((btn) => {
       // user gets a coherent bucket-level view. Multi-bucket within
       // the rail is fine, but the dropdown's per-tag filter clears.
       currentTagFilter = "All";
-      // v1.222: also clear "My tickets" so the rail bucket shows the
+      // v1.223: also clear "My tickets" so the rail bucket shows the
       // FULL bucket, not "my tickets ∩ this bucket". Same rationale as
       // Tickets-clears-buckets going the other way — top-level filters
       // are mutually exclusive at activation.
       if (currentStatusFilter === "My tickets") {
         currentStatusFilter = "All";
       }
-      // v1.222: explicit filter choice while Tickets was on → discard
+      // v1.223: explicit filter choice while Tickets was on → discard
       // the snapshot. If we left it, the next toggle-off of Tickets
       // would overwrite the user's new bucket selection with stale
       // pre-Tickets state — confusing.
@@ -6211,7 +6384,7 @@ const TAG_FILTERS = [
   "Uninstallation Pending", "Pickup Pending", "Received in Warehouse",
 ];
 let currentTagFilter = "All";
-// v1.222: currentStageBucketFilter declaration was moved ~150 lines
+// v1.223: currentStageBucketFilter declaration was moved ~150 lines
 // up (right before the rail-stage click handlers / updateRailStage-
 // ActiveStates() call) to avoid a TDZ ReferenceError that broke the
 // chat list render — see comment at the new declaration site.
@@ -6231,14 +6404,14 @@ function renderTagPills(counts) {
   const sel = $("tagSelect");
   sel.onchange = () => {
     currentTagFilter = sel.value;
-    // v1.222: picking a specific tag in the dropdown clears all rail
+    // v1.223: picking a specific tag in the dropdown clears all rail
     // bucket selections. Keeps the two filter UIs coherent — only one
     // filter "owns" the chat list at a time. (`currentStageBucketFilter`
     // is now a Set so we clear it in place rather than reassigning.)
     if (currentTagFilter !== "All") {
       currentStageBucketFilter.clear();
       updateRailStageActiveStates();
-      // v1.222: explicit dropdown choice → discard any pre-Tickets
+      // v1.223: explicit dropdown choice → discard any pre-Tickets
       // snapshot so toggling Tickets off later doesn't overwrite this
       // selection with stale state.
       clearTicketsSnapshot();
