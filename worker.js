@@ -149,6 +149,18 @@ export default {
       if (url.pathname === "/dm-media/upload" && request.method === "POST") {
         return cors(env, await handleDmMediaUpload(request, env));
       }
+      // v1.224: template-media endpoints. Uploads go to R2 under
+      // "templates/{templateId}/{filename}"; reads stream from the same
+      // bucket. Templates are admin-curated team assets so we skip the
+      // per-user daily quota that dm-media enforces. URLs are
+      // publicly fetchable (no auth) so Periskope can pull the file when
+      // forwarding the message to the customer's WhatsApp.
+      if (url.pathname === "/template-media/upload" && request.method === "POST") {
+        return cors(env, await handleTemplateMediaUpload(request, env));
+      }
+      if (url.pathname.startsWith("/template-media/") && request.method === "GET") {
+        return cors(env, await handleTemplateMediaGet(request, env));
+      }
       if (url.pathname.startsWith("/dm-media/") && request.method === "GET") {
         return cors(env, await handleDmMediaGet(request, env));
       }
@@ -1856,6 +1868,111 @@ async function handleDmMediaGet(request, env) {
   headers.set("Accept-Ranges", "bytes");
   headers.set("ETag", object.httpEtag);
   // R2's `range` field tells us what was actually returned.
+  if (object.range) {
+    const start = object.range.offset || 0;
+    const len = object.range.length ?? (object.size - start);
+    const endByte = start + len - 1;
+    headers.set("Content-Range", `bytes ${start}-${endByte}/${object.size}`);
+    headers.set("Content-Length", String(len));
+    return new Response(object.body, { status: 206, headers });
+  }
+  headers.set("Content-Length", String(object.size));
+  return new Response(object.body, { status: 200, headers });
+}
+
+// ---------- /template-media/upload (R2 upload for template assets) ---------
+// v1.224. Multipart upload. Form fields:
+//   file        — the blob
+//   templateId  — the Firebase template key (for namespacing)
+// Returns: { ok: true, url: "<WORKER_ORIGIN>/template-media/templates/<id>/<name>", key }
+// Caps at the same 25 MB limit as dm-media. No per-user quota — templates
+// are admin-only assets curated for the team, and Periskope itself enforces
+// a ~16 MB per-message ceiling downstream, so abuse risk is low.
+// Public read URLs so Periskope can fetch the media when relaying to
+// the customer's WhatsApp; the random templateId is enough entropy that
+// guessing other tenants' files is infeasible.
+async function handleTemplateMediaUpload(request, env) {
+  if (!env.DM_MEDIA) {
+    return json({ error: "R2 bucket DM_MEDIA not bound" }, 500);
+  }
+  let form;
+  try {
+    form = await request.formData();
+  } catch (e) {
+    return json({ error: "bad multipart: " + String(e?.message || e) }, 400);
+  }
+  const file = form.get("file");
+  const templateId = String(form.get("templateId") || "");
+  if (!file || typeof file === "string") return json({ error: "missing file" }, 400);
+  if (!templateId) return json({ error: "missing templateId" }, 400);
+  if (/[\/\\.]/.test(templateId)) {
+    return json({ error: "bad templateId" }, 400);
+  }
+  if (file.size > DM_MEDIA_MAX_BYTES) {
+    return json({ error: `file too large (>${DM_MEDIA_MAX_BYTES / 1024 / 1024} MB)` }, 413);
+  }
+  const safeName =
+    String(file.name || "file")
+      .normalize("NFKD")
+      .replace(/[^A-Za-z0-9._-]/g, "_")
+      .replace(/_+/g, "_")
+      .slice(0, 200) || "file";
+  const key = `templates/${templateId}/${safeName}`;
+  try {
+    const bytes = await file.arrayBuffer();
+    await env.DM_MEDIA.put(key, bytes, {
+      httpMetadata: {
+        contentType: file.type || "application/octet-stream",
+        cacheControl: "public, max-age=31536000, immutable",
+      },
+    });
+  } catch (e) {
+    return json({ error: "r2 put failed: " + String(e?.message || e) }, 500);
+  }
+  const origin = new URL(request.url).origin;
+  return json({
+    ok: true,
+    url: `${origin}/template-media/${key}`,
+    key,
+    mimeType: file.type || "application/octet-stream",
+    fileName: safeName,
+    sizeBytes: file.size,
+  });
+}
+
+// ---------- /template-media/<key> (R2 read for template assets) ----------
+// Mirrors handleDmMediaGet but strips "/template-media/" instead.
+async function handleTemplateMediaGet(request, env) {
+  if (!env.DM_MEDIA) {
+    return new Response("R2 bucket DM_MEDIA not bound", { status: 500 });
+  }
+  const url = new URL(request.url);
+  let key;
+  try {
+    key = decodeURIComponent(url.pathname.replace(/^\/template-media\//, ""));
+  } catch {
+    key = url.pathname.replace(/^\/template-media\//, "");
+  }
+  if (!key) return new Response("missing key", { status: 400 });
+  const rangeHeader = request.headers.get("Range");
+  let r2Options;
+  if (rangeHeader) {
+    const m = rangeHeader.match(/bytes=(\d+)-(\d*)/);
+    if (m) {
+      const offset = parseInt(m[1], 10);
+      const end = m[2] ? parseInt(m[2], 10) : undefined;
+      r2Options = { range: end !== undefined ? { offset, length: end - offset + 1 } : { offset } };
+    }
+  }
+  const object = r2Options
+    ? await env.DM_MEDIA.get(key, r2Options)
+    : await env.DM_MEDIA.get(key);
+  if (!object) return new Response("not found", { status: 404 });
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set("Cache-Control", object.httpMetadata?.cacheControl || "public, max-age=31536000, immutable");
+  headers.set("Accept-Ranges", "bytes");
+  headers.set("ETag", object.httpEtag);
   if (object.range) {
     const start = object.range.offset || 0;
     const len = object.range.length ?? (object.size - start);
