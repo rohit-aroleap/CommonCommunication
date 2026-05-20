@@ -302,4 +302,15 @@ export interface Template {
   createdBy?: string;
   createdAt?: number;
   updatedAt?: number;
+  // v1.225: optional attachment. Stored in Cloudflare R2; the URL is
+  // public so Periskope can fetch it directly when relaying to the
+  // customer's WhatsApp. Set on the desktop's Template modal (Attach
+  // file button); mobile is read-only for templates and just consumes
+  // this field at slash-pick time to queue the file alongside the text.
+  media?: {
+    url: string;
+    mimeType?: string | null;
+    fileName?: string | null;
+    sizeBytes?: number | null;
+  } | null;
 }

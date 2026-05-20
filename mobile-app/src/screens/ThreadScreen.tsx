@@ -88,7 +88,7 @@ import { ReassignModal } from "@/components/ReassignModal";
 import { SummaryModal } from "@/components/SummaryModal";
 import { MediaViewerModal } from "@/components/MediaViewerModal";
 import { ActivityIndicator } from "react-native";
-import type { Message, Ticket } from "@/types";
+import type { Message, Template, Ticket } from "@/types";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "./types";
 
@@ -348,6 +348,14 @@ export function ThreadScreen({ route, navigation }: Props) {
   // quoted-message bar above the text input while this is set. Cleared
   // on send, on dismiss-tap, or on chat change (via the effect below).
   const [replyTarget, setReplyTarget] = useState<Message | null>(null);
+  // v1.225: pending template-media. Set when the slash picker picks a
+  // template carrying a file; the next `send` ships text + media URL
+  // together. Cleared on send (success or failure) and explicit dismiss
+  // via the chip's ✕. The screen unmounts on chat switch (Stack push of
+  // a new Thread route), so we don't need an explicit clear-on-switch.
+  const [pendingTemplateMedia, setPendingTemplateMedia] = useState<
+    NonNullable<Template["media"]> | null
+  >(null);
   useEffect(() => {
     // Chat changed — drop any pending reply target so it doesn't leak
     // into the next chat's send.
@@ -636,11 +644,16 @@ export function ThreadScreen({ route, navigation }: Props) {
   const send = useCallback(async () => {
     if (isDm) return sendDm();
     const text = composer.trim();
-    if (!text || !user) return;
+    // v1.225: media-only template = empty text + queued attachment is OK.
+    if (!user) return;
+    if (!text && !pendingTemplateMedia) return;
     // v1.153: snapshot the reply target NOW (before any await) so the
     // composer can clear immediately and a chat change can't blow it
     // away mid-flight.
     const replySnapshot = replyTarget;
+    // v1.225: same snapshot pattern for queued template media — caller
+    // can clear the chip state synchronously while the send is in flight.
+    const mediaSnapshot = pendingTemplateMedia;
     const ts = Date.now();
     const msgRef = push(ref(db, `${ROOT}/chats/${chatKey}/messages`));
     const localMsgId = msgRef.key as string;
@@ -661,12 +674,35 @@ export function ThreadScreen({ route, navigation }: Props) {
         senderName: replySnapshot.sentByName || null,
       };
     }
+    // v1.225: optimistic media metadata so the bubble renders the
+    // attachment placeholder immediately. worker.js patches in the
+    // Periskope URL via the webhook echo dedup path once delivered.
+    let messageType: "image" | "video" | "audio" | "document" | null = null;
+    if (mediaSnapshot) {
+      const mt = String(mediaSnapshot.mimeType || "").toLowerCase();
+      messageType = mt.startsWith("image/")
+        ? "image"
+        : mt.startsWith("video/")
+        ? "video"
+        : mt.startsWith("audio/")
+        ? "audio"
+        : "document";
+      optimisticRec.media = {
+        url: mediaSnapshot.url,
+        fileName: mediaSnapshot.fileName || null,
+        mimeType: mediaSnapshot.mimeType || null,
+      };
+      optimisticRec.messageType = messageType;
+    }
     await set(msgRef, optimisticRec);
+    const previewText =
+      text ||
+      (mediaSnapshot ? `📎 ${mediaSnapshot.fileName || "Attachment"}` : "");
     await update(ref(db, `${ROOT}/chats/${chatKey}/meta`), {
       chatId,
       phone,
       lastMsgAt: ts,
-      lastMsgPreview: text.slice(0, 120),
+      lastMsgPreview: previewText.slice(0, 120),
       lastMsgDirection: "out",
       lastMsgSentByName: user.displayName || user.email,
     });
@@ -682,6 +718,7 @@ export function ThreadScreen({ route, navigation }: Props) {
     setComposer("");
     setMentions(new Map());
     setReplyTarget(null);
+    setPendingTemplateMedia(null);
     try {
       const res = await sendMessage({
         chatId,
@@ -702,6 +739,18 @@ export function ThreadScreen({ route, navigation }: Props) {
               },
             }
           : {}),
+        ...(mediaSnapshot && messageType
+          ? {
+              // v1.225: Periskope accepts media.url and fetches it itself.
+              media: {
+                type: messageType,
+                url: mediaSnapshot.url,
+                filename: mediaSnapshot.fileName || "file",
+                mimetype:
+                  mediaSnapshot.mimeType || "application/octet-stream",
+              },
+            }
+          : {}),
       });
       if (!res.ok) {
         const t = await res.text();
@@ -710,7 +759,18 @@ export function ThreadScreen({ route, navigation }: Props) {
     } catch (e: any) {
       await update(msgRef, { status: "failed", error: String(e) });
     }
-  }, [isDm, sendDm, composer, user, chatKey, chatId, phone, mentions, replyTarget]);
+  }, [
+    isDm,
+    sendDm,
+    composer,
+    user,
+    chatKey,
+    chatId,
+    phone,
+    mentions,
+    replyTarget,
+    pendingTemplateMedia,
+  ]);
 
   // Voice note flow — called by MicButton after recording stops with the
   // captured audio file URI. Uploads to /transcribe, opens the preview
@@ -1221,13 +1281,17 @@ export function ThreadScreen({ route, navigation }: Props) {
   // typing `/welcome` then picking inserts the whole canned message, the
   // user's "/welcome" placeholder gets thrown away).
   const insertTemplate = useCallback(
-    (templateText: string) => {
-      const resolved = substituteTemplateVars(templateText, {
+    (template: { text?: string; media?: Template["media"] }) => {
+      const resolved = substituteTemplateVars(template.text || "", {
         meta: isDm ? null : meta,
         resolvedDisplayName: isDm ? "" : headerName,
         trainerName: user?.displayName || user?.email || "",
       });
       setComposer(resolved);
+      // v1.225: queue any attached media so the next send fires text +
+      // file together. Picking a template without media clears any
+      // previously-queued attachment so we don't leak state between picks.
+      setPendingTemplateMedia(template.media ?? null);
     },
     [isDm, meta, headerName, user],
   );
@@ -1752,14 +1816,21 @@ export function ThreadScreen({ route, navigation }: Props) {
                 <TouchableOpacity
                   key={t.id}
                   style={styles.tplItem}
-                  onPress={() => insertTemplate(t.text || "")}
+                  onPress={() => insertTemplate(t)}
                   activeOpacity={0.7}
                 >
                   <Text style={styles.tplName} numberOfLines={1}>
                     /{t.name}
+                    {/* v1.225: 📎 indicator + filename so trainers can see
+                        which templates send a file too. */}
+                    {t.media?.url ? (
+                      <Text style={styles.tplMediaTag}>
+                        {"  "}📎 {t.media.fileName || "attachment"}
+                      </Text>
+                    ) : null}
                   </Text>
                   <Text style={styles.tplPreview} numberOfLines={2}>
-                    {t.text}
+                    {t.text || (t.media ? "(media-only template)" : "")}
                   </Text>
                 </TouchableOpacity>
               ))}
@@ -1910,6 +1981,33 @@ export function ThreadScreen({ route, navigation }: Props) {
             <TouchableOpacity
               accessibilityLabel="Cancel reply"
               onPress={() => setReplyTarget(null)}
+              style={styles.replyBarClose}
+              hitSlop={8}
+            >
+              <Text style={styles.replyBarCloseTxt}>✕</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+        {/* v1.225: queued template-media chip. Sits in the same slot as
+            the reply bar, just above the composer. ✕ button clears the
+            queued attachment so the trainer can decide to send just the
+            text after all. Reuses the reply-bar visual language for
+            consistency — same green accent stripe, same chrome. */}
+        {pendingTemplateMedia && (
+          <View style={styles.replyBar}>
+            <View style={styles.replyBarAccent} />
+            <View style={styles.replyBarBody}>
+              <Text style={styles.replyBarLabel}>📎 Template attachment</Text>
+              <Text style={styles.replyBarTxt} numberOfLines={1}>
+                {pendingTemplateMedia.fileName || "attachment"}
+                {pendingTemplateMedia.sizeBytes
+                  ? ` (${Math.round(pendingTemplateMedia.sizeBytes / 1024)} KB)`
+                  : ""}
+              </Text>
+            </View>
+            <TouchableOpacity
+              accessibilityLabel="Remove template attachment"
+              onPress={() => setPendingTemplateMedia(null)}
               style={styles.replyBarClose}
               hitSlop={8}
             >
@@ -2809,6 +2907,13 @@ function makeStyles(colors: Colors) {
     color: "#5eead4",
     fontSize: 13,
     fontWeight: "600",
+  },
+  // v1.225: 📎 indicator + filename tucked inside the tplName row, in a
+  // lighter weight so the slash keyword still reads as the primary text.
+  tplMediaTag: {
+    color: "rgba(255,255,255,0.7)",
+    fontSize: 11,
+    fontWeight: "400",
   },
   tplPreview: {
     color: "rgba(255,255,255,0.85)",

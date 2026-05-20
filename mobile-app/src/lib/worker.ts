@@ -20,11 +20,17 @@ export interface SendBody {
   // pings them regardless of ticket/favorite status — @ is an explicit
   // "look at this" signal that overrides the strict targeting rules.
   mentions?: string[];
+  // v1.225: media accepts EITHER inline base64 (`filedata`) OR a public
+  // URL (`url`). Periskope's /message/send treats both the same way;
+  // when `url` is set the worker hands it through and Periskope fetches
+  // the file itself. This is how template-media on mobile sends — the
+  // R2 URL stored on the template doesn't need to be re-downloaded.
   media?: {
     type: "image" | "video" | "audio" | "document";
     filename: string;
     mimetype: string;
-    filedata: string; // base64
+    filedata?: string; // base64 — used by upload-then-send paths
+    url?: string;      // public URL — used by template-media path
   };
   // v1.153 reply / quote. When set, the worker passes
   // reply_to_message_id to Periskope and stores a snapshot of the parent
