@@ -34,3 +34,5 @@ bucket_name = "commoncomm-dm-media"
 #   wrangler secret put FIREBASE_DB_SECRET
 #   wrangler secret put CLAUDE_API_KEY      (for /summarize, /suggest-reply)
 #   wrangler secret put EXPO_ACCESS_TOKEN   (optional, raises mobile push rate limits)
+#   wrangler secret put GROQ_API_KEY        (v1.226+, for /sa-upload server-side
+#                                            transcription. Get from console.groq.com)

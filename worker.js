@@ -161,6 +161,25 @@ export default {
       if (url.pathname.startsWith("/template-media/") && request.method === "GET") {
         return cors(env, await handleTemplateMediaGet(request, env));
       }
+      // v1.226: strength-assessment session endpoints. Upload an MP3 →
+      // worker writes to R2 + Firebase, returns sessionId, then runs the
+      // Groq transcription in the background via ctx.waitUntil so the
+      // browser doesn't have to hold the connection open for what could
+      // be several minutes of audio. Reads are public so the in-app
+      // player can stream from the URL without auth. Retry/delete are
+      // separate endpoints for failed-state recovery.
+      if (url.pathname === "/sa-upload" && request.method === "POST") {
+        return cors(env, await handleSaUpload(request, env, ctx));
+      }
+      if (url.pathname === "/sa-retranscribe" && request.method === "POST") {
+        return cors(env, await handleSaRetranscribe(request, env, ctx));
+      }
+      if (url.pathname === "/sa-delete" && request.method === "POST") {
+        return cors(env, await handleSaDelete(request, env));
+      }
+      if (url.pathname.startsWith("/sa-media/") && request.method === "GET") {
+        return cors(env, await handleSaMediaGet(request, env));
+      }
       if (url.pathname.startsWith("/dm-media/") && request.method === "GET") {
         return cors(env, await handleDmMediaGet(request, env));
       }
@@ -1952,6 +1971,295 @@ async function handleTemplateMediaGet(request, env) {
     key = decodeURIComponent(url.pathname.replace(/^\/template-media\//, ""));
   } catch {
     key = url.pathname.replace(/^\/template-media\//, "");
+  }
+  if (!key) return new Response("missing key", { status: 400 });
+  const rangeHeader = request.headers.get("Range");
+  let r2Options;
+  if (rangeHeader) {
+    const m = rangeHeader.match(/bytes=(\d+)-(\d*)/);
+    if (m) {
+      const offset = parseInt(m[1], 10);
+      const end = m[2] ? parseInt(m[2], 10) : undefined;
+      r2Options = { range: end !== undefined ? { offset, length: end - offset + 1 } : { offset } };
+    }
+  }
+  const object = r2Options
+    ? await env.DM_MEDIA.get(key, r2Options)
+    : await env.DM_MEDIA.get(key);
+  if (!object) return new Response("not found", { status: 404 });
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set("Cache-Control", object.httpMetadata?.cacheControl || "public, max-age=31536000, immutable");
+  headers.set("Accept-Ranges", "bytes");
+  headers.set("ETag", object.httpEtag);
+  if (object.range) {
+    const start = object.range.offset || 0;
+    const len = object.range.length ?? (object.size - start);
+    const endByte = start + len - 1;
+    headers.set("Content-Range", `bytes ${start}-${endByte}/${object.size}`);
+    headers.set("Content-Length", String(len));
+    return new Response(object.body, { status: 206, headers });
+  }
+  headers.set("Content-Length", String(object.size));
+  return new Response(object.body, { status: 200, headers });
+}
+
+// ---------- /sa-upload, /sa-retranscribe, /sa-delete, /sa-media ----------
+// v1.226. Strength-Assessment session recordings. Trainer uploads an MP3
+// (or other audio) of a customer SA → worker stores it in R2 and writes
+// a Firebase saSession record with status="queued" → then transcribes
+// the audio in the BACKGROUND (ctx.waitUntil) so the browser doesn't
+// hold the connection open for what could be minutes of audio. The UI
+// watches /commonComm/chats/{chatKey}/saSessions via a regular onValue
+// listener; the status field flips queued → transcribing → ready/failed
+// and the transcript appears when the work completes.
+//
+// Why server-side transcription instead of browser-side (which is what
+// the voice-note flow uses today): voice notes are short (≤30s) and the
+// browser is happy to wait. SA sessions are 30–60 min. If the trainer
+// closes the tab mid-transcription, browser-side would lose the work.
+// Server-side keeps going even after the browser leaves.
+//
+// File size cap: 25 MB (Groq Whisper's per-request ceiling). At
+// 64 kbps mono MP3 that's roughly 50 minutes of speech. Longer sessions
+// need to be recorded at lower bitrate or split into chunks — a chunked
+// transcription path is a v2 add when someone hits the limit.
+
+const SA_MEDIA_MAX_BYTES = 25 * 1024 * 1024; // matches Groq Whisper cap
+const SA_GROQ_MODEL = "whisper-large-v3";
+
+// Multipart upload. Form fields:
+//   file               — the audio blob
+//   chatKey            — Firebase chat key the session belongs to
+//   uploadedByUid      — trainer's UID (for the audit record)
+//   uploadedByName     — trainer's display name (denormalized)
+//   sessionAt          — optional epoch-ms when the SA actually happened
+//                        (defaults to now)
+// Returns: { ok, sessionId, audioUrl, key }
+async function handleSaUpload(request, env, ctx) {
+  if (!env.DM_MEDIA) {
+    return json({ error: "R2 bucket DM_MEDIA not bound" }, 500);
+  }
+  if (!env.GROQ_API_KEY) {
+    return json({
+      error: "GROQ_API_KEY not set",
+      hint: "Run: wrangler secret put GROQ_API_KEY",
+    }, 500);
+  }
+  let form;
+  try {
+    form = await request.formData();
+  } catch (e) {
+    return json({ error: "bad multipart: " + String(e?.message || e) }, 400);
+  }
+  const file = form.get("file");
+  const chatKey = String(form.get("chatKey") || "");
+  const uploadedByUid = String(form.get("uploadedByUid") || "");
+  const uploadedByName = String(form.get("uploadedByName") || "");
+  const sessionAtRaw = form.get("sessionAt");
+  const sessionAt = sessionAtRaw ? Number(sessionAtRaw) : Date.now();
+
+  if (!file || typeof file === "string") return json({ error: "missing file" }, 400);
+  if (!chatKey) return json({ error: "missing chatKey" }, 400);
+  if (!uploadedByUid) return json({ error: "missing uploadedByUid" }, 400);
+  // Path-walk guard.
+  if (/[\/\\.]/.test(chatKey.replace(/_/g, ""))) {
+    return json({ error: "bad chatKey" }, 400);
+  }
+  if (file.size > SA_MEDIA_MAX_BYTES) {
+    return json({
+      error: `file too large (>${SA_MEDIA_MAX_BYTES / 1024 / 1024} MB). For longer recordings, export at 64 kbps mono MP3 or split into smaller chunks.`,
+    }, 413);
+  }
+
+  // Generate a sessionId via Firebase push so it sorts chronologically
+  // when listed (Firebase push keys are timestamp-prefixed). Doing it via
+  // an actual push gives us a globally-unique key without any client
+  // coordination.
+  const pushed = await fbPush(env, `${ROOT}/chats/${encodeKey(chatKey)}/saSessions`, {
+    placeholder: true,
+  });
+  const sessionId = pushed?.name;
+  if (!sessionId) {
+    return json({ error: "couldn't allocate sessionId" }, 500);
+  }
+
+  const safeName =
+    String(file.name || "session.mp3")
+      .normalize("NFKD")
+      .replace(/[^A-Za-z0-9._-]/g, "_")
+      .replace(/_+/g, "_")
+      .slice(0, 200) || "session.mp3";
+  const key = `sa-sessions/${chatKey}/${sessionId}/${safeName}`;
+
+  // Buffer the bytes here so we can both (a) put to R2 and (b) hand them
+  // to the background transcribe task without re-fetching from R2.
+  let bytes;
+  try {
+    bytes = await file.arrayBuffer();
+    await env.DM_MEDIA.put(key, bytes, {
+      httpMetadata: {
+        contentType: file.type || "audio/mpeg",
+        cacheControl: "public, max-age=31536000, immutable",
+      },
+    });
+  } catch (e) {
+    // Roll back the placeholder record we just created so the UI doesn't
+    // show a phantom "queued" row that never moves.
+    await fbPut(env, `${ROOT}/chats/${encodeKey(chatKey)}/saSessions/${sessionId}`, null);
+    return json({ error: "r2 put failed: " + String(e?.message || e) }, 500);
+  }
+
+  const origin = new URL(request.url).origin;
+  const audioUrl = `${origin}/sa-media/${key}`;
+  const audioFileName = safeName;
+  const sizeBytes = file.size;
+  const mimeType = file.type || "audio/mpeg";
+
+  // Overwrite the placeholder with the real record. status="queued" is
+  // the contract with the UI listener — render the row in "uploading…"
+  // state until it flips to "transcribing" → "ready" / "failed".
+  const record = {
+    audioUrl,
+    audioFileName,
+    sizeBytes,
+    mimeType,
+    sessionAt,
+    uploadedAt: Date.now(),
+    uploadedByUid,
+    uploadedByName: uploadedByName || null,
+    status: "queued",
+    groqModel: SA_GROQ_MODEL,
+  };
+  await fbPut(env, `${ROOT}/chats/${encodeKey(chatKey)}/saSessions/${sessionId}`, record);
+
+  // Fire-and-forget background transcription. ctx.waitUntil keeps the
+  // worker alive past the response return so the Groq call can finish.
+  ctx.waitUntil(transcribeSaSession(env, chatKey, sessionId, bytes, mimeType, audioFileName));
+
+  return json({ ok: true, sessionId, audioUrl, key });
+}
+
+// Background transcription job. Reads the audio bytes (already in memory
+// from the upload), POSTs to Groq's audio/transcriptions endpoint, and
+// patches the Firebase saSession record with the result. Never throws —
+// every failure path patches status="failed" with an error message so
+// the UI can surface a Retry button.
+async function transcribeSaSession(env, chatKey, sessionId, bytes, mimeType, fileName) {
+  const path = `${ROOT}/chats/${encodeKey(chatKey)}/saSessions/${sessionId}`;
+  const startedAt = Date.now();
+  try {
+    await fbPatch(env, path, { status: "transcribing", transcribeStartedAt: startedAt });
+
+    // Groq's API expects multipart/form-data; we reconstruct from bytes.
+    const form = new FormData();
+    form.append("file", new Blob([bytes], { type: mimeType || "audio/mpeg" }), fileName || "session.mp3");
+    form.append("model", SA_GROQ_MODEL);
+    form.append("response_format", "verbose_json"); // gets us text + segments
+    form.append("temperature", "0");                // deterministic
+
+    const groqRes = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.GROQ_API_KEY}`,
+      },
+      body: form,
+    });
+    const groqJson = await safeJson(groqRes);
+    if (!groqRes.ok) {
+      await fbPatch(env, path, {
+        status: "failed",
+        transcriptError: `Groq ${groqRes.status}: ${JSON.stringify(groqJson).slice(0, 500)}`,
+        transcribeFinishedAt: Date.now(),
+      });
+      return;
+    }
+    const transcript = String(groqJson?.text || "").trim();
+    const durationSec = typeof groqJson?.duration === "number" ? groqJson.duration : null;
+    if (!transcript) {
+      await fbPatch(env, path, {
+        status: "failed",
+        transcriptError: "Groq returned no text (no speech detected?)",
+        transcribeFinishedAt: Date.now(),
+      });
+      return;
+    }
+    await fbPatch(env, path, {
+      status: "ready",
+      transcript,
+      durationSec,
+      transcribeFinishedAt: Date.now(),
+      durationTranscribeMs: Date.now() - startedAt,
+    });
+  } catch (e) {
+    await fbPatch(env, path, {
+      status: "failed",
+      transcriptError: `worker error: ${String(e?.message || e).slice(0, 500)}`,
+      transcribeFinishedAt: Date.now(),
+    });
+  }
+}
+
+// Re-runs transcription for an existing session. Used by the "Retry"
+// button in the UI when status="failed". Body: { chatKey, sessionId }.
+async function handleSaRetranscribe(request, env, ctx) {
+  if (!env.GROQ_API_KEY) {
+    return json({ error: "GROQ_API_KEY not set" }, 500);
+  }
+  const body = await request.json().catch(() => ({}));
+  const chatKey = String(body?.chatKey || "");
+  const sessionId = String(body?.sessionId || "");
+  if (!chatKey || !sessionId) return json({ error: "missing chatKey or sessionId" }, 400);
+  const record = await fbGet(env, `${ROOT}/chats/${encodeKey(chatKey)}/saSessions/${sessionId}`);
+  if (!record) return json({ error: "session not found" }, 404);
+  // The R2 key is reconstructible from the audioUrl, but easier to derive
+  // from chatKey/sessionId/audioFileName since we control all three.
+  const safeName = String(record.audioFileName || "session.mp3");
+  const r2Key = `sa-sessions/${chatKey}/${sessionId}/${safeName}`;
+  const obj = await env.DM_MEDIA.get(r2Key);
+  if (!obj) return json({ error: "audio file missing from R2" }, 404);
+  const bytes = await obj.arrayBuffer();
+  ctx.waitUntil(transcribeSaSession(env, chatKey, sessionId, bytes, record.mimeType || "audio/mpeg", safeName));
+  await fbPatch(env, `${ROOT}/chats/${encodeKey(chatKey)}/saSessions/${sessionId}`, {
+    status: "queued",
+    transcriptError: null,
+  });
+  return json({ ok: true });
+}
+
+// Deletes both the Firebase record AND the R2 object. Body:
+// { chatKey, sessionId }. Idempotent — missing R2 object is a soft
+// failure (the Firebase delete still goes through).
+async function handleSaDelete(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const chatKey = String(body?.chatKey || "");
+  const sessionId = String(body?.sessionId || "");
+  if (!chatKey || !sessionId) return json({ error: "missing chatKey or sessionId" }, 400);
+  const record = await fbGet(env, `${ROOT}/chats/${encodeKey(chatKey)}/saSessions/${sessionId}`);
+  if (record) {
+    const safeName = String(record.audioFileName || "session.mp3");
+    const r2Key = `sa-sessions/${chatKey}/${sessionId}/${safeName}`;
+    try {
+      await env.DM_MEDIA.delete(r2Key);
+    } catch { /* swallow — Firebase delete is the source of truth */ }
+  }
+  await fbPut(env, `${ROOT}/chats/${encodeKey(chatKey)}/saSessions/${sessionId}`, null);
+  return json({ ok: true });
+}
+
+// GET /sa-media/<key> — streams the audio bytes from R2, supports Range
+// so HTML5 <audio> can seek without downloading the whole file. Mirror
+// of handleDmMediaGet with a different prefix strip.
+async function handleSaMediaGet(request, env) {
+  if (!env.DM_MEDIA) {
+    return new Response("R2 bucket DM_MEDIA not bound", { status: 500 });
+  }
+  const url = new URL(request.url);
+  let key;
+  try {
+    key = decodeURIComponent(url.pathname.replace(/^\/sa-media\//, ""));
+  } catch {
+    key = url.pathname.replace(/^\/sa-media\//, "");
   }
   if (!key) return new Response("missing key", { status: 400 });
   const rangeHeader = request.headers.get("Range");
