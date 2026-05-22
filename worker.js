@@ -171,6 +171,15 @@ export default {
       if (url.pathname === "/sa-upload" && request.method === "POST") {
         return cors(env, await handleSaUpload(request, env, ctx));
       }
+      // v1.233: chunked-upload path. Used by the browser when the source
+      // file exceeds 25 MB. Browser splits the file into WAV chunks
+      // (one full PCM decode + re-wrap, no compression) and uploads
+      // each chunk here in order. The final chunk's arrival triggers
+      // background transcribeMultipart() which iterates Groq calls
+      // and stitches transcripts into one.
+      if (url.pathname === "/sa-upload-chunk" && request.method === "POST") {
+        return cors(env, await handleSaUploadChunk(request, env, ctx));
+      }
       if (url.pathname === "/sa-retranscribe" && request.method === "POST") {
         return cors(env, await handleSaRetranscribe(request, env, ctx));
       }
@@ -2152,6 +2161,215 @@ async function handleSaUpload(request, env, ctx) {
   return json({ ok: true, sessionId, audioUrl, key });
 }
 
+// v1.233: chunked-upload endpoint for SA sessions larger than the
+// per-request 25 MB Groq cap. Browser splits the audio (decoded via
+// Web Audio API, re-wrapped as WAV at source sample rate) into
+// ~23 MB chunks and posts them here in order. Form fields:
+//   file              — the WAV chunk
+//   chatKey, uploadedByUid, uploadedByName, sessionAt — same as /sa-upload
+//   chunkIndex        — 0-based
+//   totalChunks       — total expected
+//   sessionId         — null/empty on chunk 0 (server generates), required afterwards
+//   originalFileName  — display name; required on chunk 0
+//   originalMimeType  — display mime; required on chunk 0
+//   originalSizeBytes — source file size (for display)
+//   totalDurationSec  — total audio duration (decoded, for display)
+async function handleSaUploadChunk(request, env, ctx) {
+  if (!env.DM_MEDIA) {
+    return json({ error: "R2 bucket DM_MEDIA not bound" }, 500);
+  }
+  if (!env.GROQ_API_KEY) {
+    return json({
+      error: "GROQ_API_KEY not set",
+      hint: "Run: wrangler secret put GROQ_API_KEY",
+    }, 500);
+  }
+  let form;
+  try {
+    form = await request.formData();
+  } catch (e) {
+    return json({ error: "bad multipart: " + String(e?.message || e) }, 400);
+  }
+  const file = form.get("file");
+  const chatKey = String(form.get("chatKey") || "");
+  const uploadedByUid = String(form.get("uploadedByUid") || "");
+  const uploadedByName = String(form.get("uploadedByName") || "");
+  const chunkIndex = parseInt(String(form.get("chunkIndex") || ""), 10);
+  const totalChunks = parseInt(String(form.get("totalChunks") || ""), 10);
+  let sessionId = String(form.get("sessionId") || "");
+
+  if (!file || typeof file === "string") return json({ error: "missing file" }, 400);
+  if (!chatKey) return json({ error: "missing chatKey" }, 400);
+  if (!uploadedByUid) return json({ error: "missing uploadedByUid" }, 400);
+  if (!Number.isFinite(chunkIndex) || chunkIndex < 0) return json({ error: "bad chunkIndex" }, 400);
+  if (!Number.isFinite(totalChunks) || totalChunks < 1 || totalChunks > 200) {
+    return json({ error: "bad totalChunks" }, 400);
+  }
+  if (chunkIndex >= totalChunks) return json({ error: "chunkIndex >= totalChunks" }, 400);
+  if (/[\/\\.]/.test(chatKey.replace(/_/g, ""))) {
+    return json({ error: "bad chatKey" }, 400);
+  }
+  // Per-chunk size cap — each chunk MUST fit Groq's 25 MB ceiling so
+  // the eventual transcription succeeds. Leave a little slack (25 MB
+  // sharp; the browser targets 23 MB on its side).
+  if (file.size > SA_MEDIA_MAX_BYTES) {
+    return json({ error: `chunk too large (>${SA_MEDIA_MAX_BYTES / 1024 / 1024} MB)` }, 413);
+  }
+
+  // First chunk path: allocate sessionId via Firebase push, create the
+  // saSession record with the original-file metadata. Subsequent chunks
+  // expect the client to pass that sessionId back.
+  if (chunkIndex === 0) {
+    if (sessionId) {
+      return json({ error: "chunkIndex 0 must NOT pre-supply sessionId" }, 400);
+    }
+    const pushed = await fbPush(env, `${ROOT}/chats/${encodeKey(chatKey)}/saSessions`, {
+      placeholder: true,
+    });
+    sessionId = pushed?.name || null;
+    if (!sessionId) return json({ error: "couldn't allocate sessionId" }, 500);
+  } else {
+    if (!sessionId) return json({ error: "missing sessionId on chunk > 0" }, 400);
+    // Light path-walk guard on caller-supplied sessionId.
+    if (/[\/\\.]/.test(sessionId)) return json({ error: "bad sessionId" }, 400);
+  }
+
+  // Zero-padded chunk index so R2 keys sort lexicographically in the
+  // same order Groq needs to transcribe them.
+  const padded = String(chunkIndex).padStart(3, "0");
+  const key = `sa-sessions/${chatKey}/${sessionId}/chunk-${padded}.wav`;
+  let bytes;
+  try {
+    bytes = await file.arrayBuffer();
+    await env.DM_MEDIA.put(key, bytes, {
+      httpMetadata: {
+        contentType: "audio/wav",
+        cacheControl: "public, max-age=31536000, immutable",
+      },
+    });
+  } catch (e) {
+    return json({ error: "r2 put failed: " + String(e?.message || e) }, 500);
+  }
+
+  const path = `${ROOT}/chats/${encodeKey(chatKey)}/saSessions/${sessionId}`;
+  if (chunkIndex === 0) {
+    // Initialize the saSession record with original-file metadata. The
+    // audioUrl is intentionally null for multipart uploads — playback
+    // would need to concatenate chunks, which is a future add. Trainers
+    // can re-listen to their own source file in the meantime.
+    const originalFileName = String(form.get("originalFileName") || "session");
+    const originalMimeType = String(form.get("originalMimeType") || "audio/wav");
+    const originalSizeBytes = Number(form.get("originalSizeBytes")) || file.size;
+    const totalDurationSec = Number(form.get("totalDurationSec")) || null;
+    const sessionAtRaw = form.get("sessionAt");
+    const sessionAt = sessionAtRaw ? Number(sessionAtRaw) : Date.now();
+    await fbPut(env, path, {
+      audioUrl: null,
+      audioFileName: originalFileName,
+      sizeBytes: originalSizeBytes,
+      mimeType: originalMimeType,
+      durationSec: totalDurationSec,
+      sessionAt,
+      uploadedAt: Date.now(),
+      uploadedByUid,
+      uploadedByName: uploadedByName || null,
+      status: `uploading 1/${totalChunks}`,
+      groqModel: SA_GROQ_MODEL,
+      multipart: { totalChunks, uploadedChunks: 1 },
+    });
+  } else {
+    // Patch progress. Read-then-write because Firebase RTDB doesn't have
+    // atomic increment — fine for our low concurrency.
+    await fbPatch(env, path, {
+      status: `uploading ${chunkIndex + 1}/${totalChunks}`,
+      multipart: { totalChunks, uploadedChunks: chunkIndex + 1 },
+    });
+  }
+
+  // Last chunk arrived → flip status and kick off the multipart
+  // transcription job. ctx.waitUntil so the worker can return the
+  // response to the browser immediately while the Groq calls run.
+  if (chunkIndex === totalChunks - 1) {
+    await fbPatch(env, path, {
+      status: `queued`,
+      multipart: { totalChunks, uploadedChunks: totalChunks },
+    });
+    ctx.waitUntil(transcribeMultipart(env, chatKey, sessionId, totalChunks));
+  }
+
+  return json({ ok: true, sessionId, chunkIndex, totalChunks });
+}
+
+// Background multipart transcription job. Iterates the chunks stored
+// at sa-sessions/{chatKey}/{sessionId}/chunk-NNN.wav, transcribes each
+// through Groq Whisper, stitches the result texts together (with a
+// single space separator — Whisper output for adjacent audio segments
+// reads naturally without explicit boundaries). Patches the saSession
+// record as it progresses so the UI shows live "transcribing 5/12"
+// state, then flips to "ready" with the full text.
+//
+// Failure handling: a single chunk failure marks the whole session
+// "failed" with the error message. Retry re-runs the entire job from
+// chunk 0 — Groq calls are stateless so re-runs are safe.
+async function transcribeMultipart(env, chatKey, sessionId, totalChunks) {
+  const path = `${ROOT}/chats/${encodeKey(chatKey)}/saSessions/${sessionId}`;
+  const startedAt = Date.now();
+  try {
+    const pieces = [];
+    for (let i = 0; i < totalChunks; i++) {
+      await fbPatch(env, path, {
+        status: `transcribing ${i + 1}/${totalChunks}`,
+        transcribeStartedAt: i === 0 ? startedAt : undefined,
+      });
+      const padded = String(i).padStart(3, "0");
+      const r2Key = `sa-sessions/${chatKey}/${sessionId}/chunk-${padded}.wav`;
+      const obj = await env.DM_MEDIA.get(r2Key);
+      if (!obj) throw new Error(`chunk ${i} missing from R2 (${r2Key})`);
+      const bytes = await obj.arrayBuffer();
+      const form = new FormData();
+      form.append("file", new Blob([bytes], { type: "audio/wav" }), `chunk-${padded}.wav`);
+      form.append("model", SA_GROQ_MODEL);
+      form.append("response_format", "verbose_json");
+      form.append("temperature", "0");
+      const groqRes = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${env.GROQ_API_KEY}` },
+        body: form,
+      });
+      const groqJson = await safeJson(groqRes);
+      if (!groqRes.ok) {
+        throw new Error(`Groq ${groqRes.status} on chunk ${i + 1}/${totalChunks}: ${JSON.stringify(groqJson).slice(0, 300)}`);
+      }
+      const piece = String(groqJson?.text || "").trim();
+      pieces.push(piece);
+    }
+    // Stitch — single space between pieces. Groq transcripts already
+    // end with sentence-final punctuation in most cases; a space avoids
+    // double-spacing while still letting adjacent words breathe.
+    const full = pieces.filter(Boolean).join(" ").trim();
+    if (!full) {
+      await fbPatch(env, path, {
+        status: "failed",
+        transcriptError: "Groq returned no text across all chunks (no speech detected?)",
+        transcribeFinishedAt: Date.now(),
+      });
+      return;
+    }
+    await fbPatch(env, path, {
+      status: "ready",
+      transcript: full,
+      transcribeFinishedAt: Date.now(),
+      durationTranscribeMs: Date.now() - startedAt,
+    });
+  } catch (e) {
+    await fbPatch(env, path, {
+      status: "failed",
+      transcriptError: `multipart error: ${String(e?.message || e).slice(0, 500)}`,
+      transcribeFinishedAt: Date.now(),
+    });
+  }
+}
+
 // Background transcription job. Reads the audio bytes (already in memory
 // from the upload), POSTs to Groq's audio/transcriptions endpoint, and
 // patches the Firebase saSession record with the result. Never throws —
@@ -2224,8 +2442,22 @@ async function handleSaRetranscribe(request, env, ctx) {
   if (!chatKey || !sessionId) return json({ error: "missing chatKey or sessionId" }, 400);
   const record = await fbGet(env, `${ROOT}/chats/${encodeKey(chatKey)}/saSessions/${sessionId}`);
   if (!record) return json({ error: "session not found" }, 404);
-  // The R2 key is reconstructible from the audioUrl, but easier to derive
-  // from chatKey/sessionId/audioFileName since we control all three.
+  // v1.233: branch on single-file vs multipart. Multipart sessions have
+  // their chunks at sa-sessions/{chatKey}/{sessionId}/chunk-NNN.wav and
+  // are handled by transcribeMultipart; single-file by transcribeSaSession.
+  if (record.multipart && record.multipart.totalChunks) {
+    await fbPatch(env, `${ROOT}/chats/${encodeKey(chatKey)}/saSessions/${sessionId}`, {
+      status: "queued",
+      transcriptError: null,
+    });
+    ctx.waitUntil(
+      transcribeMultipart(env, chatKey, sessionId, record.multipart.totalChunks),
+    );
+    return json({ ok: true });
+  }
+  // Single-file path (original /sa-upload flow). The R2 key is
+  // reconstructible from chatKey/sessionId/audioFileName since we
+  // control all three.
   const safeName = String(record.audioFileName || "session.mp3");
   const r2Key = `sa-sessions/${chatKey}/${sessionId}/${safeName}`;
   const obj = await env.DM_MEDIA.get(r2Key);
@@ -2249,11 +2481,23 @@ async function handleSaDelete(request, env) {
   if (!chatKey || !sessionId) return json({ error: "missing chatKey or sessionId" }, 400);
   const record = await fbGet(env, `${ROOT}/chats/${encodeKey(chatKey)}/saSessions/${sessionId}`);
   if (record) {
-    const safeName = String(record.audioFileName || "session.mp3");
-    const r2Key = `sa-sessions/${chatKey}/${sessionId}/${safeName}`;
-    try {
-      await env.DM_MEDIA.delete(r2Key);
-    } catch { /* swallow — Firebase delete is the source of truth */ }
+    // v1.233: clean up either the single-file or all chunk files,
+    // depending on the session shape.
+    if (record.multipart && record.multipart.totalChunks) {
+      for (let i = 0; i < record.multipart.totalChunks; i++) {
+        const padded = String(i).padStart(3, "0");
+        const r2Key = `sa-sessions/${chatKey}/${sessionId}/chunk-${padded}.wav`;
+        try {
+          await env.DM_MEDIA.delete(r2Key);
+        } catch { /* swallow */ }
+      }
+    } else {
+      const safeName = String(record.audioFileName || "session.mp3");
+      const r2Key = `sa-sessions/${chatKey}/${sessionId}/${safeName}`;
+      try {
+        await env.DM_MEDIA.delete(r2Key);
+      } catch { /* swallow — Firebase delete is the source of truth */ }
+    }
   }
   await fbPut(env, `${ROOT}/chats/${encodeKey(chatKey)}/saSessions/${sessionId}`, null);
   return json({ ok: true });
