@@ -31,3 +31,35 @@ export function makeVoiceNoteRecordingOptions(audioMod: any) {
     },
   };
 }
+
+// v1.236: SA session recording options. Higher bitrate than voice notes
+// because (1) SAs run 30–60 min so the file IS the conversation record,
+// not just a transcription crutch — trainers may listen back; (2) we have
+// the budget for it at 48 kbps mono (≈ 21 MB / 60 min, well under Groq's
+// 25 MB single-request cap so no chunking needed); (3) the slightly
+// higher sample rate (22.05 kHz vs 16 kHz) gives Whisper a touch more
+// signal in noisy gym environments without changing anything downstream.
+//
+// Per design conversation: mono only (single mic mix), no stereo channel
+// separation — speaker labels are inferred later by AI consumers if/when
+// needed.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function makeSaRecordingOptions(audioMod: any) {
+  return {
+    extension: ".m4a",
+    sampleRate: 22050,
+    numberOfChannels: 1,
+    bitRate: 48000,
+    android: {
+      outputFormat: "mpeg4",
+      audioEncoder: "aac",
+    },
+    ios: {
+      outputFormat: audioMod.IOSOutputFormat.MPEG4AAC,
+      audioQuality: audioMod.AudioQuality.MEDIUM,
+      linearPCMBitDepth: 16,
+      linearPCMIsBigEndian: false,
+      linearPCMIsFloat: false,
+    },
+  };
+}

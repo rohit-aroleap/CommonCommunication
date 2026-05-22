@@ -15,6 +15,7 @@ import {
   View,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
+import { Modal } from "react-native";
 import { onValue, push, ref, set } from "firebase/database";
 import { db } from "@/firebase";
 import { ROOT } from "@/config";
@@ -24,8 +25,11 @@ import { useAuth } from "@/auth/AuthContext";
 import { resolveDisplayName } from "@/lib/displayName";
 import { chatKeyToChatId } from "@/lib/encodeKey";
 import { getFerraUserByPhone, normalizeFerraPhone } from "@/lib/ferra";
-import { transcribeAudio } from "@/lib/worker";
-import { makeVoiceNoteRecordingOptions } from "@/lib/voiceRecording";
+import { transcribeAudio, uploadSaRecording } from "@/lib/worker";
+import {
+  makeSaRecordingOptions,
+  makeVoiceNoteRecordingOptions,
+} from "@/lib/voiceRecording";
 import { FERRA_TAG_STAGE } from "@/config";
 import type { Ticket } from "@/types";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
@@ -156,6 +160,53 @@ export function CustomerInfoScreen({ route, navigation }: Props) {
     });
     return unsub;
   }, [chatKey]);
+
+  // v1.236: SA sessions for this customer. Same Firebase node the
+  // desktop SA Sessions panel reads from (chats/{chatKey}/saSessions),
+  // so any session created from either surface shows up everywhere
+  // without further sync work. Status field flips queued → transcribing
+  // → ready/failed via the worker's background job — onValue picks each
+  // update up in real time.
+  const [saSessions, setSaSessions] = useState<
+    Array<{
+      id: string;
+      audioUrl?: string | null;
+      audioFileName?: string;
+      sizeBytes?: number;
+      durationSec?: number | null;
+      sessionAt?: number;
+      uploadedAt?: number;
+      uploadedByName?: string | null;
+      status?: string;
+      transcript?: string;
+      transcriptError?: string;
+      multipart?: { totalChunks?: number; uploadedChunks?: number };
+    }>
+  >([]);
+  useEffect(() => {
+    const saRef = ref(db, `${ROOT}/chats/${chatKey}/saSessions`);
+    const unsub = onValue(saRef, (snap) => {
+      const v = snap.val() || {};
+      const list = Object.entries(
+        v as Record<string, Record<string, unknown>>,
+      )
+        .filter(([, s]) => s && !s.placeholder)
+        .map(([id, s]) => ({ id, ...s } as (typeof saSessions)[number]));
+      list.sort(
+        (a, b) =>
+          (b.sessionAt || b.uploadedAt || 0) - (a.sessionAt || a.uploadedAt || 0),
+      );
+      setSaSessions(list);
+    });
+    return unsub;
+  }, [chatKey]);
+
+  // SA recording modal visibility + upload state. Recording itself lives
+  // inside the modal component so the recorder lifecycle is bounded by
+  // the modal mount — no zombie recorders when the trainer navigates
+  // away mid-session.
+  const [saModalOpen, setSaModalOpen] = useState(false);
+  const [saUploading, setSaUploading] = useState(false);
 
   // Add-note state machine.
   //   composing    — input box is open (otherwise just the "+ Add note" trigger)
@@ -354,6 +405,41 @@ export function CustomerInfoScreen({ route, navigation }: Props) {
           >
             <Text style={styles.copyBtnTxt}>📋 Copy address</Text>
           </TouchableOpacity>
+        </View>
+      )}
+
+      {/* v1.236: Strength Assessment recording section. Tap "Start SA
+          Recording" → full-screen modal records audio (background-safe),
+          uploads on stop to the worker's /sa-upload endpoint. The list
+          below mirrors the desktop SA Sessions panel — same Firebase
+          node, same status states. Hidden in group chats since SAs are
+          per-customer, not per-group. */}
+      {!isGroup && audioMod && (
+        <View style={styles.section}>
+          <View style={styles.notesHeader}>
+            <Text style={styles.sectionTitle}>
+              🎙️ STRENGTH ASSESSMENT ({saSessions.length})
+            </Text>
+          </View>
+          <TouchableOpacity
+            onPress={() => setSaModalOpen(true)}
+            style={styles.saStartBtn}
+            disabled={saUploading}
+            accessibilityLabel="Start strength assessment recording"
+          >
+            {saUploading ? (
+              <ActivityIndicator color="white" />
+            ) : (
+              <Text style={styles.saStartBtnTxt}>▶ Start SA Recording</Text>
+            )}
+          </TouchableOpacity>
+          {saSessions.length === 0 ? (
+            <Text style={styles.saEmpty}>
+              No sessions yet. Tap to record this customer's first SA.
+            </Text>
+          ) : (
+            saSessions.map((s) => <SaSessionRow key={s.id} session={s} />)
+          )}
         </View>
       )}
 
@@ -594,6 +680,32 @@ export function CustomerInfoScreen({ route, navigation }: Props) {
       )}
 
       <View style={styles.bottomPad} />
+
+      {/* v1.236: SA recording modal. Mounted at the end of the
+          ScrollView (above it in the visual stack via Modal's portal).
+          Only rendered when expo-audio loaded — old binaries skip the
+          whole feature instead of crashing on the require. */}
+      {audioMod && (
+        <Modal
+          visible={saModalOpen}
+          animationType="slide"
+          onRequestClose={() => {
+            // Android hardware-back close. Disabled while uploading so
+            // the trainer can't accidentally lose the recording.
+            if (!saUploading) setSaModalOpen(false);
+          }}
+        >
+          <SaRecorderModal
+            chatKey={chatKey}
+            customerName={displayName}
+            uploadedByUid={user?.uid || ""}
+            uploadedByName={user?.displayName || user?.email || ""}
+            onClose={() => setSaModalOpen(false)}
+            onUploadStart={() => setSaUploading(true)}
+            onUploadEnd={() => setSaUploading(false)}
+          />
+        </Modal>
+      )}
     </ScrollView>
   );
 }
@@ -737,6 +849,403 @@ function Row({ k, v }: { k: string; v: string }) {
     <View style={styles.row}>
       <Text style={styles.rowK}>{k}</Text>
       <Text style={styles.rowV}>{v}</Text>
+    </View>
+  );
+}
+
+// v1.236: Compact status pill + transcript row for a single SA session,
+// rendered in the customer-info SA Sessions section. Matches the
+// desktop SA Sessions panel visually so trainers see the same shape on
+// both surfaces.
+function SaSessionRow({
+  session,
+}: {
+  session: {
+    id: string;
+    audioFileName?: string;
+    sizeBytes?: number;
+    durationSec?: number | null;
+    sessionAt?: number;
+    uploadedAt?: number;
+    uploadedByName?: string | null;
+    status?: string;
+    transcript?: string;
+    transcriptError?: string;
+  };
+}) {
+  const styles = useStyles(makeStyles);
+  const [expanded, setExpanded] = useState(false);
+  const s = session;
+  const dateStr = (() => {
+    const ts = s.sessionAt || s.uploadedAt;
+    if (!ts) return "";
+    const d = new Date(ts);
+    return d.toLocaleString();
+  })();
+  const dur = s.durationSec
+    ? `${Math.floor(s.durationSec / 60)}m ${Math.round(s.durationSec % 60)}s`
+    : "";
+  const sizeMB = s.sizeBytes ? `${(s.sizeBytes / 1024 / 1024).toFixed(1)} MB` : "";
+  const meta = [dur, sizeMB].filter(Boolean).join(" · ");
+  const status = String(s.status || "");
+  const isReady = status === "ready" && s.transcript;
+  const isFailed = status === "failed";
+  const isInProgress =
+    !isReady && !isFailed && status !== "";
+  let pillBg = "#e5e7eb", pillFg = "#374151", pillLabel = status || "—";
+  if (isReady) { pillBg = "#d1fae5"; pillFg = "#065f46"; pillLabel = "✓ ready"; }
+  else if (isFailed) { pillBg = "#fee2e2"; pillFg = "#991b1b"; pillLabel = "✕ failed"; }
+  else if (status.startsWith("uploading")) { pillBg = "#fef3c7"; pillFg = "#92400e"; pillLabel = status; }
+  else if (status.startsWith("transcribing")) { pillBg = "#dbeafe"; pillFg = "#1e3a8a"; pillLabel = status; }
+  else if (status === "queued") { pillBg = "#fef3c7"; pillFg = "#92400e"; pillLabel = "queued"; }
+  return (
+    <View style={styles.saRow}>
+      <View style={styles.saRowHead}>
+        <Text style={styles.saRowDate}>{dateStr || s.audioFileName || "Session"}</Text>
+        <View style={[styles.saPill, { backgroundColor: pillBg }]}>
+          <Text style={[styles.saPillTxt, { color: pillFg }]}>{pillLabel}</Text>
+        </View>
+      </View>
+      {meta ? <Text style={styles.saRowMeta}>{meta}</Text> : null}
+      {s.uploadedByName ? (
+        <Text style={styles.saRowMeta}>by {s.uploadedByName}</Text>
+      ) : null}
+      {isReady && s.transcript ? (
+        expanded ? (
+          <>
+            <Text style={styles.saTranscript} selectable>
+              {s.transcript}
+            </Text>
+            <View style={{ flexDirection: "row", gap: 12, marginTop: 6 }}>
+              <TouchableOpacity onPress={() => setExpanded(false)}>
+                <Text style={styles.saLink}>▲ Hide</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={async () => {
+                  await Clipboard.setStringAsync(s.transcript || "");
+                  Alert.alert("Copied transcript");
+                }}
+              >
+                <Text style={styles.saLink}>📋 Copy</Text>
+              </TouchableOpacity>
+            </View>
+          </>
+        ) : (
+          <>
+            <Text style={styles.saTranscriptPreview} numberOfLines={2}>
+              {s.transcript}
+            </Text>
+            <TouchableOpacity onPress={() => setExpanded(true)}>
+              <Text style={styles.saLink}>▼ Show full transcript</Text>
+            </TouchableOpacity>
+          </>
+        )
+      ) : null}
+      {isFailed ? (
+        <Text style={styles.saError}>
+          {s.transcriptError || "Transcription failed."}
+        </Text>
+      ) : null}
+      {isInProgress ? (
+        <Text style={styles.saRowMeta}>
+          ⏳ {status.startsWith("uploading")
+            ? "Uploading…"
+            : status.startsWith("transcribing")
+              ? "Transcribing — usually ~30s per minute of audio."
+              : "Queued…"}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+// v1.236: Full-screen SA recording modal. Owns the expo-audio recorder
+// lifecycle — created on mount, torn down on unmount. The trainer can
+// start / stop the recording from here; on stop, the file URI is
+// uploaded to the worker's /sa-upload endpoint via uploadSaRecording.
+// Auto-split: when the elapsed timer hits 60 min, the modal
+// transparently stops the current recording, fires the upload, and
+// immediately starts a new one with the same recorder instance. The
+// trainer sees "Part 2/2" pill once the second piece kicks in.
+function SaRecorderModal({
+  chatKey,
+  customerName,
+  uploadedByUid,
+  uploadedByName,
+  onClose,
+  onUploadStart,
+  onUploadEnd,
+}: {
+  chatKey: string;
+  customerName: string;
+  uploadedByUid: string;
+  uploadedByName: string;
+  onClose: () => void;
+  onUploadStart: () => void;
+  onUploadEnd: () => void;
+}) {
+  const styles = useStyles(makeStyles);
+  // The recorder lives for the modal's lifetime. Re-creating it on every
+  // start would defeat the prepareToRecordAsync warmup; expo-audio's
+  // useAudioRecorder is the right pattern.
+  const recorder = audioMod.useAudioRecorder(makeSaRecordingOptions(audioMod));
+  const recorderState = audioMod.useAudioRecorderState(recorder);
+  const isRecording = !!recorderState?.isRecording;
+
+  const [elapsedSec, setElapsedSec] = useState(0);
+  const [partIndex, setPartIndex] = useState(0); // 0 = first segment of a possibly-split session
+  const [uploading, setUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<string>("");
+
+  // 60-minute auto-split. Set as a constant so it's easy to tweak. The
+  // segmenting is done by stop-then-start; the recorder doesn't have a
+  // native "rotate file" API.
+  const AUTO_SPLIT_SEC = 60 * 60;
+
+  const startedAtRef = useRef<number | null>(null);
+  const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Prepare the recorder on mount; request mic permission if needed.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const perm = await audioMod.requestRecordingPermissionsAsync();
+        if (cancelled) return;
+        if (!perm.granted) {
+          Alert.alert(
+            "Microphone access denied",
+            "Enable microphone permission for CommonCommunication in your phone's Settings.",
+            [{ text: "OK", onPress: onClose }],
+          );
+          return;
+        }
+        // staysActiveInBackground keeps the recorder running when the
+        // app loses foreground — pairs with UIBackgroundModes audio
+        // (iOS) + foreground service (Android, expo-audio handles
+        // automatically given the FOREGROUND_SERVICE_MICROPHONE perm).
+        await audioMod.setAudioModeAsync({
+          allowsRecording: true,
+          playsInSilentMode: true,
+          shouldPlayInBackground: true,
+          staysActiveInBackground: true,
+        });
+        await recorder.prepareToRecordAsync();
+      } catch (e) {
+        if (cancelled) return;
+        Alert.alert(
+          "Couldn't initialise recorder",
+          String((e as Error)?.message || e),
+        );
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (tickRef.current) {
+        clearInterval(tickRef.current);
+        tickRef.current = null;
+      }
+    };
+  }, [recorder, onClose]);
+
+  // Upload a stopped recording. Returns when the worker has accepted
+  // the file (transcription continues in the background server-side).
+  async function uploadSegment(uri: string, segmentIndex: number) {
+    onUploadStart();
+    setUploading(true);
+    setUploadStatus(
+      segmentIndex > 0
+        ? `Uploading part ${segmentIndex + 1}…`
+        : "Uploading…",
+    );
+    try {
+      const fileName = `sa-${chatKey}-${Date.now()}-p${segmentIndex + 1}.m4a`;
+      const res = await uploadSaRecording({
+        fileUri: uri,
+        chatKey,
+        uploadedByUid,
+        uploadedByName,
+        fileName,
+      });
+      if (!res.ok) {
+        throw new Error(res.error || "upload failed");
+      }
+      setUploadStatus("✓ Uploaded. Transcribing in background…");
+    } catch (e) {
+      Alert.alert(
+        "Upload failed",
+        String((e as Error)?.message || e) +
+          "\n\nThe recording is still on the phone — close and reopen the modal to retry. (For now, this means data may be lost if the app is killed.)",
+      );
+      setUploadStatus("");
+    } finally {
+      onUploadEnd();
+      setUploading(false);
+    }
+  }
+
+  // Start recording. Resets timer, fires recorder.record(), starts the
+  // tick loop that drives the elapsed display + auto-split check.
+  async function start() {
+    try {
+      recorder.record();
+      startedAtRef.current = Date.now();
+      setElapsedSec(0);
+      tickRef.current = setInterval(() => {
+        const t = startedAtRef.current
+          ? Math.floor((Date.now() - startedAtRef.current) / 1000)
+          : 0;
+        setElapsedSec(t);
+        if (t >= AUTO_SPLIT_SEC) {
+          // Hit the 1-hour mark — rotate the file: stop, upload, start
+          // a fresh recording with an incremented part index.
+          autoSplit();
+        }
+      }, 1000);
+    } catch (e) {
+      Alert.alert(
+        "Couldn't start recording",
+        String((e as Error)?.message || e),
+      );
+    }
+  }
+
+  // Stop + upload the current segment without starting a new one (user
+  // pressed Stop).
+  async function stopAndUpload() {
+    if (tickRef.current) {
+      clearInterval(tickRef.current);
+      tickRef.current = null;
+    }
+    try {
+      await recorder.stop();
+      const uri = recorder.uri as string | undefined;
+      if (uri) {
+        await uploadSegment(uri, partIndex);
+      }
+    } catch (e) {
+      Alert.alert(
+        "Couldn't stop recording",
+        String((e as Error)?.message || e),
+      );
+    }
+  }
+
+  // Auto-split path. Stops the current segment, fires the upload (don't
+  // await — we want the next segment to start immediately), re-prepares
+  // the recorder, increments part index, restarts.
+  async function autoSplit() {
+    if (tickRef.current) {
+      clearInterval(tickRef.current);
+      tickRef.current = null;
+    }
+    try {
+      await recorder.stop();
+      const uri = recorder.uri as string | undefined;
+      if (uri) {
+        // Fire-and-forget the upload so it doesn't gate the next segment
+        // from starting. The next segment is the more time-sensitive
+        // operation; the previous one is already on disk.
+        uploadSegment(uri, partIndex).catch(() => {});
+      }
+      await recorder.prepareToRecordAsync();
+      setPartIndex((p) => p + 1);
+      await start();
+    } catch (e) {
+      Alert.alert(
+        "Auto-split failed",
+        String((e as Error)?.message || e),
+      );
+    }
+  }
+
+  // User pressed the Stop button — finalize, upload, close the modal.
+  async function onStop() {
+    await stopAndUpload();
+    onClose();
+  }
+
+  function formatElapsed(sec: number) {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }
+
+  return (
+    <View style={styles.saModalRoot}>
+      <View style={styles.saModalHeader}>
+        <Text style={styles.saModalTitle}>Strength Assessment</Text>
+        <Text style={styles.saModalSubtitle}>{customerName}</Text>
+      </View>
+
+      <View style={styles.saModalBody}>
+        <View
+          style={[
+            styles.saTimerCircle,
+            isRecording && styles.saTimerCircleRec,
+          ]}
+        >
+          <Text style={styles.saTimerText}>{formatElapsed(elapsedSec)}</Text>
+          <Text style={styles.saTimerLabel}>
+            {isRecording
+              ? partIndex > 0
+                ? `● Recording · Part ${partIndex + 1}`
+                : "● Recording"
+              : "Ready"}
+          </Text>
+        </View>
+
+        <Text style={styles.saHint}>
+          Keep this screen open. Audio keeps recording if the phone
+          locks. Recording auto-splits every hour.
+        </Text>
+
+        {uploadStatus ? (
+          <Text style={styles.saUploadStatus}>{uploadStatus}</Text>
+        ) : null}
+      </View>
+
+      <View style={styles.saModalActions}>
+        {!isRecording && elapsedSec === 0 ? (
+          <>
+            <TouchableOpacity
+              onPress={onClose}
+              style={[styles.saActionBtn, styles.saActionBtnSecondary]}
+              disabled={uploading}
+            >
+              <Text style={styles.saActionBtnSecondaryTxt}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={start}
+              style={[styles.saActionBtn, styles.saActionBtnStart]}
+              disabled={uploading}
+            >
+              <Text style={styles.saActionBtnStartTxt}>● Start</Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <TouchableOpacity
+            onPress={() => {
+              Alert.alert(
+                "Stop recording?",
+                "The recording will be uploaded for transcription.",
+                [
+                  { text: "Keep recording", style: "cancel" },
+                  { text: "Stop and save", onPress: onStop },
+                ],
+              );
+            }}
+            style={[styles.saActionBtn, styles.saActionBtnStop]}
+            disabled={uploading}
+          >
+            {uploading ? (
+              <ActivityIndicator color="white" />
+            ) : (
+              <Text style={styles.saActionBtnStopTxt}>■ Stop and save</Text>
+            )}
+          </TouchableOpacity>
+        )}
+      </View>
     </View>
   );
 }
@@ -939,5 +1448,194 @@ function makeStyles(colors: Colors) {
   },
   emptyTxt: { color: colors.muted, fontSize: 13, textAlign: "center" },
   bottomPad: { height: 40 },
+
+  // v1.236: SA Sessions section + recorder modal styles. Raw px values
+  // throughout — `space` from theme.ts is a constants object, not a
+  // function. Spacing scale follows the rest of the file (multiples of 4).
+  saStartBtn: {
+    backgroundColor: colors.green,
+    borderRadius: 10,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    alignItems: "center",
+    marginTop: 8,
+    marginBottom: 12,
+  },
+  saStartBtnTxt: {
+    color: "white",
+    fontWeight: "700",
+    fontSize: 15,
+  },
+  saEmpty: {
+    color: colors.muted,
+    fontSize: 13,
+    fontStyle: "italic",
+    marginTop: 4,
+  },
+  // Individual session row in the list under the Start button.
+  saRow: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+    paddingVertical: 10,
+  },
+  saRowHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flexWrap: "wrap",
+  },
+  saRowDate: {
+    color: colors.text,
+    fontWeight: "600",
+    fontSize: 13,
+    flex: 1,
+  },
+  saRowMeta: {
+    color: colors.muted,
+    fontSize: 11,
+    marginTop: 4,
+  },
+  saPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  saPillTxt: {
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  saTranscript: {
+    color: colors.text,
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 8,
+    padding: 10,
+    backgroundColor: colors.bg,
+    borderRadius: 8,
+  },
+  saTranscriptPreview: {
+    color: colors.muted,
+    fontSize: 12,
+    marginTop: 6,
+    lineHeight: 17,
+  },
+  saLink: {
+    color: colors.green,
+    fontSize: 12,
+    fontWeight: "600",
+    marginTop: 4,
+  },
+  saError: {
+    color: "#d9534f",
+    fontSize: 12,
+    marginTop: 6,
+  },
+
+  // Recorder modal — full-screen layout: title at top, big timer in
+  // the center, action buttons pinned to the bottom safe area.
+  saModalRoot: {
+    flex: 1,
+    backgroundColor: colors.bg,
+    paddingHorizontal: 20,
+    paddingTop: 60,
+    paddingBottom: 32,
+  },
+  saModalHeader: {
+    alignItems: "center",
+    marginBottom: 32,
+  },
+  saModalTitle: {
+    color: colors.text,
+    fontWeight: "700",
+    fontSize: 22,
+  },
+  saModalSubtitle: {
+    color: colors.muted,
+    fontSize: 14,
+    marginTop: 4,
+  },
+  saModalBody: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 24,
+  },
+  saTimerCircle: {
+    width: 220,
+    height: 220,
+    borderRadius: 110,
+    borderWidth: 4,
+    borderColor: colors.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  saTimerCircleRec: {
+    borderColor: "#d9534f",
+    backgroundColor: "rgba(217, 83, 79, 0.06)",
+  },
+  saTimerText: {
+    color: colors.text,
+    fontSize: 48,
+    fontWeight: "700",
+    fontVariant: ["tabular-nums"],
+  },
+  saTimerLabel: {
+    color: colors.muted,
+    fontSize: 13,
+    marginTop: 4,
+  },
+  saHint: {
+    color: colors.muted,
+    fontSize: 12,
+    textAlign: "center",
+    paddingHorizontal: 32,
+    lineHeight: 17,
+  },
+  saUploadStatus: {
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: "500",
+    textAlign: "center",
+  },
+  saModalActions: {
+    flexDirection: "row",
+    gap: 16,
+    justifyContent: "center",
+    paddingTop: 16,
+  },
+  saActionBtn: {
+    paddingVertical: 16,
+    paddingHorizontal: 32,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: 140,
+  },
+  saActionBtnSecondary: {
+    backgroundColor: "transparent",
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  saActionBtnSecondaryTxt: {
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  saActionBtnStart: {
+    backgroundColor: "#d9534f",
+  },
+  saActionBtnStartTxt: {
+    color: "white",
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  saActionBtnStop: {
+    backgroundColor: colors.text,
+  },
+  saActionBtnStopTxt: {
+    color: "white",
+    fontSize: 16,
+    fontWeight: "700",
+  },
   });
 }

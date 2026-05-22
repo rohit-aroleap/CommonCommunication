@@ -55,7 +55,13 @@ module.exports = ({ config }) => ({
       NSCameraUsageDescription:
         "Take a photo to send to a customer in a WhatsApp chat.",
       NSMicrophoneUsageDescription:
-        "Record a voice note to send to a customer in a WhatsApp chat.",
+        "Record a voice note or strength assessment session.",
+      // v1.236: declare audio as a background mode so SA recording keeps
+      // running when the trainer locks the phone or switches apps mid-
+      // session. Without this entry, iOS suspends audio capture the
+      // instant the app goes to background. Combined with expo-audio's
+      // staysActiveInBackground flag in setAudioModeAsync at runtime.
+      UIBackgroundModes: ["audio"],
     },
     // App Group entitlement so the host app and the WidgetKit extension
     // can share a UserDefaults suite. The widget reads the three unread
@@ -97,6 +103,16 @@ module.exports = ({ config }) => ({
       "READ_MEDIA_VIDEO",
       "READ_MEDIA_AUDIO",
       "RECORD_AUDIO",
+      // v1.236: foreground-service permissions for background SA
+      // recording on Android 14+. WAKE_LOCK keeps the CPU awake during
+      // long sessions so the recorder doesn't doze off. FOREGROUND_SERVICE
+      // is the umbrella permission; FOREGROUND_SERVICE_MICROPHONE is the
+      // typed sub-permission Android 14 requires when the service uses
+      // the mic. Without these the OS kills the recording the moment
+      // the app goes to background.
+      "WAKE_LOCK",
+      "FOREGROUND_SERVICE",
+      "FOREGROUND_SERVICE_MICROPHONE",
     ],
   },
   web: { favicon: "./assets/favicon.png" },

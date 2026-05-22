@@ -228,6 +228,51 @@ export async function refreshFerraNow(): Promise<{ ok: boolean }> {
   }
 }
 
+// v1.236: upload an SA session recording captured on the phone. Posts the
+// audio file to the worker's existing /sa-upload endpoint (same one used
+// by the desktop dashboard), which creates the saSession Firebase record,
+// stores the audio in R2, and kicks off the Groq Whisper transcription
+// job in the background. The trainer doesn't need to wait — the
+// transcript flips into the saSession panel via the existing Firebase
+// listener when it's ready.
+//
+// File size: with the 48 kbps mono AAC recording options + 60-min
+// auto-split, every individual upload is well under Groq's 25 MB cap.
+// No multipart / chunking complexity needed on the mobile side.
+export async function uploadSaRecording(body: {
+  fileUri: string;
+  chatKey: string;
+  uploadedByUid: string;
+  uploadedByName: string;
+  fileName?: string;
+}): Promise<{ ok: boolean; sessionId?: string; error?: string }> {
+  try {
+    const form = new FormData();
+    // expo-audio writes to a file:// path. FormData on React Native
+    // accepts the { uri, name, type } shape and uploads as multipart.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    form.append("file", {
+      uri: body.fileUri,
+      name: body.fileName || "sa-session.m4a",
+      type: "audio/mp4",
+    } as any);
+    form.append("chatKey", body.chatKey);
+    form.append("uploadedByUid", body.uploadedByUid);
+    form.append("uploadedByName", body.uploadedByName);
+    const r = await fetch(`${WORKER_URL}/sa-upload`, {
+      method: "POST",
+      body: form,
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j?.ok === false) {
+      return { ok: false, error: j?.error || `HTTP ${r.status}` };
+    }
+    return { ok: true, sessionId: j?.sessionId };
+  } catch (e) {
+    return { ok: false, error: String((e as Error)?.message || e) };
+  }
+}
+
 // v1.205: notify a teammate that they've just been assigned a ticket.
 // Called from CreateTicketModal (type: "created") and ReassignModal
 // (type: "reassigned"). The worker skips the push if assigneeUid ===
