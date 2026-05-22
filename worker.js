@@ -321,7 +321,14 @@ async function handleSend(request, env) {
   // field names — Periskope's REST docs aren't public, so we send the
   // most-likely one and the build comment for the next round if it
   // doesn't pop. reply_to_message_id is what WhatsApp's Cloud API uses.
-  if (body.replyTo?.periskopeMsgId) {
+  // v1.232: skip the Periskope reply_to_message_id when this is a
+  // CROSS-CHAT reply (e.g., "Reply privately to customer" jumps from a
+  // group to a 1:1 thread). WhatsApp can't natively quote a message
+  // from a different chat, so passing a foreign message_id would
+  // either be rejected or silently ignored. The reply context lives
+  // only on our own bubble's replyTo snapshot in that case — the
+  // customer sees just the trainer's text in the 1:1.
+  if (body.replyTo?.periskopeMsgId && !body.replyTo?.sourceChatKey) {
     periskopeBody.reply_to_message_id = body.replyTo.periskopeMsgId;
   }
   const periskopeRes = await fetch(`${PERISKOPE_BASE}/message/send`, {
@@ -377,6 +384,11 @@ async function handleSend(request, env) {
       text: String(body.replyTo.text || "").slice(0, 500),
       isFromMe: !!body.replyTo.isFromMe,
       senderName: body.replyTo.senderName || null,
+      // v1.232: cross-chat reply context. When set, the bubble renderer
+      // deep-links the quoted card to this chat key instead of trying to
+      // scroll within the current thread. Origin is the "Reply privately
+      // to customer from group" flow.
+      ...(body.replyTo.sourceChatKey ? { sourceChatKey: body.replyTo.sourceChatKey } : {}),
     };
   }
 

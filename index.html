@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.231</title>
+<title>CommonCommunication v1.232</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -165,18 +165,18 @@
 
   /* v1.172 filters button + popover. The popover floats from the rail's
      right edge over the chat-list area when open.
-     v1.231: removed the `margin-top: auto` that pushed this button to
+     v1.232: removed the `margin-top: auto` that pushed this button to
      the bottom of the rail — trainers found the orphaned bottom-left
      icon hard to associate with the chat list, so the button now sits
      right below Team in the nav cluster (DOM order moved to match). */
   .rail-filters.has-filter .rail-dot { display: block; }
   .rail-filters.active { background: var(--hover); }
-  /* v1.231: stages button is a parallel button to the filter button.
+  /* v1.232: stages button is a parallel button to the filter button.
      Same has-filter / active styling so the two read as a matched
      pair in the rail. */
   .rail-stages.has-filter .rail-dot { display: block; }
   .rail-stages.active { background: var(--hover); }
-  /* v1.231: per-stage quick-access buttons. Each renders a 2-3 letter
+  /* v1.232: per-stage quick-access buttons. Each renders a 2-3 letter
      abbreviation rather than an emoji because the 5 stages don't have
      unambiguous emoji representations (and small emojis at this size
      would read as noise). Default state: subtle bg-tinted-with-stage-
@@ -212,7 +212,7 @@
   }
   .filter-popover {
     position: fixed;
-    /* v1.231: anchored to the TOP of the viewport now that the 🎚️
+    /* v1.232: anchored to the TOP of the viewport now that the 🎚️
        button moved up into the nav cluster below Team. Top:96px puts
        the popover just below the topbar and roughly level with the
        button itself; left:64px keeps it flush against the rail's right
@@ -231,7 +231,7 @@
     display: none;
   }
   .filter-popover.visible { display: block; }
-  /* v1.231: stage popover is a sibling popover anchored ~50px lower
+  /* v1.232: stage popover is a sibling popover anchored ~50px lower
      than the filter popover so it visually floats next to its OWN rail
      button (one row down from the filter button). Same chrome
      otherwise — same border, shadow, width, etc. */
@@ -478,7 +478,7 @@
     background: var(--green); color: white; border-color: var(--green);
     font-weight: 600;
   }
-  /* v1.231: team-tag chip row. Chips sit between the .head row and the
+  /* v1.232: team-tag chip row. Chips sit between the .head row and the
      .body (phone pills) row so admins read top-to-bottom as
      identity → role permissions → contact details. Each chip is a
      pill-shaped toggle — same visual language as the Limited pill but
@@ -991,6 +991,10 @@
     font-size: 12px;
   }
   .bubble .reply-quote .label { color: var(--green-dark); font-weight: 600; font-size: 11px; }
+  /* v1.232: "· from {chat}" suffix on cross-chat reply quotes — lighter
+     weight than the main label so the source-chat info reads as
+     metadata, not as part of the speaker name. */
+  .bubble .reply-quote .label .reply-src { color: var(--muted); font-weight: 400; }
   .bubble .reply-quote .quoted-text {
     color: var(--muted);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -1980,7 +1984,7 @@
       </button>
       <div id="emailLoginError" style="color:#d9534f; font-size:12px; min-height:14px; text-align:center;"></div>
     </form>
-    <div class="login-version" id="loginVersionLabel">v1.231</div>
+    <div class="login-version" id="loginVersionLabel">v1.232</div>
   </div>
 </div>
 
@@ -1988,7 +1992,7 @@
 <div id="app">
   <div class="topbar">
     <span class="brand">CommonCommunication</span>
-    <span class="ver" id="headerVersionLabel">v1.231</span>
+    <span class="ver" id="headerVersionLabel">v1.232</span>
     <span class="spacer"></span>
     <span id="ferraSyncStatus" style="font-size:11px; opacity:.7; margin-right:8px;">Ferra: …</span>
     <button id="ferraRefreshBtn" class="logout" style="display:none; margin-right:8px; padding:2px 8px;" title="Refresh Ferra data now">↻</button>
@@ -2036,14 +2040,14 @@
         <span class="rail-icon">👥</span>
         <span class="rail-badge" id="teamUnreadCount">0</span>
       </button>
-      <!-- v1.231: filter popover trigger moved here (was at the very
+      <!-- v1.232: filter popover trigger moved here (was at the very
            bottom of the rail until trainers complained the icon felt
            orphaned and hard to associate with the chat list). Sits
            right below Team so the nav cluster reads as a single group.
            CSS rule `.rail-filters { margin-top: auto }` was also dropped
            in the same release so the button flows naturally with the
            rest of the rail instead of being pushed to the bottom.
-           v1.231: split into TWO buttons — Filters (status pills:
+           v1.232: split into TWO buttons — Filters (status pills:
            All/Favorites/Urgent/Live/Active/Cancelled/Daily Groups)
            and Stages (subscription stages: Setup/Onboarding/SA/Active/
            Offboarding). Trainers were finding it hard to remember
@@ -2058,7 +2062,7 @@
         <span class="rail-icon">🏷️</span>
         <span class="rail-dot"></span>
       </button>
-      <!-- v1.231: quick-access shortcuts for each of the 5 stage
+      <!-- v1.232: quick-access shortcuts for each of the 5 stage
            buckets. Tap a button → narrows the chat list to ALL customers
            in that bucket (the 5 buckets each cover 2-5 specific Ferra
            tags — see FERRA_TAG_STAGE). Tap the same button again to
@@ -2085,7 +2089,7 @@
       </div>
       <div class="filter-row" id="filterRow"></div>
     </div>
-    <!-- v1.231: separate popover for the subscription-stage dropdown so
+    <!-- v1.232: separate popover for the subscription-stage dropdown so
          it sits flush against its own rail button (🏷️) instead of being
          crammed below the status pills. tagFilterRow render logic is
          unchanged — it still writes into #tagFilterRow by ID and the
@@ -2174,7 +2178,7 @@
           <button class="fmt-btn" data-marker="_" title="Italic (Ctrl+I)"><i>I</i></button>
           <button class="fmt-btn" data-marker="~" title="Strikethrough"><s>S</s></button>
           <button class="fmt-btn" data-marker="`" title="Code"><code>&lt;/&gt;</code></button>
-          <!-- v1.231: list buttons. Unlike wrap-style markers, lists are
+          <!-- v1.232: list buttons. Unlike wrap-style markers, lists are
                PER-LINE prefixes — clicking either button prefixes each
                line of the selection with "- " (bulleted) or "1. " / "2. "
                etc. (numbered). WhatsApp natively renders both shapes. -->
@@ -2317,7 +2321,7 @@
       <label style="font-weight:600;">Add template</label>
       <input id="tplNameInput" placeholder="Short name (used to /search)" style="width:100%; margin-top:6px; border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-size:13px; font-family:inherit; box-sizing:border-box;" />
       <textarea id="tplTextInput" placeholder="Template text — use {name}, {phone}, etc. as variables" style="width:100%; margin-top:6px; border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-size:13px; font-family:inherit; min-height:80px; resize:vertical; box-sizing:border-box;"></textarea>
-      <!-- v1.231: optional media attachment. Templates can carry one
+      <!-- v1.232: optional media attachment. Templates can carry one
            image/video/document (≤25 MB). Periskope fetches the URL when
            the trainer slash-picks the template, so the file is sent as
            the message's attachment with the substituted text as caption. -->
@@ -2564,8 +2568,8 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.231";
-// v1.231: paint APP_VERSION into the two visible header/login chips at
+const APP_VERSION = "v1.232";
+// v1.232: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
 // header chip stayed frozen at "v1.207" for 5+ releases because the
@@ -2686,7 +2690,7 @@ const newChatNameEl = $("newChatName");
 const filtersBtn = $("filtersBtn");
 const filterPopover = $("filterPopover");
 const filterPopoverClose = $("filterPopoverClose");
-// v1.231: parallel stages popover wired by the same toggle/close-on-
+// v1.232: parallel stages popover wired by the same toggle/close-on-
 // outside-click machinery as the filters popover. Mutually exclusive
 // with the filter popover so opening one closes the other (otherwise
 // the two cards would overlap at left:64px).
@@ -2700,7 +2704,7 @@ function toggleFilterPopover(force) {
     : !filterPopover.classList.contains("visible");
   filterPopover.classList.toggle("visible", next);
   filtersBtn.classList.toggle("active", next);
-  // v1.231: mutual exclusion — opening filters closes stages.
+  // v1.232: mutual exclusion — opening filters closes stages.
   if (next && stagePopover && stagePopover.classList.contains("visible")) {
     stagePopover.classList.remove("visible");
     if (stagesBtn) stagesBtn.classList.remove("active");
@@ -3115,7 +3119,7 @@ function isLimitedUser() {
   }
   return false;
 }
-// v1.231: returns the current user's team tags as a Set, or null when
+// v1.232: returns the current user's team tags as a Set, or null when
 // they have no team narrowing (= full visibility). Admin always returns
 // null. Reading the teams array off the same teamMembers record we
 // already use for `limited` so admin UI writes hit one consistent path.
@@ -3145,7 +3149,7 @@ function myTeamTags() {
   }
   return null;
 }
-// v1.231: chats visible to a team-tagged trainer. Returns null when the
+// v1.232: chats visible to a team-tagged trainer. Returns null when the
 // user has no team narrowing (and the caller should skip filtering).
 // Matches the shape of visibleChatKeysForLimited() so renderChatList
 // can plumb both filters through the same fold. The ticket-assignee
@@ -3323,7 +3327,7 @@ function renderAllowedList() {
       .join("");
     const nameVal = member.name || "";
     const limited = !!member.limited;
-    // v1.231: team-tag chip row. Reads as an object (`{ sa: true }`) when
+    // v1.232: team-tag chip row. Reads as an object (`{ sa: true }`) when
     // written through the UI below; tolerates array shape too. Empty
     // selection = trainer sees everyone (back-compat — no auto-restrict).
     const memberTeams = (() => {
@@ -3389,7 +3393,7 @@ function renderAllowedList() {
       );
     };
   });
-  // v1.231: team-tag chips. Each chip toggles one team's membership at
+  // v1.232: team-tag chips. Each chip toggles one team's membership at
   // /config/teamMembers/{emailKey}/teams/{teamId}. Writing `null` deletes
   // the key so the resulting object stays compact (no orphan `false`
   // values). Other tabs see the update via the existing teamMembers
@@ -3680,7 +3684,7 @@ const FERRA_TAG_STAGE = {
   "SA Reach Out Pending": "sa",
   "SA Follow Up": "sa",
   "All Steps Complete": "active",
-  // v1.231: "All Done" moved from "active" → "offboarding". Originally
+  // v1.232: "All Done" moved from "active" → "offboarding". Originally
   // grouped with Active because the tag implied "everything wrapped up",
   // but in Ferra's data it actually flags customers winding down their
   // engagement — they're done with the program, not actively using it.
@@ -3691,7 +3695,7 @@ const FERRA_TAG_STAGE = {
   "Pickup Pending": "offboarding",
   "Received in Warehouse": "offboarding",
 };
-// v1.231: team-tag membership system. Trainers can be tagged with one or
+// v1.232: team-tag membership system. Trainers can be tagged with one or
 // more of these team identities; the chat list then auto-narrows to
 // customers whose Ferra tag maps to one of their teams (via
 // FERRA_TAG_TEAMS below). Ticket assignment is the universal override
@@ -3709,7 +3713,7 @@ const TEAM_TAGS = {
 // Maps each Ferra subscription tag to the team(s) responsible for that
 // customer phase. A customer can be visible to multiple teams (array)
 // if their phase is jointly owned. Defaults follow Aroleap's actual
-// org structure — see the v1.231 design doc:
+// org structure — see the v1.232 design doc:
 //   Sales      → pre-machine pendings (Order/Payment/Approval)
 //   Install    → physical install pendings (Machine Assign / Install)
 //   Onboard    → first-call sequence (Persona / Exercises / Hand Off)
@@ -5386,7 +5390,7 @@ function renderInfoDrawer() {
 
     ${renderInfoTicketsSection()}
 
-    <!-- v1.231: SA Sessions panel — strength-assessment recordings,
+    <!-- v1.232: SA Sessions panel — strength-assessment recordings,
          uploaded as MP3 and transcribed in the background via the
          worker's /sa-upload endpoint. The list is filled in by
          renderSaSessionsSection() once the Firebase listener for this
@@ -5395,7 +5399,7 @@ function renderInfoDrawer() {
       <h4>🎙️ SA Sessions <span id="saSessionsCount" style="color:var(--muted); font-weight:400;"></span></h4>
       <div id="saSessionsList"><div style="color:var(--muted); font-size:12px;">Loading…</div></div>
       <div style="margin-top:8px;">
-        <!-- v1.231: list mirrors Groq whisper-large-v3's ACTUAL supported
+        <!-- v1.232: list mirrors Groq whisper-large-v3's ACTUAL supported
              set, confirmed via the API's 400 error message:
                 flac, mp3, mp4, mpeg, mpga, m4a, ogg, opus, wav, webm
              Note: raw .aac is NOT supported by Groq even though AAC-in-MP4
@@ -5414,7 +5418,7 @@ function renderInfoDrawer() {
   wireSaSessionsSection();
 }
 
-// v1.231: SA Sessions panel. Listens to /chats/{chatKey}/saSessions for
+// v1.232: SA Sessions panel. Listens to /chats/{chatKey}/saSessions for
 // the currently-open chat; status flips queued → transcribing → ready/
 // failed are pushed live via Firebase onValue, so the UI doesn't need
 // to poll. The listener is attached once per chat open and detached
@@ -5451,7 +5455,7 @@ function wireSaSessionsSection() {
     const file = inp.files?.[0];
     if (!file) return;
     inp.value = "";
-    // v1.231: guard against extensions Groq's whisper-large-v3 doesn't
+    // v1.232: guard against extensions Groq's whisper-large-v3 doesn't
     // accept. Raw .aac is the common failure (iPhone Voice Memos
     // exports .m4a which works fine — but a true .aac file gets a 400
     // back from Groq). Reject client-side with a usable suggestion
@@ -6014,7 +6018,7 @@ function renderChatList(rows) {
   if (visibleSet) {
     afterPrivacy = afterPrivacy.filter(r => visibleSet.has(r.chatKey));
   } else {
-    // v1.231: team-tag visibility filter. Only applies when the user
+    // v1.232: team-tag visibility filter. Only applies when the user
     // ISN'T limited — limited is the more restrictive concept and wins
     // outright (a limited trainer with team tags set still sees only
     // their grants + tickets, not the full team-visible cohort). For
@@ -6049,7 +6053,7 @@ function renderChatList(rows) {
     return v;
   };
   const applyTagFilter = (rows) => {
-    // v1.231: apply bucket filter when any rail bucket is in the Set,
+    // v1.232: apply bucket filter when any rail bucket is in the Set,
     // otherwise fall back to specific-tag filter from the dropdown.
     // Multi-bucket selection ORs across the selected buckets — a chat
     // matches if its stage is in the Set. Empty set = no narrowing.
@@ -6401,7 +6405,7 @@ function updateFiltersBtnIndicator() {
   // v1.172: null-safe — if the rail's filters button hasn't mounted
   // yet (or has been removed in a future redesign), don't crash the
   // renderFilterPills chain. The chat list still renders.
-  // v1.231: now drives the dot on TWO buttons independently — the
+  // v1.232: now drives the dot on TWO buttons independently — the
   // filters dot fires when a status pill is non-default, the stages
   // dot fires when the subscription-stage dropdown is non-default.
   // Previously a single dot covered both — trainers couldn't tell at
@@ -6411,7 +6415,7 @@ function updateFiltersBtnIndicator() {
     (typeof currentTagFilter !== "undefined" &&
       currentTagFilter &&
       currentTagFilter !== "All") ||
-    // v1.231: also flag the dot when a rail quick-access bucket is
+    // v1.232: also flag the dot when a rail quick-access bucket is
     // active, even though the source isn't the dropdown. From the
     // trainer's perspective both are "stages narrowing" — and the
     // individual rail buttons' own colored backgrounds already show
@@ -6420,7 +6424,7 @@ function updateFiltersBtnIndicator() {
   if (filtersBtn) filtersBtn.classList.toggle("has-filter", hasStatusFilter);
   if (stagesBtn) stagesBtn.classList.toggle("has-filter", hasStageFilter);
 }
-// v1.231: Tickets behaves like a temporary overlay, not a filter mutation.
+// v1.232: Tickets behaves like a temporary overlay, not a filter mutation.
 // When the user activates Tickets we SNAPSHOT whatever rail buckets +
 // dropdown tag they had selected (so the filter chrome shows clean
 // "everyone's tickets" without an unrelated stage narrowing); when they
@@ -6463,7 +6467,7 @@ myTicketsBtn.onclick = () => {
   renderChatList(lastChatRows);
   updateTeamUnreadBadge();
 };
-// v1.231.1 HOTFIX: this `let` USED to live further down next to
+// v1.232.1 HOTFIX: this `let` USED to live further down next to
 // currentTagFilter, but the rail-stage code below (which reads it)
 // runs at module top-level — declaring it later in the file put the
 // read inside the `let` TDZ and threw a silent ReferenceError that
@@ -6472,12 +6476,12 @@ myTicketsBtn.onclick = () => {
 // Moved up here so any reader code below this point hits a real
 // initialized value.
 //
-// v1.231: changed from single-value (string|null) to a Set<string>
+// v1.232: changed from single-value (string|null) to a Set<string>
 // so multiple stage buckets can be selected at once. Trainers wanted
 // to see, e.g., "everyone in Setup OR Onboarding" without bouncing
 // between filters. Empty set = no narrowing (was: null).
 const currentStageBucketFilter = new Set();
-// v1.231: wire the 5 stage quick-access rail buttons. Each tap toggles
+// v1.232: wire the 5 stage quick-access rail buttons. Each tap toggles
 // that bucket's membership in the Set. Multiple can be active at once;
 // the chat list shows ANY customer whose bucket is in the Set. Clearing
 // all buckets goes back to "All stages".
@@ -6495,14 +6499,14 @@ document.querySelectorAll(".rail-stage[data-stage]").forEach((btn) => {
       // user gets a coherent bucket-level view. Multi-bucket within
       // the rail is fine, but the dropdown's per-tag filter clears.
       currentTagFilter = "All";
-      // v1.231: also clear "My tickets" so the rail bucket shows the
+      // v1.232: also clear "My tickets" so the rail bucket shows the
       // FULL bucket, not "my tickets ∩ this bucket". Same rationale as
       // Tickets-clears-buckets going the other way — top-level filters
       // are mutually exclusive at activation.
       if (currentStatusFilter === "My tickets") {
         currentStatusFilter = "All";
       }
-      // v1.231: explicit filter choice while Tickets was on → discard
+      // v1.232: explicit filter choice while Tickets was on → discard
       // the snapshot. If we left it, the next toggle-off of Tickets
       // would overwrite the user's new bucket selection with stale
       // pre-Tickets state — confusing.
@@ -6658,7 +6662,7 @@ const TAG_FILTERS = [
   "Uninstallation Pending", "Pickup Pending", "Received in Warehouse",
 ];
 let currentTagFilter = "All";
-// v1.231: currentStageBucketFilter declaration was moved ~150 lines
+// v1.232: currentStageBucketFilter declaration was moved ~150 lines
 // up (right before the rail-stage click handlers / updateRailStage-
 // ActiveStates() call) to avoid a TDZ ReferenceError that broke the
 // chat list render — see comment at the new declaration site.
@@ -6678,14 +6682,14 @@ function renderTagPills(counts) {
   const sel = $("tagSelect");
   sel.onchange = () => {
     currentTagFilter = sel.value;
-    // v1.231: picking a specific tag in the dropdown clears all rail
+    // v1.232: picking a specific tag in the dropdown clears all rail
     // bucket selections. Keeps the two filter UIs coherent — only one
     // filter "owns" the chat list at a time. (`currentStageBucketFilter`
     // is now a Set so we clear it in place rather than reassigning.)
     if (currentTagFilter !== "All") {
       currentStageBucketFilter.clear();
       updateRailStageActiveStates();
-      // v1.231: explicit dropdown choice → discard any pre-Tickets
+      // v1.232: explicit dropdown choice → discard any pre-Tickets
       // snapshot so toggling Tickets off later doesn't overwrite this
       // selection with stale state.
       clearTicketsSnapshot();
@@ -6802,7 +6806,7 @@ function scrollToBubbleInThread(msgKey) {
 
 // ====== THREAD ======
 function openChat(chatKey) {
-  // v1.231: clear any queued template-media when switching chats — a
+  // v1.232: clear any queued template-media when switching chats — a
   // PDF queued for customer A must NOT silently follow you to customer
   // B. The chip stays only as long as you're in the chat you picked it
   // for.
@@ -7614,15 +7618,37 @@ function renderMessages(list) {
     }
     // v1.200: reply quote card above the body when this message is a reply.
     // v1.208: clickable — tapping scrolls the thread to the quoted message.
+    // v1.232: cross-chat replies (Reply privately to customer from a
+    // group). When replyTo.sourceChatKey is set, the quoted message lives
+    // in a DIFFERENT chat — the click handler opens that chat in a new
+    // tab and the label gains a "(from {group name})" suffix so the
+    // trainer knows where the quoted text came from.
     let replyHtml = "";
     if (!isDeleted && m.replyTo) {
       const label = m.replyTo.isFromMe ? "You" : (m.replyTo.senderName || "Customer");
       const quoted = (m.replyTo.text || "(media)").slice(0, 200);
       const quotedKey = m.replyTo.msgKey || "";
-      replyHtml = `<div class="reply-quote${quotedKey ? " tappable" : ""}"${
-        quotedKey ? ` data-reply-msg-key="${escapeHtml(quotedKey)}" title="Jump to the quoted message"` : ""
+      const srcChatKey = m.replyTo.sourceChatKey || "";
+      const isCross = srcChatKey && srcChatKey !== currentChatId;
+      // Derive a friendly source-chat name for the label suffix. We have
+      // chatsCache keyed by chatKey already; fall back to "another chat".
+      let sourceName = "";
+      if (isCross) {
+        const srcMeta = chatsCache[srcChatKey];
+        sourceName = srcMeta?.groupName || srcMeta?.contactName || srcMeta?.displayName || "another chat";
+      }
+      const labelHtml = isCross
+        ? `${escapeHtml(label)} <span class="reply-src">· from ${escapeHtml(sourceName)}</span>`
+        : escapeHtml(label);
+      const tappable = !!quotedKey;
+      replyHtml = `<div class="reply-quote${tappable ? " tappable" : ""}"${
+        tappable
+          ? ` data-reply-msg-key="${escapeHtml(quotedKey)}"${
+              srcChatKey ? ` data-reply-src-chat="${escapeHtml(srcChatKey)}"` : ""
+            } title="${isCross ? "Open the source chat" : "Jump to the quoted message"}"`
+          : ""
       }>
-        <div class="label">${escapeHtml(label)}</div>
+        <div class="label">${labelHtml}</div>
         <div class="quoted-text">${escapeHtml(quoted)}</div>
       </div>`;
     }
@@ -7704,14 +7730,26 @@ function renderMessages(list) {
       openTicketPicker(b, message, "create");
     });
   });
-  // v1.208: jump-to-quoted-message on reply-quote click. Scrolls the same
-  // chat to the parent bubble and gives it a brief yellow flash so the eye
-  // lands on it. No-op if the parent isn't rendered (paginated out).
+  // v1.208 / v1.232: jump-to-quoted-message on reply-quote click. Two
+  // modes:
+  //   same-chat: scroll to the parent bubble + brief yellow flash
+  //   cross-chat: open the source chat in a new tab via the existing
+  //     ?chat=<key>&msg=<key> deep link. Used by the "Reply privately
+  //     from group" flow where the customer's 1:1 message references a
+  //     message back in the group thread.
   messagesEl.querySelectorAll(".reply-quote.tappable").forEach((q) => {
     q.addEventListener("click", (e) => {
       e.stopPropagation();
       const targetKey = q.dataset.replyMsgKey;
       if (!targetKey) return;
+      const srcChatKey = q.dataset.replySrcChat || "";
+      if (srcChatKey && srcChatKey !== currentChatId) {
+        const url = new URL(location.href);
+        url.searchParams.set("chat", srcChatKey);
+        url.searchParams.set("msg", targetKey);
+        window.open(url.toString(), "_blank", "noopener");
+        return;
+      }
       scrollToBubbleInThread(targetKey);
     });
   });
@@ -7809,7 +7847,7 @@ function openMessageActionsPopover(triggerBtn, message) {
   // edit/delete go direct to Firebase by msgKey.
   const canEditDelete = isMine && !message.deleted && (isDm || message.periskopeMsgId);
 
-  // v1.231: "Reply privately" — when a customer says something in a group
+  // v1.232: "Reply privately" — when a customer says something in a group
   // chat and the trainer wants to follow up 1:1 instead of disturbing
   // the whole group. Only valid when ALL three are true:
   //   - currently-open chat is a customer group (not DM, not 1:1)
@@ -7971,7 +8009,7 @@ function handleReply(message) {
   composerInput.focus();
 }
 
-// v1.231 ---- Reply privately (group → 1:1) ----
+// v1.232 ---- Reply privately (group → 1:1) ----
 // In a group chat, when a customer says something and the trainer wants
 // to follow up just to that one person without disturbing the whole
 // group: jumps to the customer's 1:1 chat thread (creating one if it
@@ -8026,10 +8064,25 @@ async function handleReplyPrivately(message) {
     }
   }
 
+  // v1.232: prime the cross-chat reply context BEFORE switching chats.
+  // The composer reply bar will pick it up when the new chat opens; the
+  // next outbound send carries replyTo.sourceChatKey so the quoted card
+  // on the customer's bubble can deep-link back to the group message.
+  // Augmenting the message snapshot with __sourceChatKey is the lightest
+  // way to thread this through the existing reply-target pipeline
+  // without adding a parallel global variable.
+  _replyTarget = { ...message, __sourceChatKey: currentChatId };
   // Open the 1:1 thread. Slight delay so the chat-list listener has a
   // chance to render the new row before openChat tries to set .active
   // on it (no functional impact if it's not there yet, just nicer UX).
-  setTimeout(() => openChat(targetChatKey), 100);
+  setTimeout(() => {
+    openChat(targetChatKey);
+    // The reply bar isn't re-rendered automatically by openChat — it's
+    // controlled by showComposerReplyBar/clearReply. Repaint it once
+    // after the chat is open so the cross-chat context is visible in
+    // the 1:1's composer.
+    setTimeout(() => showComposerReplyBar(_replyTarget), 200);
+  }, 100);
 }
 function clearReply() {
   _replyTarget = null;
@@ -8043,9 +8096,24 @@ function showComposerReplyBar(message) {
     bar.innerHTML = "";
     return;
   }
-  const label = message.direction === "out"
-    ? "Replying to yourself"
-    : `Replying to ${message.sentByName || message.senderPhone || "customer"}`;
+  // v1.232: cross-chat reply (e.g. "Reply privately to customer" from a
+  // group). The label tells the trainer this isn't a same-chat quote —
+  // when they hit send, the message goes to the 1:1 thread but the
+  // record carries a link back to the group message for context.
+  const sourceChatKey = message.__sourceChatKey;
+  const isCross = sourceChatKey && sourceChatKey !== currentChatId;
+  let label;
+  if (isCross) {
+    const who = message.sentByName || message.senderName || message.senderPhone || "customer";
+    const srcMeta = chatsCache[sourceChatKey] || {};
+    const srcName =
+      srcMeta.groupName || srcMeta.contactName || srcMeta.displayName || "another chat";
+    label = `Replying privately to ${who} · from ${srcName}`;
+  } else {
+    label = message.direction === "out"
+      ? "Replying to yourself"
+      : `Replying to ${message.sentByName || message.senderPhone || "customer"}`;
+  }
   const snippet = (message.text || message.media?.caption || message.media?.fileName || "(media)").slice(0, 140);
   bar.innerHTML = `
     <div class="body">
@@ -8384,7 +8452,7 @@ composerInput.addEventListener("blur", () => {
   }, 150);
 });
 
-// v1.231: per-line prefix helper for list formatting. Bulleted lists
+// v1.232: per-line prefix helper for list formatting. Bulleted lists
 // get "- " in front of each line; numbered lists get "1. ", "2. ", etc.
 // Toggle-aware: if EVERY line of the selection already has the matching
 // prefix, the click STRIPS the prefixes instead of doubling them up —
@@ -8480,7 +8548,7 @@ function listenTemplates() {
   });
 }
 
-// v1.231: template media state — populated when an admin attaches a
+// v1.232: template media state — populated when an admin attaches a
 // file in the modal, cleared when they remove it or close the form.
 // On save, written into the template record as media: {...}. Existing
 // templates without media stay text-only — back-compat.
@@ -8563,7 +8631,7 @@ tplClose.onclick = () => templatesModal.classList.remove("visible");
 tplSave.onclick = async () => {
   const name = tplNameInput.value.trim();
   const text = tplTextInput.value.trim();
-  // v1.231: text OR media is enough — a "send this PDF" template doesn't
+  // v1.232: text OR media is enough — a "send this PDF" template doesn't
   // need a body. Name is still required (it's the slash-command keyword).
   if (!name) { alert("Template name is required."); return; }
   if (!text && !_editingTplMedia) { alert("Add some text, an attachment, or both."); return; }
@@ -8605,7 +8673,7 @@ function renderTemplatesList() {
   }
   all.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
   tplList.innerHTML = all.map(t => {
-    // v1.231: 📎 indicator on rows with attached media so admins (and the
+    // v1.232: 📎 indicator on rows with attached media so admins (and the
     // slash picker downstream) can see at a glance which templates send
     // a file too.
     const mediaBadge = t.media?.url ? ` <span title="${escapeHtml(t.media.fileName || "attachment")}">📎</span>` : "";
@@ -8630,7 +8698,7 @@ function renderTemplatesList() {
         _editingTplId = id;
         tplNameInput.value = t.name || "";
         tplTextInput.value = t.text || "";
-        // v1.231: surface existing media in the form so the admin can
+        // v1.232: surface existing media in the form so the admin can
         // see what's attached and choose to keep / replace / remove it.
         setTplMediaPreview(t.media || null);
         tplSave.textContent = "Update";
@@ -8712,7 +8780,7 @@ function openTplPicker(query) {
                     `<div class="tpl-hint">Type a different name, or remove the slash</div>`;
   } else {
     pop.innerHTML = matches.map((t, idx) => {
-      // v1.231: 📎 indicator + attachment filename when template has
+      // v1.232: 📎 indicator + attachment filename when template has
       // media so trainers know a file will go out alongside the text.
       const mediaTag = t.media?.url
         ? `<span style="float:right; font-size:11px; opacity:.7;" title="${escapeHtml(t.media.fileName || "attachment")}">📎 ${escapeHtml(t.media.fileName || "attachment")}</span>`
@@ -8763,7 +8831,7 @@ function insertTemplateById(id) {
   composerInput.style.height = Math.min(composerInput.scrollHeight, 160) + "px";
   composerInput.focus();
   composerInput.setSelectionRange(text.length, text.length);
-  // v1.231: if the template carries media, queue it as a pending
+  // v1.232: if the template carries media, queue it as a pending
   // attachment so the next doSend ships text + media together. Worker
   // /send already accepts media.url so Periskope fetches the file
   // directly from R2 — no client-side download / re-upload needed.
@@ -8775,7 +8843,7 @@ function insertTemplateById(id) {
   closeTplPicker();
 }
 
-// v1.231: pending template-media state for the desktop composer.
+// v1.232: pending template-media state for the desktop composer.
 // Holds at most one media object between slash-pick and send. Cleared
 // on send (success or failure), chat switch, or explicit dismissal
 // (small ✕ on the preview chip).
@@ -9716,7 +9784,7 @@ async function doSendDmMedia(media) {
 
 async function doSend() {
   const text = composerInput.value.trim();
-  // v1.231: a template can be media-only (no caption) — when the queued
+  // v1.232: a template can be media-only (no caption) — when the queued
   // attachment exists, we allow an empty text body. Otherwise the
   // original "text required" guard still applies.
   if (!text && !_pendingTemplateMedia) return;
@@ -9733,14 +9801,21 @@ async function doSend() {
   const mentionUids = snapshotMentions(text);
   // v1.200: snapshot the reply target before we clear it so a chat change
   // mid-flight can't drop the attachment.
+  // v1.232: also persist sourceChatKey when this is a cross-chat reply
+  // (e.g., "Reply privately to customer" from a group). The bubble
+  // renderer keys off this to deep-link the quoted card back to the
+  // source chat instead of trying to scroll within the current thread.
   const replySnapshot = _replyTarget ? {
     msgKey: _replyTarget.id,
     periskopeMsgId: _replyTarget.periskopeMsgId || null,
     text: (_replyTarget.text || _replyTarget.media?.caption || "").slice(0, 500),
     isFromMe: _replyTarget.direction === "out",
     senderName: _replyTarget.sentByName || null,
+    ...(_replyTarget.__sourceChatKey && _replyTarget.__sourceChatKey !== currentChatId
+      ? { sourceChatKey: _replyTarget.__sourceChatKey }
+      : {}),
   } : null;
-  // v1.231: snapshot pending template media before clearing composer state.
+  // v1.232: snapshot pending template media before clearing composer state.
   const templateMediaSnapshot = _pendingTemplateMedia ? { ..._pendingTemplateMedia } : null;
 
   // Optimistic write
@@ -9757,7 +9832,7 @@ async function doSend() {
   };
   if (mentionUids.length > 0) optimisticRec.mentions = mentionUids;
   if (replySnapshot) optimisticRec.replyTo = replySnapshot;
-  // v1.231: optimistic media metadata so the bubble renders the
+  // v1.232: optimistic media metadata so the bubble renders the
   // attachment placeholder immediately; worker.js patches in the real
   // Periskope URL via the webhook echo dedup path.
   if (templateMediaSnapshot) {
@@ -9787,7 +9862,7 @@ async function doSend() {
   _mentions.clear();
   closeMentionPicker();
   clearReply();
-  // v1.231: clear the queued template media chip now that it's in flight.
+  // v1.232: clear the queued template media chip now that it's in flight.
   setPendingTemplateMedia(null);
 
   try {
@@ -9802,7 +9877,7 @@ async function doSend() {
         ...(mentionUids.length > 0 ? { mentions: mentionUids } : {}),
         ...(replySnapshot ? { replyTo: replySnapshot } : {}),
         ...(templateMediaSnapshot ? {
-          // v1.231: Periskope accepts media.url and fetches it itself.
+          // v1.232: Periskope accepts media.url and fetches it itself.
           media: {
             type: (String(templateMediaSnapshot.mimeType || "").startsWith("image/") ? "image"
                  : String(templateMediaSnapshot.mimeType || "").startsWith("video/") ? "video"
