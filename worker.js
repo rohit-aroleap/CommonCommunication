@@ -2562,9 +2562,16 @@ async function handleSummarize(request, env) {
   if (!chatId) return json({ error: "missing chatId" }, 400);
 
   const chatKey = encodeKey(chatId);
-  const [rawMessages, meta] = await Promise.all([
+  // v1.237: fetch SA transcripts + internal notes alongside messages. Both
+  // get folded into the LLM context so the summary is grounded in EVERY
+  // signal we have about this customer — not just the WhatsApp messages.
+  // Previously the AI couldn't see SA recordings or trainer-written notes
+  // even though the trainer might have spent 45 minutes capturing them.
+  const [rawMessages, meta, rawSaSessions, rawNotes] = await Promise.all([
     fbGet(env, `${ROOT}/chats/${chatKey}/messages`),
     fbGet(env, `${ROOT}/chats/${chatKey}/meta`),
+    fbGet(env, `${ROOT}/chats/${chatKey}/saSessions`),
+    fbGet(env, `${ROOT}/chats/${chatKey}/notes`),
   ]);
   if (!rawMessages || typeof rawMessages !== "object") {
     return json({ summary: "No messages in this chat yet.", count: 0, total: 0 });
@@ -2611,17 +2618,21 @@ async function handleSummarize(request, env) {
     return `[${ts}] ${speaker}: ${m.text}`;
   });
 
+  // v1.237: build SA transcripts + notes context blocks.
+  const { block: saBlock, count: saCount } = buildSaTranscriptsBlock(rawSaSessions);
+  const { block: notesBlock, count: notesCount } = buildNotesBlock(rawNotes);
+
   const systemPrompt = `You are summarizing a WhatsApp conversation for an Aroleap fitness team member who needs to pick up the chat with quick context. Be concise and structured.
 
 Output 3-5 bullets covering:
 - Who the customer is (any context you can infer)
-- Key requests, complaints, or topics discussed
+- Key requests, complaints, or topics discussed (use SA transcripts + notes when they add color)
 - Current state of the conversation (waiting on whom, last action)
 - Suggested next step for the agent
 
-Use simple markdown bullets. Stay under 180 words. Never invent facts not present in the messages.`;
+Use simple markdown bullets. Stay under 180 words. Never invent facts not present in the supplied context. The SA transcript and notes sections (if present) are AUTHORITATIVE additional context about this customer beyond the WhatsApp thread.`;
 
-  const userPrompt = `${isGroup ? "Group chat" : "Customer"}: ${customerLabel}\nMessages shown: last ${recent.length} of ${all.length}\n\nConversation (oldest first):\n\n${lines.join("\n")}`;
+  const userPrompt = `${isGroup ? "Group chat" : "Customer"}: ${customerLabel}\nMessages shown: last ${recent.length} of ${all.length}${saCount ? ` · ${saCount} SA transcript${saCount === 1 ? "" : "s"}` : ""}${notesCount ? ` · ${notesCount} internal note${notesCount === 1 ? "" : "s"}` : ""}\n\n${saBlock}${notesBlock}Conversation (oldest first):\n\n${lines.join("\n")}`;
 
   const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -2646,9 +2657,73 @@ Use simple markdown bullets. Stay under 180 words. Never invent facts not presen
     summary,
     count: recent.length,
     total: all.length,
+    // v1.237: surface what additional context fed the LLM beyond just
+    // chat messages — UI shows a "X SA transcripts · Y notes used"
+    // footer so trainers know the summary was grounded in everything we
+    // know about the customer, not just the WhatsApp thread.
+    saTranscriptsUsed: saCount,
+    notesUsed: notesCount,
     model: claudeJson?.model || null,
     usage: claudeJson?.usage || null,
   });
+}
+
+// v1.237: shared helpers for assembling the SA transcript + notes context
+// blocks injected into /summarize and /ai-query system prompts. Keep
+// token budget under control by capping at the 3 most-recent SA sessions
+// at 8000 chars each (≈ 30 min of speech) and excluding non-ready
+// transcripts. Returns the formatted block + how many entries it covers.
+function buildSaTranscriptsBlock(rawSaSessions) {
+  if (!rawSaSessions || typeof rawSaSessions !== "object") {
+    return { block: "", count: 0 };
+  }
+  const MAX_SESSIONS = 3;
+  const MAX_CHARS_PER_TRANSCRIPT = 8000;
+  const entries = Object.entries(rawSaSessions)
+    .filter(([, s]) => s && !s.placeholder && s.status === "ready" && s.transcript)
+    .map(([id, s]) => ({ id, ...s }))
+    .sort(
+      (a, b) =>
+        (b.sessionAt || b.uploadedAt || 0) - (a.sessionAt || a.uploadedAt || 0),
+    )
+    .slice(0, MAX_SESSIONS);
+  if (!entries.length) return { block: "", count: 0 };
+  const blocks = entries.map((s) => {
+    const dateStr = s.sessionAt || s.uploadedAt
+      ? new Date(s.sessionAt || s.uploadedAt).toISOString().slice(0, 16).replace("T", " ")
+      : "";
+    const transcript = String(s.transcript || "").slice(0, MAX_CHARS_PER_TRANSCRIPT);
+    const truncated = (s.transcript || "").length > MAX_CHARS_PER_TRANSCRIPT
+      ? "\n  [transcript truncated for token budget]"
+      : "";
+    return `[${dateStr || "session"}] Strength Assessment:\n${transcript}${truncated}`;
+  });
+  return {
+    block: `=== Recent SA recording transcripts (most recent first) ===\n${blocks.join("\n\n")}\n\n`,
+    count: entries.length,
+  };
+}
+
+function buildNotesBlock(rawNotes) {
+  if (!rawNotes || typeof rawNotes !== "object") {
+    return { block: "", count: 0 };
+  }
+  const entries = Object.entries(rawNotes)
+    .filter(([, n]) => n && n.text)
+    .map(([id, n]) => ({ id, ...n }))
+    .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  if (!entries.length) return { block: "", count: 0 };
+  const lines = entries.map((n) => {
+    const dateStr = n.createdAt
+      ? new Date(n.createdAt).toISOString().slice(0, 16).replace("T", " ")
+      : "";
+    const author = n.authorName ? ` (${n.authorName})` : "";
+    return `[${dateStr || "note"}]${author}: ${String(n.text || "").trim()}`;
+  });
+  return {
+    block: `=== Internal trainer notes (oldest first) ===\n${lines.join("\n")}\n\n`,
+    count: entries.length,
+  };
 }
 
 // ---------- /ai-query (Claude answers a free-form question about one chat) ----------
@@ -2668,9 +2743,15 @@ async function handleAiQuery(request, env) {
   if (!question) return json({ error: "missing question" }, 400);
 
   const chatKey = encodeKey(chatId);
-  const [rawMessages, meta] = await Promise.all([
+  // v1.237: same parallel fetch as /summarize — SA transcripts + notes
+  // join the chat messages in the prompt context so the trainer can ask
+  // questions like "what did Aparna mention in her last SA about her
+  // knee?" and actually get an answer.
+  const [rawMessages, meta, rawSaSessions, rawNotes] = await Promise.all([
     fbGet(env, `${ROOT}/chats/${chatKey}/messages`),
     fbGet(env, `${ROOT}/chats/${chatKey}/meta`),
+    fbGet(env, `${ROOT}/chats/${chatKey}/saSessions`),
+    fbGet(env, `${ROOT}/chats/${chatKey}/notes`),
   ]);
   if (!rawMessages || typeof rawMessages !== "object") {
     return json({ answer: "There are no messages in this chat yet.", count: 0, total: 0 });
@@ -2716,19 +2797,24 @@ async function handleAiQuery(request, env) {
     return `[${ts}] ${speaker}: ${m.text}`;
   });
 
-  const systemPrompt = `You are an Aroleap fitness team assistant. The trainer is looking at one WhatsApp chat and will ask you questions about it. Answer using ONLY the conversation provided as context.
+  // v1.237: build SA + notes blocks the same way summarize does.
+  const { block: saBlock, count: saCount } = buildSaTranscriptsBlock(rawSaSessions);
+  const { block: notesBlock, count: notesCount } = buildNotesBlock(rawNotes);
+
+  const systemPrompt = `You are an Aroleap fitness team assistant. The trainer is looking at one customer and will ask you questions. Answer using ONLY the provided context (WhatsApp conversation + SA recording transcripts + internal trainer notes).
 
 Rules:
 - Be concise and direct. Use short paragraphs or bullets — match the question's shape.
-- Quote short message snippets when useful (in quotes), and reference approximate dates ("on May 8") if the question is time-related.
-- If the answer is not present or unclear from the messages, say so plainly ("Not mentioned in this chat" / "Unclear from the messages") instead of guessing.
-- Never invent facts, names, prices, appointments, or trainer details not in the conversation.
+- Quote short snippets when useful (in quotes), and reference approximate dates ("on May 8") if the question is time-related.
+- Prefer SA-transcript / note context when the trainer asks about session content, body assessments, or things said face-to-face — those sources contain detail the WhatsApp thread won't.
+- If the answer is not present or unclear from the provided context, say so plainly ("Not mentioned anywhere I can see" / "Unclear from the records") instead of guessing.
+- Never invent facts, names, prices, appointments, or trainer details not in the context.
 - Don't restate the entire chat. Answer the question.
 
 Context — ${isGroup ? "Group chat" : "Customer"}: ${customerLabel}
-Messages available: last ${recent.length} of ${all.length}
+Messages available: last ${recent.length} of ${all.length}${saCount ? ` · ${saCount} SA transcript${saCount === 1 ? "" : "s"}` : ""}${notesCount ? ` · ${notesCount} internal note${notesCount === 1 ? "" : "s"}` : ""}
 
-Conversation (oldest first):
+${saBlock}${notesBlock}Conversation (oldest first):
 
 ${lines.join("\n")}`;
 
@@ -2766,6 +2852,9 @@ ${lines.join("\n")}`;
     answer,
     count: recent.length,
     total: all.length,
+    // v1.237: same counts as /summarize so the UI footer is consistent.
+    saTranscriptsUsed: saCount,
+    notesUsed: notesCount,
     model: claudeJson?.model || null,
     usage: claudeJson?.usage || null,
   });
