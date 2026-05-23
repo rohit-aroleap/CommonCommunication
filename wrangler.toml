@@ -5,15 +5,21 @@ compatibility_date = "2025-05-01"
 [vars]
 FIREBASE_DB_URL = "https://motherofdashboard-default-rtdb.asia-southeast1.firebasedatabase.app"
 ALLOWED_ORIGIN = "*"
-# v1.239: shared Ferra-Periskope gateway. All outbound WhatsApp sends + edits +
-# deletes + reactions go through here instead of calling Periskope directly.
-# Centralizes the Periskope API key + rate-limit + dedup across all Aroleap
-# dashboards. Public URL — not a secret — so it lives in [vars]. Override
-# locally with `wrangler secret put PERISKOPE_GATEWAY_URL` if needed.
-PERISKOPE_GATEWAY_URL = "https://ferra-periskope-gateway.rohitpatel-mailid297.workers.dev"
 
 [ai]
 binding = "AI"
+
+# v1.239: shared Ferra-Periskope gateway. All outbound WhatsApp sends + edits +
+# deletes + reactions go through here instead of calling Periskope directly.
+# Uses a SERVICE BINDING (not a public-URL fetch) because Cloudflare's edge
+# rejects worker-to-worker calls via *.workers.dev with error 1042. Service
+# bindings route internally, are free, and are also faster (no edge hop).
+# The target worker is `ferra-periskope-gateway` in the same Cloudflare
+# account. Both must be deployed independently — service bindings are
+# resolved at deploy time on the caller's side only.
+[[services]]
+binding = "PERISKOPE_GATEWAY"
+service = "ferra-periskope-gateway"
 
 # v1.176: R2 bucket for internal-DM attachments. Firebase Storage requires
 # the Blaze plan, so we keep that off and store DM media in R2 instead

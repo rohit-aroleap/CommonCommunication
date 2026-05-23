@@ -319,38 +319,35 @@ async function handleSend(request, env) {
 
   // v1.239: route through the shared ferra-periskope-gateway instead of
   // hitting Periskope directly. Phase 5 of the gateway consolidation
-  // (the other Aroleap dashboards migrated in earlier phases). The
-  // gateway centralizes the Periskope API key + rate-limit + cross-
-  // dashboard dedup + observability under a single URL.
+  // (other Aroleap dashboards migrated in earlier phases). The gateway
+  // centralizes the Periskope API key + rate-limit + cross-dashboard
+  // dedup + observability under a single URL.
   //
-  // What changes:
-  //   - request shape: gateway uses { phone OR chatId, text, kind,
-  //     dashboard, media, replyTo, idempotencyKey } instead of
-  //     Periskope's { chat_id, message, media, reply_to_message_id }
-  //   - response shape: gateway returns { ok, messageId, sentAt,
-  //     dashboard, kind, chatId } where messageId == Periskope's
-  //     unique_id. Errors come as { error, httpStatus, detail } 502.
-  //   - kind: "trainer-reply" because every CommonComm /send is a
-  //     trainer typing into the customer chat composer. dedupWindowMin
-  //     is 0 for trainer-reply (per gateway DEDUP_WINDOWS config), so
-  //     every send actually fires through — no surprises.
+  // v1.240: use a Cloudflare SERVICE BINDING (env.PERISKOPE_GATEWAY)
+  // instead of fetching the gateway's public URL. CF's edge returns
+  // error 1042 when one *.workers.dev worker fetches another via public
+  // URL on the same account — service bindings route internally, free
+  // and faster.
   //
-  // What we KEEP doing:
-  //   - pre-write the byPeriskopeId dedup entry so the from_me=true
-  //     webhook echo can't double-write the bubble
-  //   - same Firebase write-paths for the message record + chat meta
-  //   - same mention / reply-snapshot / preview logic
-  const gatewayUrl =
-    env.PERISKOPE_GATEWAY_URL ||
-    "https://ferra-periskope-gateway.rohitpatel-mailid297.workers.dev";
+  // Request shape:
+  //   { phone OR chatId, text, kind, dashboard, media?, replyTo?,
+  //     idempotencyKey? } — gateway translates to Periskope's
+  //   { chat_id, message, media, reply_to_message_id }.
+  //
+  // Response shape:
+  //   success: { ok: true, messageId, sentAt, dashboard, kind, chatId }
+  //   failure: { error, httpStatus, detail } with non-2xx
+  //
+  // kind: "trainer-reply" because every CommonComm /send is a trainer
+  // typing into the customer chat composer. dedupWindowMin is 0 for
+  // trainer-reply (per gateway DEDUP_WINDOWS config), so every send
+  // actually fires through — explicit dedupWindowMin: 0 in the body
+  // belt-and-suspenders against future gateway config drift.
   const gatewayBody = {
     chatId: resolvedChatId,
     text: message || "",
     kind: "trainer-reply",
     dashboard: "commoncomm",
-    // Defensive: pass dedupWindowMin: 0 explicitly so a future change to
-    // the gateway's DEDUP_WINDOWS default for trainer-reply doesn't
-    // start silently dropping chat sends.
     dedupWindowMin: 0,
   };
   if (body.media && (body.media.filedata || body.media.url)) {
@@ -365,14 +362,15 @@ async function handleSend(request, env) {
     gatewayBody.replyTo = { periskopeMsgId: body.replyTo.periskopeMsgId };
   }
 
-  const periskopeRes = await fetch(`${gatewayUrl}/send`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(gatewayBody),
-  });
+  const periskopeRes = await env.PERISKOPE_GATEWAY.fetch(
+    new Request("https://gateway/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(gatewayBody),
+    }),
+  );
 
   const periskopeJson = await safeJson(periskopeRes);
-  // v1.239: gateway success path returns { ok: true, messageId, ... }.
   // Map gateway's messageId back to the unique_id name used everywhere
   // downstream in this file (saves a wider rename — every "uniqueId"
   // reference still means the same thing semantically).
@@ -515,25 +513,25 @@ async function handleEditMessage(request, env) {
   const trimmed = String(newText || "").trim();
   if (!trimmed) return json({ error: "missing newText" }, 400);
 
-  // v1.239: route through ferra-periskope-gateway's /edit endpoint
-  // instead of hitting Periskope directly. Same effective Periskope
-  // call happens on the other side; the gateway just centralizes the
-  // API key + adds observability. The frontend keeps calling
-  // `/edit-message` on THIS worker; we just swap the inner fetch.
-  const gatewayUrl =
-    env.PERISKOPE_GATEWAY_URL ||
-    "https://ferra-periskope-gateway.rohitpatel-mailid297.workers.dev";
+  // v1.239 → v1.240: route through ferra-periskope-gateway's /edit
+  // endpoint via service binding (NOT public URL fetch — that returns
+  // CF error 1042). Same effective Periskope call happens on the other
+  // side; the gateway just centralizes the API key + adds observability.
+  // The frontend keeps calling `/edit-message` on THIS worker; we just
+  // swap the inner call.
   let periskopeRes;
   try {
-    periskopeRes = await fetch(`${gatewayUrl}/edit`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        periskopeMsgId,
-        text: trimmed,
-        dashboard: "commoncomm",
+    periskopeRes = await env.PERISKOPE_GATEWAY.fetch(
+      new Request("https://gateway/edit", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          periskopeMsgId,
+          text: trimmed,
+          dashboard: "commoncomm",
+        }),
       }),
-    });
+    );
   } catch (e) {
     return json({ error: "periskope_unreachable", details: String(e) }, 502);
   }
@@ -609,20 +607,20 @@ async function handleDeleteMessage(request, env) {
   if (!periskopeMsgId) return json({ error: "missing periskopeMsgId" }, 400);
   if (!chatKey || !msgKey) return json({ error: "missing chatKey/msgKey" }, 400);
 
-  // v1.239: route through ferra-periskope-gateway's /delete endpoint.
-  const gatewayUrl =
-    env.PERISKOPE_GATEWAY_URL ||
-    "https://ferra-periskope-gateway.rohitpatel-mailid297.workers.dev";
+  // v1.239 → v1.240: route through ferra-periskope-gateway's /delete
+  // endpoint via service binding.
   let periskopeRes;
   try {
-    periskopeRes = await fetch(`${gatewayUrl}/delete`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        periskopeMsgId,
-        dashboard: "commoncomm",
+    periskopeRes = await env.PERISKOPE_GATEWAY.fetch(
+      new Request("https://gateway/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          periskopeMsgId,
+          dashboard: "commoncomm",
+        }),
       }),
-    });
+    );
   } catch (e) {
     return json({ error: "periskope_unreachable", details: String(e) }, 502);
   }
@@ -697,24 +695,23 @@ async function handleReactToMessage(request, env) {
   // Allow empty emoji as the "remove my reaction" signal.
   const emojiTrimmed = String(emoji || "");
 
-  // v1.239: route through ferra-periskope-gateway's /react endpoint.
-  // Translation: the local "" convention for "remove my reaction"
-  // becomes `null` on the gateway (per gateway docs — reaction: null
-  // forwards as the unreact signal to Periskope).
-  const gatewayUrl =
-    env.PERISKOPE_GATEWAY_URL ||
-    "https://ferra-periskope-gateway.rohitpatel-mailid297.workers.dev";
+  // v1.239 → v1.240: route through ferra-periskope-gateway's /react
+  // endpoint via service binding. Translation: the local "" convention
+  // for "remove my reaction" becomes `null` on the gateway (per gateway
+  // docs — reaction: null forwards as the unreact signal to Periskope).
   let periskopeRes;
   try {
-    periskopeRes = await fetch(`${gatewayUrl}/react`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        periskopeMsgId,
-        reaction: emojiTrimmed ? emojiTrimmed : null,
-        dashboard: "commoncomm",
+    periskopeRes = await env.PERISKOPE_GATEWAY.fetch(
+      new Request("https://gateway/react", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          periskopeMsgId,
+          reaction: emojiTrimmed ? emojiTrimmed : null,
+          dashboard: "commoncomm",
+        }),
       }),
-    });
+    );
   } catch (e) {
     return json({ error: "periskope_unreachable", details: String(e) }, 502);
   }
