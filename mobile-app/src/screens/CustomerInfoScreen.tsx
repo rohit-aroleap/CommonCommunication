@@ -414,6 +414,17 @@ export function CustomerInfoScreen({ route, navigation }: Props) {
           below mirrors the desktop SA Sessions panel — same Firebase
           node, same status states. Hidden in group chats since SAs are
           per-customer, not per-group. */}
+      {/* TODO (Phase E follow-up, v1.242+): subscription-siblings panel.
+          Web shipped in v1.242 — shows a "👥 Subscription members"
+          section reading from /ferraSubscriptions/v1/bySubscription
+          with clickable links to other members' chats. Mobile parity is
+          a small follow-up: subscribe to bySubscription alongside the
+          existing byPhone listener in AppDataContext, build a
+          phone→subs reverse index, render cards here between the
+          subscription-stage pill and the SA Sessions section. Each
+          member link should navigation.push the Thread screen with
+          the target chatKey. See:
+          https://github.com/rohit-aroleap/ferra-periskope-gateway/blob/main/prompts/phase-e-commoncomm-subscription-siblings.md */}
       {!isGroup && audioMod && (
         <View style={styles.section}>
           <View style={styles.notesHeader}>
