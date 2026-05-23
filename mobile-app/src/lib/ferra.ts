@@ -4,12 +4,16 @@
 // to those paths from the mobile app.
 
 import type { FerraUser } from "@/types";
+// v1.241: phone normalization delegates to the shared canonical helper
+// (ferra-periskope-gateway/lib/normalize-phone.js v1.0.0). Same canonical
+// 12-digit output for happy-path inputs; more robust on edge cases
+// (WhatsApp @c.us suffixes, group chats, null inputs, leading 0s at
+// uncertain positions). Re-exported under the legacy `normalizeFerraPhone`
+// name so every existing import keeps working without churn.
+import { normalizePhone as _canonicalNormalize } from "@/lib/normalizePhone";
 
 export function normalizeFerraPhone(p: string | null | undefined): string {
-  let n = String(p ?? "").replace(/\D/g, "");
-  n = n.replace(/^0+/, "");
-  if (n.length === 10) n = "91" + n;
-  return n;
+  return _canonicalNormalize(p);
 }
 
 export interface FerraIndex {

@@ -26,6 +26,7 @@ import { useAuth } from "@/auth/AuthContext";
 import { ROOT } from "@/config";
 import { encodeKey, chatKeyToChatId } from "@/lib/encodeKey";
 import { buildFerraIndex, type FerraIndex } from "@/lib/ferra";
+import { normalizePhone as canonicalNormalizePhone } from "@/lib/normalizePhone";
 import { isDailyGroup as _isDailyGroup } from "@/lib/chats";
 import { nextSendActivity } from "@/lib/favorites";
 import { resolveTeammateName } from "@/lib/teamFilter";
@@ -112,8 +113,14 @@ interface AppDataValue {
   grantChatAccess: (chatKey: string) => Promise<void>;
 }
 
+// v1.241: delegate to the shared canonical normalizer so teamPhones
+// matching stays consistent with the rest of the dashboard suite. The
+// canonical form is 12-digit Indian (E.164-without-+). Previously this
+// returned raw digits, which meant a 10-digit teammate phone wouldn't
+// match the 12-digit canonical key used elsewhere — a latent bug the
+// canonical helper fixes by also prepending "91" to 10-digit input.
 function normalizePhone(p: string): string {
-  return String(p || "").replace(/\D/g, "");
+  return canonicalNormalizePhone(p);
 }
 
 // Sorted-UID pairKey. Same convention as web — see index.html getPairKey().

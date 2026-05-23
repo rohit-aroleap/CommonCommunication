@@ -3726,6 +3726,77 @@ function chatIdToPhone(chatId) {
 function digitsOnly(v) {
   return String(v || "").replace(/\D/g, "");
 }
+
+// ──────────────────────────────────────────────────────────────────
+// v1.241: shared phone normalizer (copied from
+// https://github.com/rohit-aroleap/ferra-periskope-gateway/blob/main/lib/normalize-phone.js
+// — version 1.0.0). DO NOT EDIT HERE. Update upstream, bump VERSION
+// there, then copy this block again.
+//
+// Phase A of the canonical customer model. The worker doesn't currently
+// have a comparison-style normalizePhone call (legacy helpers above
+// handle the WhatsApp-specific transforms). This block is inlined for
+// (a) parity with web + mobile so all three copies of CommonComm agree,
+// and (b) future Phase B+ work where worker-side joins against
+// ferraSubscriptions/v1/byPhone need canonical keys.
+//
+// Canonical format: E.164 without the leading + sign — "919876543210".
+// ──────────────────────────────────────────────────────────────────
+const PHONE_NORMALIZER_VERSION = "1.0.0";
+
+function normalizePhone(raw) {
+  if (raw == null) return "";
+  let s = String(raw).trim();
+  if (/@g\.us$/i.test(s) || /@broadcast$/i.test(s)) return "";
+  s = s.replace(/@[a-z0-9.]+$/i, "");
+  s = s.replace(/\D/g, "");
+  while (s.startsWith("0") && s.length > 10) s = s.slice(1);
+  if (s.length === 10) s = "91" + s;
+  if (s.length < 11 || s.length > 15) return "";
+  return s;
+}
+
+function normalizeChatKey(raw) {
+  if (raw == null) return "";
+  const s = String(raw).trim();
+  if (/@g\.us$/i.test(s) || /@broadcast$/i.test(s)) {
+    return s.replace(/@.*$/, "").replace(/\D/g, "");
+  }
+  return normalizePhone(s);
+}
+
+function isValidPhone(raw) {
+  const p = normalizePhone(raw);
+  return p.length === 12 && p.startsWith("91");
+}
+
+function phoneVariants(raw) {
+  const c = normalizePhone(raw);
+  if (!c) return null;
+  const last10 = c.length >= 10 ? c.slice(-10) : c;
+  return {
+    canonical: c,
+    withPlus: "+" + c,
+    last10,
+    k10: last10,
+    chatId_c: c + "@c.us",
+  };
+}
+
+function formatPhoneDisplay(raw) {
+  const c = normalizePhone(raw);
+  if (!c) return "";
+  if (c.length === 12 && c.startsWith("91")) {
+    return `+91 ${c.slice(2, 7)}-${c.slice(7)}`;
+  }
+  return "+" + c;
+}
+
+function samePhone(a, b) {
+  const na = normalizePhone(a);
+  if (!na) return false;
+  return na === normalizePhone(b);
+}
 // Periskope's webhook envelope isn't perfectly stable, so look in a few
 // plausible spots for the org's own phone number. Returns digits-only, or
 // "" if nothing recognizable was found (in which case the guard treats the
