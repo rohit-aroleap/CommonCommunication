@@ -5,6 +5,12 @@ compatibility_date = "2025-05-01"
 [vars]
 FIREBASE_DB_URL = "https://motherofdashboard-default-rtdb.asia-southeast1.firebasedatabase.app"
 ALLOWED_ORIGIN = "*"
+# v1.239: shared Ferra-Periskope gateway. All outbound WhatsApp sends + edits +
+# deletes + reactions go through here instead of calling Periskope directly.
+# Centralizes the Periskope API key + rate-limit + dedup across all Aroleap
+# dashboards. Public URL — not a secret — so it lives in [vars]. Override
+# locally with `wrangler secret put PERISKOPE_GATEWAY_URL` if needed.
+PERISKOPE_GATEWAY_URL = "https://ferra-periskope-gateway.rohitpatel-mailid297.workers.dev"
 
 [ai]
 binding = "AI"

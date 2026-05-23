@@ -317,38 +317,67 @@ async function handleSend(request, env) {
   const resolvedChatId = chatId || phoneToChatId(phone);
   const resolvedPhone = phone || chatIdToPhone(resolvedChatId);
 
-  // Media support: dashboard passes media as { type, filename, mimetype, filedata }
-  // (Periskope's exact shape). Pass through verbatim if present.
-  const periskopeBody = { chat_id: resolvedChatId };
-  if (message) periskopeBody.message = message;
+  // v1.239: route through the shared ferra-periskope-gateway instead of
+  // hitting Periskope directly. Phase 5 of the gateway consolidation
+  // (the other Aroleap dashboards migrated in earlier phases). The
+  // gateway centralizes the Periskope API key + rate-limit + cross-
+  // dashboard dedup + observability under a single URL.
+  //
+  // What changes:
+  //   - request shape: gateway uses { phone OR chatId, text, kind,
+  //     dashboard, media, replyTo, idempotencyKey } instead of
+  //     Periskope's { chat_id, message, media, reply_to_message_id }
+  //   - response shape: gateway returns { ok, messageId, sentAt,
+  //     dashboard, kind, chatId } where messageId == Periskope's
+  //     unique_id. Errors come as { error, httpStatus, detail } 502.
+  //   - kind: "trainer-reply" because every CommonComm /send is a
+  //     trainer typing into the customer chat composer. dedupWindowMin
+  //     is 0 for trainer-reply (per gateway DEDUP_WINDOWS config), so
+  //     every send actually fires through — no surprises.
+  //
+  // What we KEEP doing:
+  //   - pre-write the byPeriskopeId dedup entry so the from_me=true
+  //     webhook echo can't double-write the bubble
+  //   - same Firebase write-paths for the message record + chat meta
+  //   - same mention / reply-snapshot / preview logic
+  const gatewayUrl =
+    env.PERISKOPE_GATEWAY_URL ||
+    "https://ferra-periskope-gateway.rohitpatel-mailid297.workers.dev";
+  const gatewayBody = {
+    chatId: resolvedChatId,
+    text: message || "",
+    kind: "trainer-reply",
+    dashboard: "commoncomm",
+    // Defensive: pass dedupWindowMin: 0 explicitly so a future change to
+    // the gateway's DEDUP_WINDOWS default for trainer-reply doesn't
+    // start silently dropping chat sends.
+    dedupWindowMin: 0,
+  };
   if (body.media && (body.media.filedata || body.media.url)) {
-    periskopeBody.media = body.media;
+    gatewayBody.media = body.media;
   }
-  // v1.153 reply / quote. When the caller includes a replyTo snapshot,
-  // we ask Periskope to make this a reply (so the customer's WhatsApp
-  // shows the quoted parent above the new message). Several possible
-  // field names — Periskope's REST docs aren't public, so we send the
-  // most-likely one and the build comment for the next round if it
-  // doesn't pop. reply_to_message_id is what WhatsApp's Cloud API uses.
-  // v1.232: skip the Periskope reply_to_message_id when this is a
-  // CROSS-CHAT reply (e.g., "Reply privately to customer" jumps from a
-  // group to a 1:1 thread). WhatsApp can't natively quote a message
-  // from a different chat, so passing a foreign message_id would
-  // either be rejected or silently ignored. The reply context lives
-  // only on our own bubble's replyTo snapshot in that case — the
-  // customer sees just the trainer's text in the 1:1.
+  // v1.232 carry-over: skip replyTo for cross-chat replies (the
+  // "Reply privately to customer" group→1:1 flow). WhatsApp can't quote
+  // a message that lives in a different chat — Periskope would either
+  // reject or silently drop it. The reply context lives only on our
+  // own bubble's replyTo snapshot in that case.
   if (body.replyTo?.periskopeMsgId && !body.replyTo?.sourceChatKey) {
-    periskopeBody.reply_to_message_id = body.replyTo.periskopeMsgId;
+    gatewayBody.replyTo = { periskopeMsgId: body.replyTo.periskopeMsgId };
   }
-  const periskopeRes = await fetch(`${PERISKOPE_BASE}/message/send`, {
+
+  const periskopeRes = await fetch(`${gatewayUrl}/send`, {
     method: "POST",
-    headers: periskopeHeaders(env),
-    body: JSON.stringify(periskopeBody),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(gatewayBody),
   });
 
   const periskopeJson = await safeJson(periskopeRes);
-  const ok = periskopeRes.ok;
-  const uniqueId = periskopeJson?.unique_id || null;
+  // v1.239: gateway success path returns { ok: true, messageId, ... }.
+  // Map gateway's messageId back to the unique_id name used everywhere
+  // downstream in this file (saves a wider rename — every "uniqueId"
+  // reference still means the same thing semantically).
+  const ok = periskopeRes.ok && periskopeJson?.ok === true;
+  const uniqueId = periskopeJson?.messageId || null;
 
   // Predict the message_id format that Periskope's webhook will use for
   // the from_me=true echo of this send: "true_{chat_id}_{unique_id}". By
@@ -486,27 +515,41 @@ async function handleEditMessage(request, env) {
   const trimmed = String(newText || "").trim();
   if (!trimmed) return json({ error: "missing newText" }, 400);
 
-  // Periskope's edit endpoint shape (per their REST API): PATCH to the
-  // resource with the new body. If the actual endpoint differs we'll see
-  // a 404/405 here and can adjust to POST /v1/message/edit pattern.
+  // v1.239: route through ferra-periskope-gateway's /edit endpoint
+  // instead of hitting Periskope directly. Same effective Periskope
+  // call happens on the other side; the gateway just centralizes the
+  // API key + adds observability. The frontend keeps calling
+  // `/edit-message` on THIS worker; we just swap the inner fetch.
+  const gatewayUrl =
+    env.PERISKOPE_GATEWAY_URL ||
+    "https://ferra-periskope-gateway.rohitpatel-mailid297.workers.dev";
   let periskopeRes;
   try {
-    periskopeRes = await fetch(
-      `${PERISKOPE_BASE}/message/${encodeURIComponent(periskopeMsgId)}`,
-      {
-        method: "PATCH",
-        headers: periskopeHeaders(env),
-        body: JSON.stringify({ edited_body: trimmed }),
-      },
-    );
+    periskopeRes = await fetch(`${gatewayUrl}/edit`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        periskopeMsgId,
+        text: trimmed,
+        dashboard: "commoncomm",
+      }),
+    });
   } catch (e) {
     return json({ error: "periskope_unreachable", details: String(e) }, 502);
   }
   const periskopeJson = await safeJson(periskopeRes);
-  if (!periskopeRes.ok) {
-    // Surface Periskope's error (likely "edit window expired" or similar)
-    // so the mobile UI can show a useful toast.
-    return json({ error: "periskope_edit_failed", details: periskopeJson, status: periskopeRes.status }, periskopeRes.status);
+  if (!periskopeRes.ok || periskopeJson?.ok !== true) {
+    // Gateway surfaces Periskope's verbatim error under `detail` (e.g.
+    // "edit window expired"). Pass it through with the original status
+    // code so the mobile UI's toast logic keeps working unchanged.
+    return json(
+      {
+        error: "periskope_edit_failed",
+        details: periskopeJson?.detail ?? periskopeJson,
+        status: periskopeRes.status,
+      },
+      periskopeRes.status === 200 ? 502 : periskopeRes.status,
+    );
   }
 
   // Patch the Firebase message record so connected clients update. Keep
@@ -566,23 +609,36 @@ async function handleDeleteMessage(request, env) {
   if (!periskopeMsgId) return json({ error: "missing periskopeMsgId" }, 400);
   if (!chatKey || !msgKey) return json({ error: "missing chatKey/msgKey" }, 400);
 
+  // v1.239: route through ferra-periskope-gateway's /delete endpoint.
+  const gatewayUrl =
+    env.PERISKOPE_GATEWAY_URL ||
+    "https://ferra-periskope-gateway.rohitpatel-mailid297.workers.dev";
   let periskopeRes;
   try {
-    periskopeRes = await fetch(
-      `${PERISKOPE_BASE}/message/${encodeURIComponent(periskopeMsgId)}`,
-      {
-        method: "DELETE",
-        headers: periskopeHeaders(env),
-      },
-    );
+    periskopeRes = await fetch(`${gatewayUrl}/delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        periskopeMsgId,
+        dashboard: "commoncomm",
+      }),
+    });
   } catch (e) {
     return json({ error: "periskope_unreachable", details: String(e) }, 502);
   }
   const periskopeJson = await safeJson(periskopeRes);
-  if (!periskopeRes.ok) {
-    // Most likely cause: "delete-for-everyone window expired" (~2 days on
-    // WhatsApp). Surface Periskope's error so mobile shows a useful toast.
-    return json({ error: "periskope_delete_failed", details: periskopeJson, status: periskopeRes.status }, periskopeRes.status);
+  if (!periskopeRes.ok || periskopeJson?.ok !== true) {
+    // Most likely cause: "delete-for-everyone window expired" (~2 days
+    // on WhatsApp). Gateway surfaces Periskope's verbatim error under
+    // `detail`. Pass through so the mobile UI's toast keeps working.
+    return json(
+      {
+        error: "periskope_delete_failed",
+        details: periskopeJson?.detail ?? periskopeJson,
+        status: periskopeRes.status,
+      },
+      periskopeRes.status === 200 ? 502 : periskopeRes.status,
+    );
   }
 
   // Tombstone the Firebase record. We keep media metadata (filename only,
@@ -641,26 +697,37 @@ async function handleReactToMessage(request, env) {
   // Allow empty emoji as the "remove my reaction" signal.
   const emojiTrimmed = String(emoji || "");
 
-  // Periskope's react endpoint. The MCP tool signature is { message_id,
-  // reaction } so the REST body uses the same field names. If their REST
-  // path differs (POST /v1/message/react vs /v1/message/{id}/react), we'll
-  // see a 404/405 here and can adjust.
+  // v1.239: route through ferra-periskope-gateway's /react endpoint.
+  // Translation: the local "" convention for "remove my reaction"
+  // becomes `null` on the gateway (per gateway docs — reaction: null
+  // forwards as the unreact signal to Periskope).
+  const gatewayUrl =
+    env.PERISKOPE_GATEWAY_URL ||
+    "https://ferra-periskope-gateway.rohitpatel-mailid297.workers.dev";
   let periskopeRes;
   try {
-    periskopeRes = await fetch(
-      `${PERISKOPE_BASE}/message/${encodeURIComponent(periskopeMsgId)}/react`,
-      {
-        method: "POST",
-        headers: periskopeHeaders(env),
-        body: JSON.stringify({ reaction: emojiTrimmed }),
-      },
-    );
+    periskopeRes = await fetch(`${gatewayUrl}/react`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        periskopeMsgId,
+        reaction: emojiTrimmed ? emojiTrimmed : null,
+        dashboard: "commoncomm",
+      }),
+    });
   } catch (e) {
     return json({ error: "periskope_unreachable", details: String(e) }, 502);
   }
   const periskopeJson = await safeJson(periskopeRes);
-  if (!periskopeRes.ok) {
-    return json({ error: "periskope_react_failed", details: periskopeJson, status: periskopeRes.status }, periskopeRes.status);
+  if (!periskopeRes.ok || periskopeJson?.ok !== true) {
+    return json(
+      {
+        error: "periskope_react_failed",
+        details: periskopeJson?.detail ?? periskopeJson,
+        status: periskopeRes.status,
+      },
+      periskopeRes.status === 200 ? 502 : periskopeRes.status,
+    );
   }
 
   // Patch Firebase to reflect the reaction (or its removal). null = delete
