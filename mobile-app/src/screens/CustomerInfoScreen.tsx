@@ -25,13 +25,18 @@ import { useAuth } from "@/auth/AuthContext";
 import { resolveDisplayName } from "@/lib/displayName";
 import { chatKeyToChatId } from "@/lib/encodeKey";
 import { getFerraUserByPhone, normalizeFerraPhone } from "@/lib/ferra";
+import {
+  formatPhoneDisplay,
+  normalizePhone,
+  samePhone,
+} from "@/lib/normalizePhone";
 import { transcribeAudio, uploadSaRecording } from "@/lib/worker";
 import {
   makeSaRecordingOptions,
   makeVoiceNoteRecordingOptions,
 } from "@/lib/voiceRecording";
 import { FERRA_TAG_STAGE } from "@/config";
-import type { Ticket } from "@/types";
+import type { FerraSubscription, Ticket } from "@/types";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "./types";
 
@@ -76,6 +81,7 @@ export function CustomerInfoScreen({ route, navigation }: Props) {
     contacts,
     sharedSubsByPhone,
     sharedCustomerDetails,
+    subsByPhone,
     tickets,
   } = useAppData();
 
@@ -127,6 +133,16 @@ export function CustomerInfoScreen({ route, navigation }: Props) {
 
   const subTag = sharedSubsByPhone?.[normalizedPhone] ?? null;
   const subStage = subTag ? FERRA_TAG_STAGE[subTag] : null;
+
+  // v1.243 (Phase E mobile): list of subscriptions this phone belongs
+  // to. Built once per render off the reverse index in AppDataContext.
+  // Empty when the phone doesn't match any Ferra subscription — the
+  // panel below hides itself in that case.
+  const mySubs = useMemo(() => {
+    const np = normalizePhone(phone);
+    if (!np) return [];
+    return subsByPhone.get(np) || [];
+  }, [phone, subsByPhone]);
 
   const chatTickets = useMemo<Ticket[]>(() => {
     const out: Ticket[] = [];
@@ -414,17 +430,34 @@ export function CustomerInfoScreen({ route, navigation }: Props) {
           below mirrors the desktop SA Sessions panel — same Firebase
           node, same status states. Hidden in group chats since SAs are
           per-customer, not per-group. */}
-      {/* TODO (Phase E follow-up, v1.242+): subscription-siblings panel.
-          Web shipped in v1.242 — shows a "👥 Subscription members"
-          section reading from /ferraSubscriptions/v1/bySubscription
-          with clickable links to other members' chats. Mobile parity is
-          a small follow-up: subscribe to bySubscription alongside the
-          existing byPhone listener in AppDataContext, build a
-          phone→subs reverse index, render cards here between the
-          subscription-stage pill and the SA Sessions section. Each
-          member link should navigation.push the Thread screen with
-          the target chatKey. See:
-          https://github.com/rohit-aroleap/ferra-periskope-gateway/blob/main/prompts/phase-e-commoncomm-subscription-siblings.md */}
+      {/* v1.243 (Phase E mobile): subscription-siblings panel — mirrors
+          the v1.242 web build. Shows one card per Ferra subscription
+          this phone is on, with the OTHER members listed as tappable
+          rows that navigate to that person's chat (or create a fresh
+          chatMeta record + open if no thread exists yet). Hidden when
+          the phone doesn't match any subscription. */}
+      {!isGroup && mySubs.length > 0 && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>
+            👥 SUBSCRIPTION MEMBERS
+          </Text>
+          {mySubs.map((sub, i) => (
+            <SubSiblingCard
+              key={sub._subId || `sub-${i}`}
+              sub={sub}
+              currentPhone={phone}
+              onOpenMember={(targetPhone, targetName) =>
+                openOrCreateChatForPhone(
+                  targetPhone,
+                  targetName,
+                  navigation,
+                )
+              }
+            />
+          ))}
+        </View>
+      )}
+
       {!isGroup && audioMod && (
         <View style={styles.section}>
           <View style={styles.notesHeader}>
@@ -852,6 +885,203 @@ function Chip({ label, accent }: { label: string; accent?: boolean }) {
       </Text>
     </View>
   );
+}
+
+// v1.243 (Phase E mobile): one card per Ferra subscription this phone
+// is on. Shows the plan tier, holder vs member badge, current step,
+// and a tappable list of OTHER members. Mirrors the web v1.242 layout
+// in feature parity if not pixel-perfect.
+function SubSiblingCard({
+  sub,
+  currentPhone,
+  onOpenMember,
+}: {
+  sub: FerraSubscription;
+  currentPhone: string;
+  onOpenMember: (phone: string, name: string) => void;
+}) {
+  const styles = useStyles(makeStyles);
+  const isHolder = samePhone(sub.customerPhone, currentPhone);
+
+  // Collect every OTHER member on this subscription (i.e., everyone
+  // except the phone whose chat the trainer is currently viewing). The
+  // customerPhone is included when it's not the current phone, because
+  // for a member viewing their card, the HOLDER is "another member"
+  // worth surfacing.
+  const others: Array<{ phone: string; name: string; isHolder: boolean }> = [];
+  if (sub.customerPhone && !samePhone(sub.customerPhone, currentPhone)) {
+    const cp = normalizePhone(sub.customerPhone);
+    if (cp) {
+      others.push({
+        phone: cp,
+        name: sub.customerName || "",
+        isHolder: true,
+      });
+    }
+  }
+  const phones = sub.memberPhones || [];
+  const names = sub.memberNames || [];
+  for (let i = 0; i < phones.length; i++) {
+    const p = normalizePhone(phones[i]);
+    if (!p) continue;
+    if (samePhone(p, currentPhone)) continue;
+    if (others.some((o) => o.phone === p)) continue;
+    others.push({
+      phone: p,
+      name: names[i] || "",
+      isHolder: false,
+    });
+  }
+
+  const planLabel = sub.planTier
+    ? String(sub.planTier).replace(/_/g, " ")
+    : "subscription";
+  const stepLabel = sub.currentStep
+    ? String(sub.currentStep).replace(/_/g, " ")
+    : "";
+
+  return (
+    <View style={styles.subCard}>
+      <View style={styles.subCardHead}>
+        <Text style={styles.subTier}>{planLabel}</Text>
+        <View
+          style={[
+            styles.subPill,
+            isHolder ? styles.subPillHolder : styles.subPillMember,
+          ]}
+        >
+          <Text
+            style={[
+              styles.subPillTxt,
+              isHolder
+                ? styles.subPillTxtHolder
+                : styles.subPillTxtMember,
+            ]}
+          >
+            {isHolder ? "you are the holder" : "you are a member"}
+          </Text>
+        </View>
+      </View>
+      {stepLabel ? (
+        <Text style={styles.subStepLine}>{stepLabel}</Text>
+      ) : null}
+      {!isHolder && sub.customerName ? (
+        <Text style={styles.subHolderLine}>
+          Holder: <Text style={{ fontWeight: "700" }}>{sub.customerName}</Text>
+        </Text>
+      ) : null}
+
+      <Text style={styles.subSectionLabel}>OTHER MEMBERS</Text>
+      {others.length === 0 ? (
+        <Text style={styles.subEmpty}>No other members on this subscription.</Text>
+      ) : (
+        others.map((o, i) => (
+          <TouchableOpacity
+            key={`${o.phone}-${i}`}
+            onPress={() => onOpenMember(o.phone, o.name)}
+            style={styles.subMemberRow}
+            accessibilityLabel={`Open chat with ${o.name || o.phone}`}
+          >
+            <Text style={styles.subMemberPhone}>
+              {formatPhoneDisplay(o.phone)}
+            </Text>
+            {o.name ? (
+              <Text style={styles.subMemberName}> — {o.name}</Text>
+            ) : null}
+            {o.isHolder ? (
+              <View style={[styles.subPill, styles.subPillHolder, { marginLeft: 6 }]}>
+                <Text style={[styles.subPillTxt, styles.subPillTxtHolder]}>
+                  holder
+                </Text>
+              </View>
+            ) : null}
+          </TouchableOpacity>
+        ))
+      )}
+    </View>
+  );
+}
+
+// v1.243 (Phase E mobile): open another customer's chat (creating the
+// chatMeta record if no thread exists yet). Mirrors the v1.242 web
+// build's openOrCreateChatForPhone — same logic, same chat-key
+// encoding rules. Returns Promise so caller can await if needed.
+async function openOrCreateChatForPhone(
+  rawPhone: string,
+  knownName: string,
+  navigation: NativeStackScreenProps<RootStackParamList, "CustomerInfo">["navigation"],
+): Promise<void> {
+  const np = normalizePhone(rawPhone);
+  if (!np) return;
+  const targetChatId = `${np}@c.us`;
+  const targetChatKey = targetChatId.replace(/[.#$[\]/]/g, "_");
+
+  // Quick sanity peek for an existing chatMeta record. If it exists,
+  // straight push to Thread. If not, prompt — same UX as web — and
+  // write the meta first so the chat list lights up immediately.
+  const metaRef = ref(db, `${ROOT}/chats/${targetChatKey}/meta`);
+  try {
+    const snap = await new Promise<{ exists: boolean }>((resolve, reject) => {
+      const unsub = onValue(
+        metaRef,
+        (s) => {
+          unsub();
+          resolve({ exists: s.exists() });
+        },
+        (err) => {
+          unsub();
+          reject(err);
+        },
+      );
+    });
+    const label = knownName
+      ? `${knownName} (${formatPhoneDisplay(np)})`
+      : formatPhoneDisplay(np);
+    if (snap.exists) {
+      navigation.push("Thread", {
+        chatKey: targetChatKey,
+        initialTitle: knownName || undefined,
+      });
+      return;
+    }
+    Alert.alert(
+      "Start a new chat?",
+      `No existing chat with ${label}. Start one now?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Start chat",
+          onPress: async () => {
+            try {
+              await set(ref(db, `${ROOT}/chats/${targetChatKey}/meta`), {
+                chatId: targetChatId,
+                phone: np,
+                displayName: knownName || null,
+                contactName: knownName || null,
+                lastMsgAt: Date.now(),
+                lastMsgPreview: "(opened via subscription siblings)",
+                lastMsgDirection: "out",
+              });
+              navigation.push("Thread", {
+                chatKey: targetChatKey,
+                initialTitle: knownName || undefined,
+              });
+            } catch (e) {
+              Alert.alert(
+                "Couldn't open chat",
+                String((e as Error)?.message || e),
+              );
+            }
+          },
+        },
+      ],
+    );
+  } catch (e) {
+    Alert.alert(
+      "Couldn't open chat",
+      String((e as Error)?.message || e),
+    );
+  }
 }
 
 function Row({ k, v }: { k: string; v: string }) {
@@ -1647,6 +1877,78 @@ function makeStyles(colors: Colors) {
     color: "white",
     fontSize: 16,
     fontWeight: "700",
+  },
+
+  // v1.243 (Phase E mobile): subscription-siblings panel styles.
+  subCard: {
+    backgroundColor: colors.bg,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    padding: 12,
+    marginBottom: 8,
+  },
+  subCardHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flexWrap: "wrap",
+    marginBottom: 4,
+  },
+  subTier: {
+    color: colors.text,
+    fontWeight: "700",
+    fontSize: 14,
+    textTransform: "capitalize",
+  },
+  subPill: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  subPillHolder: { backgroundColor: "rgba(0,168,132,0.15)" },
+  subPillMember: { backgroundColor: "rgba(99,102,241,0.15)" },
+  subPillTxt: { fontSize: 10, fontWeight: "700" },
+  subPillTxtHolder: { color: colors.green },
+  subPillTxtMember: { color: "#4338ca" },
+  subStepLine: {
+    color: colors.muted,
+    fontSize: 12,
+    marginTop: 2,
+  },
+  subHolderLine: {
+    color: colors.text,
+    fontSize: 13,
+    marginTop: 4,
+  },
+  subSectionLabel: {
+    color: colors.muted,
+    fontSize: 11,
+    fontWeight: "600",
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
+    marginTop: 10,
+    marginBottom: 4,
+  },
+  subEmpty: {
+    color: colors.muted,
+    fontSize: 13,
+    fontStyle: "italic",
+  },
+  subMemberRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    paddingVertical: 6,
+  },
+  subMemberPhone: {
+    color: colors.green,
+    fontFamily: "Courier",
+    fontSize: 13,
+  },
+  subMemberName: {
+    color: colors.text,
+    fontSize: 13,
   },
   });
 }

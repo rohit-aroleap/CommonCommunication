@@ -274,6 +274,28 @@ export interface CustomerDetail {
   lastPaymentDate?: string;
 }
 
+// v1.243 (Phase E mobile): subscription record stored at
+// /ferraSubscriptions/v1/bySubscription/{subId}. Written by the
+// Ferra-sync worker; CommonComm reads it to render the "Subscription
+// members" panel in the customer info screen. memberPhones + memberNames
+// are parallel arrays (index i in one corresponds to index i in the
+// other). customerPhone / customerName describe the subscription's
+// primary holder, who may or may not be the same as memberPhones[0].
+export interface FerraSubscription {
+  id?: string;
+  status?: string;
+  planTier?: string;
+  currentStep?: string;
+  customerPhone?: string;
+  customerName?: string;
+  customerEmail?: string;
+  memberPhones?: string[];
+  memberNames?: string[];
+  // Stashed by rebuildSubsByPhone so the UI can key by it without
+  // re-walking the source map.
+  _subId?: string;
+}
+
 export type StageBucket =
   | "setup"
   | "onboarding"

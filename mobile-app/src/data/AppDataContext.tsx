@@ -39,6 +39,7 @@ import type {
   CustomerDetail,
   DmMeta,
   DmRow,
+  FerraSubscription,
   FerraUser,
   SendActivity,
   TeamMember,
@@ -70,6 +71,12 @@ interface AppDataValue {
   cancelledUsers: Record<string, FerraUser> | FerraUser[] | null;
   sharedSubsByPhone: Record<string, string> | null;
   sharedCustomerDetails: Record<string, CustomerDetail> | null;
+  // v1.243 (Phase E mobile): phone → list of subscriptions this phone is
+  // a member of. Keyed by canonical 12-digit phone. Drives the "👥
+  // Subscription members" panel in CustomerInfoScreen, mirroring the
+  // v1.242 web build. An ARRAY because one phone can be on multiple
+  // subscriptions (rare but possible).
+  subsByPhone: Map<string, FerraSubscription[]>;
   // v1.212: timestamp from ferraSubscriptions/v1/uploadedAt — the last
   // moment the Ferra-sync worker wrote fresh data. Surfaced in the app
   // header as "↻ 30m ago" so trainers know whether the customer list /
@@ -123,6 +130,36 @@ function normalizePhone(p: string): string {
   return canonicalNormalizePhone(p);
 }
 
+// v1.243 (Phase E mobile): build the phone → subscriptions reverse
+// index from the raw bySubscription snapshot. Mirrors index.html's
+// rebuildSubsByPhone() in shape and semantics so the panel renders
+// identically on both surfaces. One phone can map to MULTIPLE
+// subscriptions (rare: own subscription AND on a parent's) — the UI
+// handles that by stacking cards.
+function buildSubsByPhoneIndex(
+  bySubscription: Record<string, FerraSubscription> | undefined | null,
+): Map<string, FerraSubscription[]> {
+  const idx = new Map<string, FerraSubscription[]>();
+  if (!bySubscription || typeof bySubscription !== "object") return idx;
+  for (const subId in bySubscription) {
+    const sub = bySubscription[subId];
+    if (!sub) continue;
+    const phones = new Set<string>();
+    const cust = canonicalNormalizePhone(sub.customerPhone || "");
+    if (cust) phones.add(cust);
+    for (const p of sub.memberPhones || []) {
+      const np = canonicalNormalizePhone(p);
+      if (np) phones.add(np);
+    }
+    const tagged: FerraSubscription = { ...sub, _subId: subId };
+    for (const p of phones) {
+      if (!idx.has(p)) idx.set(p, []);
+      idx.get(p)!.push(tagged);
+    }
+  }
+  return idx;
+}
+
 // Sorted-UID pairKey. Same convention as web — see index.html getPairKey().
 export function getPairKey(uidA: string, uidB: string): string {
   return [String(uidA), String(uidB)].sort().join("_");
@@ -173,6 +210,13 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
   const [sharedCustomerDetails, setSharedCustomerDetails] = useState<
     Record<string, CustomerDetail> | null
   >(null);
+  // v1.243 (Phase E mobile): phone → subscriptions reverse index, built
+  // each time the ferraSubscriptions/v1 listener fires. See
+  // rebuildSubsByPhone helper below + the snapshot callback at
+  // attachTier3 where the rebuild fires.
+  const [subsByPhone, setSubsByPhone] = useState<
+    Map<string, FerraSubscription[]>
+  >(() => new Map());
   // v1.212: when Ferra last synced (epoch ms). Updated whenever the
   // ferraSubscriptions/v1 node is rewritten by the Ferra-sync worker.
   const [ferraLastSyncedAt, setFerraLastSyncedAt] = useState<number | null>(
@@ -369,6 +413,12 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
           const v = s.val() as {
             byPhone?: Record<string, string>;
             customerDetails?: Record<string, CustomerDetail>;
+            // v1.243 (Phase E mobile): same node the v1.242 web build
+            // reads. One entry per Ferra subscription, with
+            // customerPhone + memberPhones[] + memberNames[]. We turn
+            // it into a phone → subscriptions reverse index right here
+            // so the consumer (CustomerInfoScreen) is just a lookup.
+            bySubscription?: Record<string, FerraSubscription>;
             // v1.212: epoch-ms timestamp the Ferra-sync worker writes on
             // every successful pull. Used to render the "↻ 30m ago" pill
             // in the app header.
@@ -376,6 +426,10 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
           } | null;
           setSharedSubsByPhone(v?.byPhone ?? null);
           setSharedCustomerDetails(v?.customerDetails ?? null);
+          // v1.243: rebuild the phone → subscriptions reverse index
+          // every time fresh subscription data arrives. Mirrors the
+          // v1.242 web build's rebuildSubsByPhone() inside index.html.
+          setSubsByPhone(buildSubsByPhoneIndex(v?.bySubscription));
           // Coerce — the worker has historically written either a number
           // (epoch ms) or an ISO string. Try numeric first, fall back to
           // Date.parse, fall back to null.
@@ -656,6 +710,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       cancelledUsers,
       sharedSubsByPhone,
       sharedCustomerDetails,
+      subsByPhone,
       ferraLastSyncedAt,
       ferraIndex,
       myLastSeen,
@@ -691,6 +746,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       ticketsCount,
       sharedSubsByPhone,
       sharedCustomerDetails,
+      subsByPhone,
       ferraLastSyncedAt,
       ferraIndex,
       myLastSeen,
