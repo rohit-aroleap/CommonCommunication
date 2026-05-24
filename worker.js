@@ -1735,17 +1735,31 @@ async function handleFetchChatInfo(request, env) {
     else        updates[`${ROOT}/chats/${encodeKey(chatId)}/meta/contactName`] = chatName;
   }
   let membersWritten = 0;
+  // v1.244: also write a phone-set under meta/memberPhones for group chats so
+  // the dashboard can build a phone → daily-group-code reverse index without
+  // re-querying Periskope. Always overwrite (not patch) — Periskope's
+  // chat.members IS the source of truth for current membership, and we want
+  // removed members to disappear from our index. Skip for user chats (1:1).
+  const memberPhonesMap = {};
   if (chat?.members && typeof chat.members === "object") {
     for (const m of Object.values(chat.members)) {
       if (!m) continue;
       const phone = String(m.contact_id || "").split("@")[0].replace(/\D/g, "");
+      if (!phone) continue;
+      memberPhonesMap[phone] = true;
       const name = m.contact_name;
-      if (!phone || !name) continue;
+      if (!name) continue;
       updates[`${ROOT}/contacts/${phone}/name`] = name;
       updates[`${ROOT}/contacts/${phone}/source`] = "group_members";
       updates[`${ROOT}/contacts/${phone}/seenAt`] = Date.now();
       membersWritten++;
     }
+  }
+  if (isGroup) {
+    // Always write — even an empty {} signals "we've checked and found none"
+    // so the client doesn't keep retrying the backfill in a loop.
+    updates[`${ROOT}/chats/${encodeKey(chatId)}/meta/memberPhones`] = memberPhonesMap;
+    updates[`${ROOT}/chats/${encodeKey(chatId)}/meta/memberPhonesAt`] = Date.now();
   }
   mirrorChatsMetaToIndex(updates);
   await fbPatchRoot(env, updates);

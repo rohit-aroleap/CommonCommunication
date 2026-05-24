@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.243</title>
+<title>CommonCommunication v1.244</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -1384,6 +1384,12 @@
   .pill-sm.stage-sa          { background: #dbeafe; color: #1e40af; }
   .pill-sm.stage-active      { background: #d1fae5; color: #065f46; }
   .pill-sm.stage-offboarding { background: #fee2e2; color: #991b1b; }
+  /* v1.244: daily-workout cohort code pill (e.g. "C034") — shown next to
+     the stage pill in the customer-info drawer so trainers can tell at
+     a glance which morning cohort group a customer belongs to. Dimmed
+     "C-" variant for customers who aren't in any known cohort group. */
+  .pill-sm.daily-group       { background: #ede9fe; color: #5b21b6; cursor: default; }
+  .pill-sm.daily-group.empty { background: #f3f4f6; color: #9ca3af; }
 
   /* Subscription-status filter pills above the chat list */
   .filter-row {
@@ -2631,7 +2637,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.243";
+const APP_VERSION = "v1.244";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -4835,6 +4841,16 @@ function listenChats() {
     rows.sort((a,b) => (b.lastMsgAt || 0) - (a.lastMsgAt || 0));
     lastChatRows = rows;
     _chatsListenerFired = true;
+    // v1.244: rebuild phone → daily-group reverse index on EVERY chats
+    // snapshot so the customer-info pill stays fresh as group members are
+    // added/removed (worker's /fetch-chat-info overwrites meta.memberPhones
+    // every call). Cheap — O(groups × members), and there are ~tens of
+    // groups with ~30-50 members each.
+    rebuildPhoneToDailyGroup();
+    // Fire-and-forget background backfill for any daily group that's
+    // never had its members fetched. Idempotent — bails immediately if
+    // already running or if there's nothing to do.
+    backfillDailyGroupMembers().catch(e => console.warn("[daily-group-backfill]", e));
     renderChatList(rows);
     updateTabTitle();
     processNotificationsFromSnapshot(chatsCache);
@@ -5438,6 +5454,15 @@ function renderInfoDrawer() {
   const stagePill = subTag
     ? `<span class="pill-sm stage-${stage}" title="${escapeHtml(subTag)}">${escapeHtml(FERRA_TAG_SHORT[subTag] || subTag)}</span>`
     : "";
+  // v1.244: daily-workout cohort group pill — sits next to the stage pill on
+  // the second row. Reads phoneToDailyGroupIdx (rebuilt from chatsCache on
+  // every chats snapshot). "C034" = found in that cohort group; "C-" =
+  // not in any group we know about. The dim variant uses the empty class
+  // so trainers can visually distinguish "not in a group" from "in C034".
+  const dailyGroupCode = phoneToDailyGroupIdx.get(normalizePhone(phone)) || null;
+  const dailyGroupPill = dailyGroupCode
+    ? `<span class="pill-sm daily-group" title="Daily workout cohort: ${escapeHtml(dailyGroupCode)}">${escapeHtml(dailyGroupCode)}</span>`
+    : `<span class="pill-sm daily-group empty" title="Not in any daily workout cohort group">C-</span>`;
 
   // Habit
   const streak = user.streak || {};
@@ -5534,7 +5559,7 @@ function renderInfoDrawer() {
       <div style="font-size:16px; font-weight:600; margin-bottom:4px;">${escapeHtml(user.name || phone)}</div>
       <div style="color:var(--muted); font-size:12px; margin-bottom:8px;">${escapeHtml(phone)}${user.age ? ` · ${escapeHtml(String(user.age))}y` : ""}${user.gender ? ` · ${escapeHtml(user.gender)}` : ""}</div>
       <div style="display:flex; gap:5px; flex-wrap:wrap; margin-bottom:5px;">${customerPill}${subPill}</div>
-      ${stagePill ? `<div style="display:flex; gap:5px; flex-wrap:wrap;">${stagePill}</div>` : ""}
+      <div style="display:flex; gap:5px; flex-wrap:wrap;">${stagePill}${dailyGroupPill}</div>
     </div>
 
     ${addressHtml}
@@ -7089,6 +7114,98 @@ const LIVE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const DAILY_GROUP_PREFIX = "Daily Workout Ferra C";
 function isDailyGroup(r) {
   return r && r.chatType === "group" && String(r.groupName || "").startsWith(DAILY_GROUP_PREFIX);
+}
+// v1.244: pull "C034" out of "Daily Workout Ferra C034" (or "… C034 - Morning")
+// — the dashboard pill, the customer-info pill, and any future cohort filter
+// all want just the bare code, not the whole noisy name.
+function dailyGroupCodeFromName(groupName) {
+  const m = String(groupName || "").match(/Daily Workout Ferra (C\d+)/i);
+  return m ? m[1].toUpperCase() : null;
+}
+
+// v1.244: reverse index canonical-phone → daily-group code (e.g. "C034"),
+// driven off chatsCache[group].meta.memberPhones. Populated lazily — the
+// worker writes memberPhones the first time /fetch-chat-info runs for a
+// group, and the backfill driver below fires that endpoint on any daily
+// group that doesn't yet have memberPhones written. Until backfill
+// catches up, customers in unfetched groups show the "C-" placeholder
+// pill (not in any group we know about).
+let phoneToDailyGroupIdx = new Map();
+function rebuildPhoneToDailyGroup() {
+  const idx = new Map();
+  for (const [chatKey, meta] of Object.entries(chatsCache)) {
+    if (!meta) continue;
+    const isGroup = meta.chatType === "group" || String(meta.chatId || "").endsWith("@g.us");
+    if (!isGroup) continue;
+    const code = dailyGroupCodeFromName(meta.groupName);
+    if (!code) continue;
+    const members = meta.memberPhones || {};
+    for (const phone in members) {
+      const np = normalizePhone(phone);
+      if (!np) continue;
+      // A phone shouldn't appear in two cohort groups — but if it does,
+      // first one wins (Object.entries order matches insertion order,
+      // which roughly matches Firebase key order = oldest first).
+      if (!idx.has(np)) idx.set(np, code);
+    }
+  }
+  phoneToDailyGroupIdx = idx;
+}
+
+// v1.244: backfill driver. Walks chatsCache for daily groups missing
+// memberPhones and fires /fetch-chat-info one at a time (1.5s gap) so
+// we don't hammer Periskope on first load. Re-entrant-safe via the
+// _backfillRunning flag. Re-rebuilds the reverse index after each
+// successful fetch so the info-drawer pill fills in progressively as
+// groups come back from Periskope.
+let _backfillingGroups = new Set();
+let _backfillRunning = false;
+async function backfillDailyGroupMembers() {
+  if (_backfillRunning) return;
+  if (!WORKER_URL) return;
+  _backfillRunning = true;
+  try {
+    while (true) {
+      let target = null;
+      for (const [chatKey, meta] of Object.entries(chatsCache)) {
+        if (!meta) continue;
+        const isGroup = meta.chatType === "group" || String(meta.chatId || "").endsWith("@g.us");
+        if (!isGroup) continue;
+        if (!dailyGroupCodeFromName(meta.groupName)) continue;
+        // memberPhonesAt is the "we tried" marker — even an empty map gets
+        // a timestamp, so we don't retry groups Periskope returned 0 for.
+        if (meta.memberPhonesAt) continue;
+        if (_backfillingGroups.has(chatKey)) continue;
+        target = { chatKey, chatId: meta.chatId || chatKeyToChatId(chatKey) };
+        break;
+      }
+      if (!target) break;
+      _backfillingGroups.add(target.chatKey);
+      try {
+        await fetch(`${WORKER_URL}/fetch-chat-info`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chatId: target.chatId }),
+        });
+      } catch (e) {
+        console.warn("[daily-group-backfill] fetch failed:", target.chatKey, e);
+        // On failure, give up on this group for the session — otherwise we
+        // loop forever on a permanently 404'd chat. The chats listener
+        // re-firing won't requeue it because memberPhonesAt is still unset,
+        // but _backfillingGroups stays sticky for the page session.
+      } finally {
+        // Leave _backfillingGroups marker in place for the session —
+        // either the worker wrote memberPhonesAt (success → skipped by
+        // the meta check next iter) or it didn't (failure → stay sticky
+        // so we don't loop). Either way safe.
+      }
+      // Throttle: 1.5s between fetches. Periskope's per-key limits are
+      // generous but this is a once-per-session backfill, no rush.
+      await new Promise(r => setTimeout(r, 1500));
+    }
+  } finally {
+    _backfillRunning = false;
+  }
 }
 let currentStatusFilter = "All";
 
