@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.244</title>
+<title>CommonCommunication v1.245</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2637,7 +2637,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.244";
+const APP_VERSION = "v1.245";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -5432,22 +5432,42 @@ function renderInfoDrawer() {
     return;
   }
   const phone = meta.phone || "";
+  // v1.245: don't gate the entire drawer on findFerraUserByPhone (which only
+  // checks ferraHabitData/v1/users). New customers who've subscribed but
+  // haven't done any workouts yet are NOT in habitUsers — but ARE in
+  // ferraSubscriptions/v1 (customerDetails + bySubscription). Previously the
+  // drawer early-returned "No Ferra data" for them, hiding address, plan,
+  // subscription members, SA recordings, notes, tickets — everything. The
+  // mobile app already renders gracefully in this case; the web now matches.
+  // Fallback hierarchy:
+  //   user (habit) → customerDetail (subscriptions) → meta (chat) → phone.
   const user = findFerraUserByPhone(phone);
-  if (!user) {
-    infoBody.innerHTML = `<div class="info-empty">No Ferra data for <b>${escapeHtml(phone)}</b>.<br><br>Either this customer isn't in Ferra yet, or the data hasn't synced. Try the ↻ Ferra refresh in the topbar.</div>`;
-    return;
-  }
-  const uid = user.uid || user.userId;
+  const uid = user?.uid || user?.userId || null;
+  // Customer details from ferraSubscriptions/v1/customerDetails. Moved above
+  // the pills block so subscription-side fallbacks can use it.
+  const customerDetail = sharedSubs?.customerDetails?.[normalizeFerraPhone(phone)] || null;
+  const normPhone = normalizeFerraPhone(phone);
+  // mySubs: subscriptions this phone is on (Phase E index). Used as the
+  // last-ditch "are they in Ferra at all?" signal for the empty-state copy.
+  const mySubs = subsByPhoneIdx.get(normalizePhone(phone)) || [];
+  const hasAnyFerraSignal = !!user || !!customerDetail || mySubs.length > 0;
+
   const subTag = getSubscriptionTag(phone);
   const stage = subTag ? (FERRA_TAG_STAGE[subTag] || "setup") : null;
-  const isCancelled = cancelledPhones.has(normalizeFerraPhone(phone));
+  const isCancelled = cancelledPhones.has(normPhone);
   // Customer pill = where they sit in our active vs cancelled lists
   const customerActive = !isCancelled;
   const customerPill = `<span class="pill-sm status-${customerActive ? "active" : "cancelled"}">Customer ${customerActive ? "🟢" : "🔴"}</span>`;
-  // Subscription pill = subscriptionStatus from Ferra (active means subscription is live)
-  const subRaw = String(user.subscriptionStatus || "").toLowerCase();
-  const subOk = subRaw === "active" || subRaw === "initialized" || subRaw === "paused" || subRaw === "customer_paused";
-  const subPill = user.subscriptionStatus
+  // Subscription pill = subscriptionStatus, sourced from (in order):
+  // habit user → customerDetail → global phoneToStatus index.
+  const subStatusRaw =
+    user?.subscriptionStatus ||
+    customerDetail?.status ||
+    phoneToStatus?.[normPhone] ||
+    "";
+  const subStatusLower = String(subStatusRaw).toLowerCase();
+  const subOk = subStatusLower === "active" || subStatusLower === "initialized" || subStatusLower === "paused" || subStatusLower === "customer_paused";
+  const subPill = subStatusRaw
     ? `<span class="pill-sm status-${subOk ? "active" : "cancelled"}">Subscription ${subOk ? "🟢" : "🔴"}</span>`
     : "";
   // Stage pill kept as a separate row line (not crowded with the two main pills)
@@ -5464,33 +5484,30 @@ function renderInfoDrawer() {
     ? `<span class="pill-sm daily-group" title="Daily workout cohort: ${escapeHtml(dailyGroupCode)}">${escapeHtml(dailyGroupCode)}</span>`
     : `<span class="pill-sm daily-group empty" title="Not in any daily workout cohort group">C-</span>`;
 
-  // Habit
-  const streak = user.streak || {};
-  const habitChips = [
+  // Habit chips — only meaningful when we have a habit user. Empty string
+  // when not, so the Habit section can hide itself entirely below.
+  const streak = user?.streak || {};
+  const habitChips = user ? [
     user.habitScore  != null ? `<span class="stat-chip"><b>${escapeHtml(String(user.habitScore))}</b>habit</span>` : "",
     user.tierLabel             ? `<span class="stat-chip"><b>${escapeHtml(user.tierLabel)}</b>tier</span>` : "",
     streak.days != null        ? `<span class="stat-chip"><b>${escapeHtml(String(streak.days))}d</b>streak${streak.active ? " · active" : ""}</span>` : "",
     user.daysSinceLastSession != null ? `<span class="stat-chip"><b>${escapeHtml(String(user.daysSinceLastSession))}d</b>since session</span>` : "",
     user.trend14d != null && user.trend14d !== 0 ? `<span class="stat-chip"><b>${user.trend14d > 0 ? "+" : ""}${escapeHtml(String(user.trend14d))}</b>14d trend</span>` : "",
-  ].filter(Boolean).join("");
+  ].filter(Boolean).join("") : "";
 
-  // Customer details pulled from ferraSubscriptions/v1/customerDetails —
-  // synced by the ferra-sync worker from Ferra's subscription Cloud Function.
-  // Address is the headline value (trainers ask about delivery / install
-  // location constantly); the other fields enrich the Subscription block.
-  // MUST be declared above the Subscription block since subKv uses it.
-  const customerDetail = sharedSubs?.customerDetails?.[normalizeFerraPhone(phone)] || null;
-
-  // Subscription
+  // Subscription rows: habit-user fields are the rich primary source;
+  // customerDetail fills in for habit-less customers (plan tier, status,
+  // start date, email, payment). The map preserves the order trainers
+  // expect (Plan → Status → Started → …).
   const subKv = [
-    user.subscriptionPlanTier  && ["Plan",    user.subscriptionPlanTier],
-    user.subscriptionStatus    && ["Status",  user.subscriptionStatus],
-    user.subscriptionStartDate && ["Started", formatDateOnly(user.subscriptionStartDate)],
-    user.subscriptionEndDate   && ["Ends",    formatDateOnly(user.subscriptionEndDate)],
-    user.cancellationDate      && ["Cancelled on", formatDateOnly(user.cancellationDate)],
-    user.userAgeDays != null   && ["Age",     `${user.userAgeDays}d`],
-    user.segment               && ["Segment", user.segment],
-    user.subscriptionSource    && ["Source",  user.subscriptionSource],
+    (user?.subscriptionPlanTier || customerDetail?.planTier) && ["Plan", user?.subscriptionPlanTier || customerDetail?.planTier],
+    (user?.subscriptionStatus   || customerDetail?.status)   && ["Status", user?.subscriptionStatus || customerDetail?.status],
+    (user?.subscriptionStartDate || customerDetail?.startDate) && ["Started", formatDateOnly(user?.subscriptionStartDate || customerDetail?.startDate)],
+    user?.subscriptionEndDate && ["Ends",    formatDateOnly(user.subscriptionEndDate)],
+    user?.cancellationDate    && ["Cancelled on", formatDateOnly(user.cancellationDate)],
+    user?.userAgeDays != null && ["Age",     `${user.userAgeDays}d`],
+    user?.segment             && ["Segment", user.segment],
+    user?.subscriptionSource  && ["Source",  user.subscriptionSource],
   ].filter(Boolean);
   // Append payment + email rows from the new customerDetails feed.
   if (customerDetail?.email) subKv.push(["Email", customerDetail.email]);
@@ -5534,8 +5551,9 @@ function renderInfoDrawer() {
   }).join("");
   const daysHtml = `<div class="week-grid">${boxesHtml}</div><div class="week-labels">${labelsHtml}</div>`;
 
-  // Ad attribution
-  const adKv = [
+  // Ad attribution — habit-user only, since Ferra's habit feed is where
+  // acquisition columns live. Section hidden entirely when missing.
+  const adKv = user ? [
     user.adSource   && ["Source",   user.adSource],
     user.adMedium   && ["Medium",   user.adMedium],
     user.adCampaign && ["Campaign", user.adCampaign],
@@ -5543,7 +5561,31 @@ function renderInfoDrawer() {
     user.adTerm     && ["Term",     user.adTerm],
     user.landingPage && ["Landing", user.landingPage],
     user.referrer   && ["Referrer", user.referrer],
-  ].filter(Boolean);
+  ].filter(Boolean) : [];
+
+  // Best display name available. Habit user wins (richer), then the
+  // subscriptions feed, then the chat-level contactName/groupName, then
+  // bare phone. Mirrors the mobile fallback order.
+  const displayName =
+    user?.name ||
+    customerDetail?.name ||
+    (mySubs[0] && mySubs[0].customerName) ||
+    meta.contactName ||
+    meta.displayName ||
+    phone;
+  // age + gender only exist on habit user.
+  const ageGenderSuffix =
+    (user?.age ? ` · ${escapeHtml(String(user.age))}y` : "") +
+    (user?.gender ? ` · ${escapeHtml(user.gender)}` : "");
+
+  // If we genuinely have nothing — no habit user, no customerDetail, no
+  // subscription — preserve the original "No Ferra data" empty state.
+  // (Subscription-siblings panel doesn't help here since it reads
+  // subsByPhoneIdx which would also be empty.)
+  if (!hasAnyFerraSignal) {
+    infoBody.innerHTML = `<div class="info-empty">No Ferra data for <b>${escapeHtml(phone)}</b>.<br><br>Either this customer isn't in Ferra yet, or the data hasn't synced. Try the ↻ Ferra refresh in the topbar.</div>`;
+    return;
+  }
 
   // Address block — shown directly under the header so it's the first
   // thing trainers see. Empty when customerDetails doesn't have it.
@@ -5554,22 +5596,35 @@ function renderInfoDrawer() {
        </div>`
     : "";
 
-  infoBody.innerHTML = `
-    <div class="info-section">
-      <div style="font-size:16px; font-weight:600; margin-bottom:4px;">${escapeHtml(user.name || phone)}</div>
-      <div style="color:var(--muted); font-size:12px; margin-bottom:8px;">${escapeHtml(phone)}${user.age ? ` · ${escapeHtml(String(user.age))}y` : ""}${user.gender ? ` · ${escapeHtml(user.gender)}` : ""}</div>
-      <div style="display:flex; gap:5px; flex-wrap:wrap; margin-bottom:5px;">${customerPill}${subPill}</div>
-      <div style="display:flex; gap:5px; flex-wrap:wrap;">${stagePill}${dailyGroupPill}</div>
-    </div>
-
-    ${addressHtml}
-
+  // v1.245: only render Habit + Last 7 days when we actually have a habit
+  // user. Trainers told us a section showing "No habit data yet" with an
+  // empty 7-day grid was just visual clutter for new customers.
+  const habitSectionHtml = user ? `
     <div class="info-section">
       <h4>Habit</h4>
       ${habitChips ? `<div class="stat-row">${habitChips}</div>` : ""}
       ${user.lastActiveDate ? `<div style="font-size:12px; color:var(--muted);">Last active: ${escapeHtml(formatDateOnly(user.lastActiveDate))}</div>` : ""}
       ${!habitChips && !user.lastActiveDate ? `<div style="font-size:12px; color:var(--muted);">No habit data yet.</div>` : ""}
     </div>
+  ` : "";
+  const last7DaysHtml = uid ? `
+    <div class="info-section">
+      <h4>Last 7 days</h4>
+      ${daysHtml}
+    </div>
+  ` : "";
+
+  infoBody.innerHTML = `
+    <div class="info-section">
+      <div style="font-size:16px; font-weight:600; margin-bottom:4px;">${escapeHtml(displayName)}</div>
+      <div style="color:var(--muted); font-size:12px; margin-bottom:8px;">${escapeHtml(phone)}${ageGenderSuffix}</div>
+      <div style="display:flex; gap:5px; flex-wrap:wrap; margin-bottom:5px;">${customerPill}${subPill}</div>
+      <div style="display:flex; gap:5px; flex-wrap:wrap;">${stagePill}${dailyGroupPill}</div>
+    </div>
+
+    ${addressHtml}
+
+    ${habitSectionHtml}
 
     <div class="info-section">
       <h4>Subscription</h4>
@@ -5588,10 +5643,7 @@ function renderInfoDrawer() {
          that case so non-Ferra chats stay clean. -->
     ${renderSubscriptionSiblingsPanel(phone)}
 
-    <div class="info-section">
-      <h4>Last 7 days</h4>
-      ${daysHtml}
-    </div>
+    ${last7DaysHtml}
 
     ${adKv.length ? `
     <div class="info-section">
