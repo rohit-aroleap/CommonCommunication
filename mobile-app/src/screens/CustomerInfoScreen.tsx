@@ -1245,6 +1245,18 @@ function SaRecorderModal({
 
   const startedAtRef = useRef<number | null>(null);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // v1.244: keep a live ref to onClose so the prepare effect can call the
+  // latest closure without listing onClose in deps. The parent passes
+  // onClose as an inline arrow (`() => setSaModalOpen(false)`), so its
+  // reference changes on every parent re-render — including renders
+  // triggered by Firebase listener updates while the modal is open. With
+  // onClose in deps, the effect re-fires those renders, hitting
+  // prepareToRecordAsync on the already-prepared native session and
+  // throwing "AudioRecorder has already been prepared".
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   // Prepare the recorder on mount; request mic permission if needed.
   useEffect(() => {
@@ -1257,7 +1269,7 @@ function SaRecorderModal({
           Alert.alert(
             "Microphone access denied",
             "Enable microphone permission for CommonCommunication in your phone's Settings.",
-            [{ text: "OK", onPress: onClose }],
+            [{ text: "OK", onPress: () => onCloseRef.current() }],
           );
           return;
         }
@@ -1271,7 +1283,22 @@ function SaRecorderModal({
           shouldPlayInBackground: true,
           staysActiveInBackground: true,
         });
-        await recorder.prepareToRecordAsync();
+        // v1.244: defensive prepare. expo-audio's native AudioRecorder
+        // holds session state outside the JS object, so a previous mount
+        // (modal closed without explicit stop) can leak a "prepared"
+        // session into the next mount's recorder. Catch the specific
+        // "already been prepared" error and treat it as success — the
+        // recorder is, after all, ready to record, which is what this
+        // call was trying to ensure.
+        try {
+          await recorder.prepareToRecordAsync();
+        } catch (e) {
+          const msg = String((e as Error)?.message || e);
+          if (!msg.toLowerCase().includes("already been prepared")) {
+            throw e;
+          }
+          // else: silently swallow, recorder is good to go.
+        }
       } catch (e) {
         if (cancelled) return;
         Alert.alert(
@@ -1286,8 +1313,15 @@ function SaRecorderModal({
         clearInterval(tickRef.current);
         tickRef.current = null;
       }
+      // v1.244: best-effort release on unmount so the native session
+      // doesn't outlive the modal. stop() fails if the recorder was
+      // never started (i.e. user opened then closed without hitting
+      // record) — swallow that, it's expected.
+      recorder.stop().catch(() => {});
     };
-  }, [recorder, onClose]);
+    // v1.244: deliberately NOT including onClose — see onCloseRef above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recorder]);
 
   // Upload a stopped recording. Returns when the worker has accepted
   // the file (transcription continues in the background server-side).
