@@ -370,7 +370,9 @@ export function CustomerInfoScreen({ route, navigation }: Props) {
         <View style={styles.pillRow}>
           {ferraUser && (
             <View style={styles.pillCustomer}>
-              <Text style={styles.pillTxt}>Customer</Text>
+              <Text style={[styles.pillTxt, styles.pillTxtActive]}>
+                Customer
+              </Text>
             </View>
           )}
           {subscriptionStatus && (
@@ -384,7 +386,16 @@ export function CustomerInfoScreen({ route, navigation }: Props) {
                     : styles.pillNeutral,
               ]}
             >
-              <Text style={styles.pillTxt}>
+              <Text
+                style={[
+                  styles.pillTxt,
+                  isActive
+                    ? styles.pillTxtActive
+                    : isCancelled
+                      ? styles.pillTxtCancelled
+                      : styles.pillTxtNeutral,
+                ]}
+              >
                 {isActive
                   ? "Active"
                   : isCancelled
@@ -395,7 +406,9 @@ export function CustomerInfoScreen({ route, navigation }: Props) {
           )}
           {subStage && subTag && (
             <View style={[styles.pill, styles.pillStage]}>
-              <Text style={styles.pillTxt}>{subTag}</Text>
+              <Text style={[styles.pillTxt, styles.pillTxtStage]}>
+                {subTag}
+              </Text>
             </View>
           )}
         </View>
@@ -1581,7 +1594,17 @@ function makeStyles(colors: Colors) {
   pillCancelled: { backgroundColor: "#fee2e2" },
   pillNeutral: { backgroundColor: "#e5e7eb" },
   pillStage: { backgroundColor: "#dbeafe" },
-  pillTxt: { fontSize: 11, fontWeight: "600", color: colors.text },
+  // v1.245: pill text colors are theme-INDEPENDENT and always dark, because
+  // the pill backgrounds are always pale (#d1fae5, #fee2e2, #dbeafe). Using
+  // the theme's foreground color (colors.text) made the text white in dark
+  // mode and invisible against the pale pill background. The web's
+  // .pill-sm.status-* / .stage-* classes already use these per-variant
+  // dark colors; mobile now matches.
+  pillTxt: { fontSize: 11, fontWeight: "600", color: "#065f46" },
+  pillTxtActive: { color: "#065f46" },
+  pillTxtCancelled: { color: "#991b1b" },
+  pillTxtStage: { color: "#1e40af" },
+  pillTxtNeutral: { color: "#374151" },
   chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 8 },
   chip: {
     backgroundColor: "#f3f4f6",
@@ -1590,7 +1613,10 @@ function makeStyles(colors: Colors) {
     borderRadius: 14,
   },
   chipAccent: { backgroundColor: "#d1fae5" },
-  chipTxt: { fontSize: 12, fontWeight: "600", color: colors.text },
+  // v1.245: same dark-mode bug as pillTxt above — habit chip text was
+  // invisible against the pale chip background in dark mode. Hardcoded
+  // dark gray (#374151) since the base chip bg is always light gray.
+  chipTxt: { fontSize: 12, fontWeight: "600", color: "#374151" },
   chipTxtAccent: { color: "#065f46" },
   muted: { fontSize: 12, color: colors.muted },
   row: {
