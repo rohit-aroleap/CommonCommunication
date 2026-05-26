@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.246</title>
+<title>CommonCommunication v1.247</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2637,7 +2637,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.246";
+const APP_VERSION = "v1.247";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -5578,14 +5578,14 @@ function renderInfoDrawer() {
     (user?.age ? ` · ${escapeHtml(String(user.age))}y` : "") +
     (user?.gender ? ` · ${escapeHtml(user.gender)}` : "");
 
-  // If we genuinely have nothing — no habit user, no customerDetail, no
-  // subscription — preserve the original "No Ferra data" empty state.
-  // (Subscription-siblings panel doesn't help here since it reads
-  // subsByPhoneIdx which would also be empty.)
-  if (!hasAnyFerraSignal) {
-    infoBody.innerHTML = `<div class="info-empty">No Ferra data for <b>${escapeHtml(phone)}</b>.<br><br>Either this customer isn't in Ferra yet, or the data hasn't synced. Try the ↻ Ferra refresh in the topbar.</div>`;
-    return;
-  }
+  // v1.247: don't early-return when there's no Ferra signal. Even for
+  // brand-new chats with people not in Ferra, the trainer still needs
+  // to be able to record an SA, open tickets, etc. The Ferra-specific
+  // panels (pills, address, subscription, habit, last-7-days) hide
+  // themselves below via `isFerraCustomer ? ... : ""` so the drawer
+  // shows just the chat-level sections (Tickets + SA Sessions) plus a
+  // small "Not a Ferra customer" hint when applicable.
+  const isFerraCustomer = hasAnyFerraSignal;
 
   // Address block — shown directly under the header so it's the first
   // thing trainers see. Empty when customerDetails doesn't have it.
@@ -5614,24 +5614,46 @@ function renderInfoDrawer() {
     </div>
   ` : "";
 
-  infoBody.innerHTML = `
-    <div class="info-section">
-      <div style="font-size:16px; font-weight:600; margin-bottom:4px;">${escapeHtml(displayName)}</div>
-      <div style="color:var(--muted); font-size:12px; margin-bottom:8px;">${escapeHtml(phone)}${ageGenderSuffix}</div>
-      <div style="display:flex; gap:5px; flex-wrap:wrap; margin-bottom:5px;">${customerPill}${subPill}</div>
-      <div style="display:flex; gap:5px; flex-wrap:wrap;">${stagePill}${dailyGroupPill}</div>
+  // v1.247: pills row + non-Ferra hint. For Ferra customers, show the
+  // usual Customer / Subscription / Stage / Daily-group pills. For
+  // non-Ferra chats, hide all the pills (the "Customer 🟢" pill in
+  // particular would be misleading) and show a small inline notice so
+  // the trainer knows why the Ferra panels are missing.
+  const pillsRowHtml = isFerraCustomer ? `
+    <div style="display:flex; gap:5px; flex-wrap:wrap; margin-bottom:5px;">${customerPill}${subPill}</div>
+    <div style="display:flex; gap:5px; flex-wrap:wrap;">${stagePill}${dailyGroupPill}</div>
+  ` : "";
+  const nonFerraHintHtml = !isFerraCustomer ? `
+    <div style="font-size:12px; color:var(--muted); padding:8px 12px; background:var(--header); border-radius:6px; margin-top:8px; line-height:1.5;">
+      Not a Ferra customer yet. SA recordings, tickets, and notes still work —
+      the subscription / habit / address panels will appear once this contact
+      lands in Ferra.
     </div>
-
-    ${addressHtml}
-
-    ${habitSectionHtml}
-
+  ` : "";
+  // Subscription section is hidden entirely for non-Ferra chats — showing
+  // an empty "No subscription details" placeholder is noise.
+  const subscriptionSectionHtml = isFerraCustomer ? `
     <div class="info-section">
       <h4>Subscription</h4>
       ${subKv.length
         ? `<div class="info-grid">${subKv.map(([k,v]) => `<div class="k">${escapeHtml(k)}</div><div class="v">${escapeHtml(String(v))}</div>`).join("")}</div>`
         : `<div style="font-size:12px; color:var(--muted);">No subscription details.</div>`}
     </div>
+  ` : "";
+
+  infoBody.innerHTML = `
+    <div class="info-section">
+      <div style="font-size:16px; font-weight:600; margin-bottom:4px;">${escapeHtml(displayName)}</div>
+      <div style="color:var(--muted); font-size:12px; margin-bottom:8px;">${escapeHtml(phone)}${ageGenderSuffix}</div>
+      ${pillsRowHtml}
+      ${nonFerraHintHtml}
+    </div>
+
+    ${addressHtml}
+
+    ${habitSectionHtml}
+
+    ${subscriptionSectionHtml}
 
     <!-- v1.243 (Phase E): subscription-siblings panel. Renders one card
          per Ferra subscription this phone is part of, showing the plan
