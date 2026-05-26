@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.245</title>
+<title>CommonCommunication v1.246</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2637,7 +2637,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.245";
+const APP_VERSION = "v1.246";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -6844,12 +6844,18 @@ function renderChatList(rows) {
   // clicked this pill given the OTHER row's current selection."
   const applyStatusFilter = (rows) => {
     if (currentStatusFilter === "Daily Groups") return rows.filter(isDailyGroup);
+    // v1.246: My tickets is the ONE filter where daily groups SHOULD pass
+    // through. The blanket !isDailyGroup() strip below keeps cohort-group
+    // chatter out of the everyday inbox — sensible for All / Live / Urgent
+    // / status filters — but if a trainer has been explicitly assigned a
+    // ticket on a group chat, hiding that chat from their tickets view is
+    // actively wrong. Phone app already includes group tickets here;
+    // bringing web in line.
+    if (currentStatusFilter === "My tickets") return rows.filter(r => myChatKeys.has(r.chatKey));
     let v = rows.filter(r => !isDailyGroup(r));
     if (currentStatusFilter === "Live") {
       const liveCutoff = Date.now() - LIVE_WINDOW_MS;
       v = v.filter(r => (r.lastMsgAt || 0) >= liveCutoff);
-    } else if (currentStatusFilter === "My tickets") {
-      v = v.filter(r => myChatKeys.has(r.chatKey));
     } else if (currentStatusFilter === "Favorites") {
       v = v.filter(r => isFavorite(r.chatKey));
     } else if (currentStatusFilter === "Urgent") {
@@ -7691,7 +7697,15 @@ function computeStatusCounts(visibleRows, myChatKeys) {
   for (const r of visibleRows) {
     // Daily Groups are their own bucket — kept out of All / Live / status counts
     // so the everyday inbox view isn't cluttered by workout cohort chatter.
-    if (isDailyGroup(r)) { counts["Daily Groups"]++; continue; }
+    if (isDailyGroup(r)) {
+      counts["Daily Groups"]++;
+      // v1.246: still count toward My tickets so the rail badge matches the
+      // mobile app's count when a trainer has an assigned ticket on a
+      // cohort group. See applyStatusFilter for the matching filter
+      // behavior — the two have to agree or the badge lies.
+      if (set.has(r.chatKey)) counts["My tickets"]++;
+      continue;
+    }
     counts.All++;
     if ((r.lastMsgAt || 0) >= liveCutoff) counts.Live++;
     if (set.has(r.chatKey)) counts["My tickets"]++;
