@@ -1239,14 +1239,27 @@ function SaSessionRow({
   );
 }
 
+// v1.251: filesystem-safe name sanitizer for the SA folder/filename
+// pattern. Strips ONLY characters illegal on Windows / macOS / Linux /
+// Dropbox: / \ : * ? " < > |. Preserves spaces, hyphens, parentheses,
+// AND any Unicode letters (so Hindi/Kannada/accented Latin customer
+// names survive into the file path). Caps at 80 chars to keep paths
+// from blowing the 255-byte filesystem limit.
+function sanitizeNameForFs(s: string): string {
+  return String(s || "")
+    .replace(/[\/\\:*?"<>|]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+}
+
 // v1.236: Full-screen SA recording modal. Owns the expo-audio recorder
-// lifecycle — created on mount, torn down on unmount. The trainer can
-// start / stop the recording from here; on stop, the file URI is
-// uploaded to the worker's /sa-upload endpoint via uploadSaRecording.
-// Auto-split: when the elapsed timer hits 60 min, the modal
-// transparently stops the current recording, fires the upload, and
-// immediately starts a new one with the same recorder instance. The
-// trainer sees "Part 2/2" pill once the second piece kicks in.
+// lifecycle — created on mount, torn down on unmount.
+//
+// v1.251: replaces the auto-split + cloud-storage flow. One continuous
+// recording → local persistent storage → AsyncStorage queue → worker
+// /sa-transcribe-local → transcript to RTDB + audio backed up to
+// Dropbox via worker. See stopAndQueue() for the full Stop→save path.
 function SaRecorderModal({
   chatKey,
   customerName,
@@ -1472,13 +1485,30 @@ function SaRecorderModal({
     }
 
     const clientSessionId = generateClientSessionId();
-    const fileName = `sa-${chatKey}-${clientSessionId}.m4a`;
-    const persistentDir = `${FileSystem.documentDirectory}sa-recordings/`;
+    const sessionAt = startedAtRef.current || Date.now();
+
+    // v1.251: build the per-customer folder + date-time filename used on
+    // BOTH the tablet's documentDirectory AND in Dropbox.
+    //   folderName = "{phone} - {customerName}"  (or just "{phone}" when
+    //                 customerName is empty / non-Ferra contact)
+    //   fileName   = "YYYY-MM-DD HH-MM-SS.m4a"  (tablet's local time)
+    const phone = chatKey.split("_")[0].replace(/\D/g, "") || "unknown";
+    const cleanName = sanitizeNameForFs(customerName);
+    const folderName = cleanName ? `${phone} - ${cleanName}` : phone;
+    const d = new Date(sessionAt);
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    const hh = String(d.getHours()).padStart(2, "0");
+    const min = String(d.getMinutes()).padStart(2, "0");
+    const ss = String(d.getSeconds()).padStart(2, "0");
+    const fileName = `${yyyy}-${mm}-${dd} ${hh}-${min}-${ss}.m4a`;
+
+    const persistentDir = `${FileSystem.documentDirectory}sa-recordings/${folderName}/`;
     const destUri = `${persistentDir}${fileName}`;
 
     try {
-      // Make sure the directory exists. getInfoAsync + makeDirectoryAsync
-      // is idempotent on the existing-dir case (with intermediates=true).
+      // Make sure the per-customer directory exists.
       await FileSystem.makeDirectoryAsync(persistentDir, {
         intermediates: true,
       });
@@ -1525,6 +1555,9 @@ function SaRecorderModal({
       uploadedByName,
       durationSec,
       sizeBytes,
+      customerName: cleanName || undefined,
+      dropboxFolderName: folderName,
+      dropboxFileName: fileName,
     });
     kickSaProcessor();
 

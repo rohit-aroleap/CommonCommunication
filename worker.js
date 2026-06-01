@@ -2391,16 +2391,45 @@ async function dropboxUpload(env, path, bytes, contentType) {
   return { path: actualPath, shareUrl, directUrl };
 }
 
+// Strip filesystem-illegal characters but preserve Unicode (so Hindi /
+// Kannada names survive). Cap length so paths don't explode.
+function sanitizeNameForFs(s) {
+  return String(s || "")
+    .replace(/[\/\\:*?"<>|]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+}
+
 // Background job that mirrors a freshly-transcribed local SA up to
 // Dropbox and patches the RTDB record with the resulting share URL.
-// Fire-and-forget via ctx.waitUntil from handleSaTranscribeLocal — the
-// trainer doesn't wait on this; the Dropbox link just appears on the
-// SA row whenever the upload completes.
-async function dropboxBackupSaSession(env, chatKey, sessionId, bytes, mimeType, fileName) {
+// Fire-and-forget via ctx.waitUntil from handleSaTranscribeLocal.
+//
+// v1.251: signature accepts optional dropboxFolderName + dropboxFileName
+// from the mobile client. When supplied, file lands at
+//   /sa-recordings/{folderName}/{fileName}
+// (per-customer folders: "917760800366 - Priyanka Mishra"). When NOT
+// supplied (older mobile clients still on v1.250 OTA), falls back to
+// the legacy year-month layout so older builds keep working.
+async function dropboxBackupSaSession(env, chatKey, sessionId, bytes, mimeType, fileName, dropboxFolderName, dropboxFileName) {
   const fbPath = `${ROOT}/chats/${encodeKey(chatKey)}/saSessions/${sessionId}`;
   try {
-    const yyyymm = new Date().toISOString().slice(0, 7); // "2026-05"
-    const dropboxPath = `/sa-recordings/${yyyymm}/${fileName}`;
+    let dropboxPath;
+    if (dropboxFolderName && dropboxFileName) {
+      // v1.251 path: per-customer folder + date-time filename.
+      // Sanitize again worker-side — defense in depth in case the mobile
+      // string contains anything Dropbox would reject.
+      const safeFolder = sanitizeNameForFs(dropboxFolderName);
+      const safeFile = sanitizeNameForFs(dropboxFileName);
+      if (!safeFolder || !safeFile) {
+        throw new Error("invalid dropboxFolderName/dropboxFileName after sanitize");
+      }
+      dropboxPath = `/sa-recordings/${safeFolder}/${safeFile}`;
+    } else {
+      // v1.250 fallback path.
+      const yyyymm = new Date().toISOString().slice(0, 7);
+      dropboxPath = `/sa-recordings/${yyyymm}/${fileName}`;
+    }
     const result = await dropboxUpload(env, dropboxPath, bytes, mimeType);
     await fbPatch(env, fbPath, {
       dropboxPath: result.path,
@@ -2464,6 +2493,14 @@ async function handleSaTranscribeLocal(request, env, ctx) {
   const durationSec = form.get("durationSec")
     ? Number(form.get("durationSec"))
     : null;
+  // v1.251: new optional fields. mobile clients on v1.251+ supply
+  // customerName + dropboxFolderName + dropboxFileName so the worker
+  // can write a customer-folder path to Dropbox AND store the
+  // customer name on the saSession record. Older clients omit them
+  // and we fall back to the legacy year-month Dropbox layout.
+  const customerName = String(form.get("customerName") || "");
+  const dropboxFolderName = String(form.get("dropboxFolderName") || "");
+  const dropboxFileName = String(form.get("dropboxFileName") || "");
 
   if (!file || typeof file === "string") return json({ error: "missing file" }, 400);
   if (!chatKey) return json({ error: "missing chatKey" }, 400);
@@ -2522,6 +2559,9 @@ async function handleSaTranscribeLocal(request, env, ctx) {
     uploadedAt: Date.now(),
     uploadedByUid,
     uploadedByName: uploadedByName || null,
+    // v1.251: customer name denormalized onto the saSession record so
+    // admin views / future cross-chat queries don't have to re-join.
+    customerName: customerName || null,
     status: "queued",
     storageMode: "local-only",   // marks this as a no-R2-backup session
     groqModel: SA_GROQ_MODEL,
@@ -2534,10 +2574,19 @@ async function handleSaTranscribeLocal(request, env, ctx) {
   ctx.waitUntil(transcribeSaSession(env, chatKey, clientSessionId, bytes, mimeType, fileName));
 
   // v1.250: ALSO fan out the bytes to Dropbox as an off-tablet backup.
-  // Independent of the transcription path — if Dropbox is misconfigured
-  // or down, transcription still happens. The Dropbox link surfaces on
-  // the SA row via dropboxShareUrl once the upload completes.
-  ctx.waitUntil(dropboxBackupSaSession(env, chatKey, clientSessionId, bytes, mimeType, fileName));
+  // v1.251: pass dropboxFolderName + dropboxFileName so the file lands in
+  // the per-customer folder. Falls back to the legacy year-month layout
+  // when those fields are missing (older mobile clients).
+  ctx.waitUntil(dropboxBackupSaSession(
+    env,
+    chatKey,
+    clientSessionId,
+    bytes,
+    mimeType,
+    fileName,
+    dropboxFolderName,
+    dropboxFileName,
+  ));
 
   return json({ ok: true, sessionId: clientSessionId });
 }
@@ -2768,17 +2817,17 @@ async function transcribeSaSession(env, chatKey, sessionId, bytes, mimeType, fil
     form.append("model", SA_GROQ_MODEL);
     form.append("response_format", "verbose_json"); // gets us text + segments
     form.append("temperature", "0");                // deterministic
-    // v1.250: force English (Latin-script) output. Without this hint,
-    // Whisper auto-detects the dominant language of the audio — and SAs
-    // with even brief Hindi phrases would render the WHOLE transcript
-    // (including English-spoken words like "testing", "report", "working")
-    // in Devanagari script phonetically. Forcing en keeps everything in
-    // Latin: English words come out as English, Hindi words come out as
-    // their phonetic Hinglish spelling ("muje", "kya hai", "thik hai"),
-    // which trainers can read either way.
-    form.append("language", "en");
+    // v1.251: switched from /transcriptions to /translations. /transcriptions
+    // with language=en (v1.250 behavior) produced Latin-script Hinglish — fine
+    // for Hindi/English code-switching, but the Kannada use case needed
+    // actual semantic translation, not phonetic Latin transliteration. The
+    // /translations endpoint translates any input language to English. Cost
+    // is identical (same Whisper-large-v3 model, per-second-of-audio price).
+    // Trade-off: the trainer's exact code-switched phrasing is lost —
+    // "muje back pain hai" becomes "I have back pain". The original audio
+    // is preserved on Dropbox + tablet for verification.
 
-    const groqRes = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+    const groqRes = await fetch("https://api.groq.com/openai/v1/audio/translations", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${env.GROQ_API_KEY}`,

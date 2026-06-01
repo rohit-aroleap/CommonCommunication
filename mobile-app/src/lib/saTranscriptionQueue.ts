@@ -67,6 +67,13 @@ export interface SaQueueItem {
   lastAttemptAt: number;         // epoch ms
   nextAttemptAt: number;         // epoch ms; processor skips items where this is in future
   lastError: string | null;
+  // v1.251: passed through to the worker so it can write the per-customer
+  // Dropbox path and stash customerName on the saSession record. All
+  // optional for backward compat with v1.249/v1.250 queue items that
+  // might still be sitting in AsyncStorage from an older app session.
+  customerName?: string;
+  dropboxFolderName?: string;
+  dropboxFileName?: string;
 }
 
 let _memCache: SaQueueItem[] | null = null;
@@ -124,6 +131,9 @@ export async function addToQueue(item: {
   uploadedByName: string;
   durationSec: number | null;
   sizeBytes: number | null;
+  customerName?: string;
+  dropboxFolderName?: string;
+  dropboxFileName?: string;
 }): Promise<SaQueueItem> {
   const items = await loadFromStorage();
   const now = Date.now();
@@ -225,6 +235,9 @@ async function processQueue(): Promise<void> {
           clientSessionId: target.clientSessionId,
           fileName: target.fileName,
           durationSec: target.durationSec,
+          customerName: target.customerName,
+          dropboxFolderName: target.dropboxFolderName,
+          dropboxFileName: target.dropboxFileName,
         });
         if (res.ok) {
           success = true;

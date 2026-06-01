@@ -277,6 +277,10 @@ export async function uploadSaRecording(body: {
 // this just hands the bytes to the worker for one transcription pass.
 // Idempotent on clientSessionId, so a queue-driven retry pings the same
 // endpoint until it succeeds without creating duplicate saSession records.
+//
+// v1.251: added customerName + dropboxFolderName + dropboxFileName so the
+// worker can build the per-customer Dropbox path and denormalize the
+// customer name onto the saSession record.
 export async function transcribeSaRecordingLocal(body: {
   fileUri: string;
   chatKey: string;
@@ -285,6 +289,9 @@ export async function transcribeSaRecordingLocal(body: {
   clientSessionId: string;
   fileName?: string;
   durationSec?: number | null;
+  customerName?: string;
+  dropboxFolderName?: string;
+  dropboxFileName?: string;
 }): Promise<{ ok: boolean; sessionId?: string; error?: string }> {
   try {
     const form = new FormData();
@@ -301,6 +308,9 @@ export async function transcribeSaRecordingLocal(body: {
     if (body.durationSec != null) {
       form.append("durationSec", String(body.durationSec));
     }
+    if (body.customerName) form.append("customerName", body.customerName);
+    if (body.dropboxFolderName) form.append("dropboxFolderName", body.dropboxFolderName);
+    if (body.dropboxFileName) form.append("dropboxFileName", body.dropboxFileName);
     const r = await fetch(`${WORKER_URL}/sa-transcribe-local`, {
       method: "POST",
       body: form,
