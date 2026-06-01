@@ -2595,6 +2595,15 @@ async function transcribeSaSession(env, chatKey, sessionId, bytes, mimeType, fil
     form.append("model", SA_GROQ_MODEL);
     form.append("response_format", "verbose_json"); // gets us text + segments
     form.append("temperature", "0");                // deterministic
+    // v1.250: force English (Latin-script) output. Without this hint,
+    // Whisper auto-detects the dominant language of the audio — and SAs
+    // with even brief Hindi phrases would render the WHOLE transcript
+    // (including English-spoken words like "testing", "report", "working")
+    // in Devanagari script phonetically. Forcing en keeps everything in
+    // Latin: English words come out as English, Hindi words come out as
+    // their phonetic Hinglish spelling ("muje", "kya hai", "thik hai"),
+    // which trainers can read either way.
+    form.append("language", "en");
 
     const groqRes = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
       method: "POST",
