@@ -1258,6 +1258,16 @@ function SaRecorderModal({
 
   const startedAtRef = useRef<number | null>(null);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // v1.248: lock-flag for the auto-split critical section. While
+  // autoSplit() is mid-flight (stop segment 1 → prepare recorder →
+  // start segment 2), the Stop button MUST be disabled — otherwise
+  // a user tap races with the split, recorder.uri gets clobbered by
+  // segment 2 starting on the same file path, and nothing uploads.
+  // (This is the silent-close-at-the-1-hour-mark bug reported by
+  // rohit on 2026-05-25.) Ref drives the actual lock; state mirror
+  // drives the UI re-render to update the disabled-button styling.
+  const isAutoSplittingRef = useRef(false);
+  const [isAutoSplitting, setIsAutoSplitting] = useState(false);
   // v1.244: keep a live ref to onClose so the prepare effect can call the
   // latest closure without listing onClose in deps. The parent passes
   // onClose as an inline arrow (`() => setSaModalOpen(false)`), so its
@@ -1400,7 +1410,22 @@ function SaRecorderModal({
 
   // Stop + upload the current segment without starting a new one (user
   // pressed Stop).
+  //
+  // v1.248: two new guards beyond the original two-line happy path:
+  //   1. If autoSplit is mid-critical-section, wait up to 10 s for it to
+  //      finish so we don't double-call recorder.stop() on a shared
+  //      native session. The button is also disabled during that window,
+  //      but a tap that landed JUST before the lock flipped on still
+  //      gets handled gracefully here.
+  //   2. If recorder.uri is undefined after stop, surface an explicit
+  //      alert. Previously this was a silent no-op — the modal would
+  //      close and the trainer assumed everything was saved.
   async function stopAndUpload() {
+    let waited = 0;
+    while (isAutoSplittingRef.current && waited < 10000) {
+      await new Promise((r) => setTimeout(r, 200));
+      waited += 200;
+    }
     if (tickRef.current) {
       clearInterval(tickRef.current);
       tickRef.current = null;
@@ -1410,6 +1435,11 @@ function SaRecorderModal({
       const uri = recorder.uri as string | undefined;
       if (uri) {
         await uploadSegment(uri, partIndex);
+      } else {
+        Alert.alert(
+          "Recording didn't capture",
+          "The recorder didn't produce an audio file. Please try recording again, and if this keeps happening let Rohit know.",
+        );
       }
     } catch (e) {
       Alert.alert(
@@ -1419,23 +1449,41 @@ function SaRecorderModal({
     }
   }
 
-  // Auto-split path. Stops the current segment, fires the upload (don't
-  // await — we want the next segment to start immediately), re-prepares
-  // the recorder, increments part index, restarts.
+  // Auto-split path. Stops the current segment, re-prepares the recorder,
+  // starts the next segment, THEN uploads the previous segment in the
+  // background.
+  //
+  // v1.248 bug-fix history:
+  //   The old version fire-and-forgot the upload (`.catch(() => {})`)
+  //   BEFORE re-preparing / re-starting. Two consequences:
+  //   1. The catch silently swallowed any upload failure — including
+  //      the failures caused by point (2).
+  //   2. If the user tapped Stop at the 60-min mark (very common, since
+  //      that's exactly when the auto-split watchdog fires), their
+  //      stopAndUpload ran in parallel with the autoSplit. Both called
+  //      recorder.stop() on a shared native session, and segment 2 was
+  //      then started writing to the same file path that segment 1's
+  //      upload was still reading from. The result: corrupted upload,
+  //      no record, silently closed modal.
+  //
+  // Fix: serialise via isAutoSplittingRef. The lock covers the critical
+  // section ONLY (stop → prepare → start), then releases so the user
+  // can stop normally even if the background upload is still running.
+  // The upload's failure path now surfaces an Alert instead of being
+  // swallowed.
   async function autoSplit() {
+    if (isAutoSplittingRef.current) return; // already running, don't re-enter
+    isAutoSplittingRef.current = true;
+    setIsAutoSplitting(true);
     if (tickRef.current) {
       clearInterval(tickRef.current);
       tickRef.current = null;
     }
+    let segmentUri: string | undefined;
+    const finishedSegmentIndex = partIndex;
     try {
       await recorder.stop();
-      const uri = recorder.uri as string | undefined;
-      if (uri) {
-        // Fire-and-forget the upload so it doesn't gate the next segment
-        // from starting. The next segment is the more time-sensitive
-        // operation; the previous one is already on disk.
-        uploadSegment(uri, partIndex).catch(() => {});
-      }
+      segmentUri = recorder.uri as string | undefined;
       await recorder.prepareToRecordAsync();
       setPartIndex((p) => p + 1);
       await start();
@@ -1443,6 +1491,31 @@ function SaRecorderModal({
       Alert.alert(
         "Auto-split failed",
         String((e as Error)?.message || e),
+      );
+      isAutoSplittingRef.current = false;
+      setIsAutoSplitting(false);
+      return;
+    }
+    // Critical section done — segment 2 is now recording. Release the lock
+    // so the user can press Stop normally even while segment 1's background
+    // upload continues.
+    isAutoSplittingRef.current = false;
+    setIsAutoSplitting(false);
+
+    // Background upload of segment 1 with EXPLICIT error surfacing.
+    // The old fire-and-forget `.catch(() => {})` swallowed failures here.
+    if (segmentUri) {
+      uploadSegment(segmentUri, finishedSegmentIndex).catch((e) => {
+        Alert.alert(
+          `Part ${finishedSegmentIndex + 1} upload failed`,
+          String((e as Error)?.message || e) +
+            "\n\nRecording continues for the next part, but this segment's transcript will be missing.",
+        );
+      });
+    } else {
+      Alert.alert(
+        `Part ${finishedSegmentIndex + 1} didn't capture`,
+        "The recorder didn't produce a file for the previous segment. Recording continues for the next part.",
       );
     }
   }
@@ -1514,6 +1587,19 @@ function SaRecorderModal({
         ) : (
           <TouchableOpacity
             onPress={() => {
+              // v1.248: refuse the tap while the auto-split critical
+              // section is running. Without this, a Stop tap right at
+              // the 60-min boundary races with the split and the
+              // segment's audio file gets clobbered before its upload
+              // finishes. Window is ~50-300 ms; user just needs to
+              // tap again.
+              if (isAutoSplittingRef.current) {
+                Alert.alert(
+                  "One moment",
+                  "Saving the previous hour — try Stop again in a few seconds.",
+                );
+                return;
+              }
               Alert.alert(
                 "Stop recording?",
                 "The recording will be uploaded for transcription.",
@@ -1523,8 +1609,12 @@ function SaRecorderModal({
                 ],
               );
             }}
-            style={[styles.saActionBtn, styles.saActionBtnStop]}
-            disabled={uploading}
+            style={[
+              styles.saActionBtn,
+              styles.saActionBtnStop,
+              (uploading || isAutoSplitting) && { opacity: 0.5 },
+            ]}
+            disabled={uploading || isAutoSplitting}
           >
             {uploading ? (
               <ActivityIndicator color="white" />
