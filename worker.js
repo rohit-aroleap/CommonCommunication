@@ -2249,6 +2249,173 @@ async function handleSaUpload(request, env, ctx) {
   return json({ ok: true, sessionId, audioUrl, key });
 }
 
+// v1.250: Dropbox auto-backup. After successful transcription, the worker
+// uploads the audio bytes to the team's Dropbox account (app folder scoped
+// → only the CommonComm app can read/write under /Apps/CommonComm/). This
+// gives trainers an off-tablet backup + a humane file-browser UI without
+// CommonComm having to write its own file management screens.
+//
+// Auth: refresh-token flow. The refresh token in env.DROPBOX_REFRESH_TOKEN
+// never expires (app-folder-scoped apps issue long-lived refresh tokens).
+// We trade it for a 4-hour access token on demand, cached in-isolate so
+// repeat uploads within the cache window skip the refresh.
+let _dropboxAccessTokenCache = { token: null, expiresAt: 0 };
+
+async function getDropboxAccessToken(env) {
+  // 60-second safety margin so we don't hand out a token that expires
+  // mid-upload.
+  if (
+    _dropboxAccessTokenCache.token &&
+    _dropboxAccessTokenCache.expiresAt > Date.now() + 60_000
+  ) {
+    return _dropboxAccessTokenCache.token;
+  }
+  if (!env.DROPBOX_REFRESH_TOKEN || !env.DROPBOX_APP_KEY || !env.DROPBOX_APP_SECRET) {
+    throw new Error("Dropbox secrets not configured (DROPBOX_REFRESH_TOKEN / APP_KEY / APP_SECRET)");
+  }
+  const res = await fetch("https://api.dropboxapi.com/oauth2/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: env.DROPBOX_REFRESH_TOKEN,
+      client_id: env.DROPBOX_APP_KEY,
+      client_secret: env.DROPBOX_APP_SECRET,
+    }).toString(),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Dropbox token refresh ${res.status}: ${text.slice(0, 300)}`);
+  }
+  const j = await res.json();
+  _dropboxAccessTokenCache = {
+    token: j.access_token,
+    expiresAt: Date.now() + (Number(j.expires_in) || 14400) * 1000,
+  };
+  return j.access_token;
+}
+
+// Upload `bytes` to Dropbox at `path` (path is RELATIVE to the app's
+// sandbox root, e.g. "/sa-recordings/2026-05/sa-foo.m4a" lands at
+// "/Apps/CommonComm/sa-recordings/2026-05/sa-foo.m4a" in the actual
+// Dropbox UI). Returns { path, shareUrl } where shareUrl is a public
+// link anyone can use to view/listen — useful for surfacing in the
+// SA Sessions row on web + mobile.
+async function dropboxUpload(env, path, bytes, contentType) {
+  const accessToken = await getDropboxAccessToken(env);
+
+  // Upload step. mode=add + autorename=true means an existing file at the
+  // same path doesn't get overwritten — Dropbox appends " (1)" etc.
+  // safer than mode=overwrite for a backup flow.
+  const uploadRes = await fetch("https://content.dropboxapi.com/2/files/upload", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Dropbox-API-Arg": JSON.stringify({
+        path,
+        mode: "add",
+        autorename: true,
+        mute: true,
+      }),
+      "Content-Type": "application/octet-stream",
+    },
+    body: bytes,
+  });
+  if (!uploadRes.ok) {
+    const text = await uploadRes.text().catch(() => "");
+    throw new Error(`Dropbox upload ${uploadRes.status}: ${text.slice(0, 300)}`);
+  }
+  const uploadJson = await uploadRes.json();
+  const actualPath = uploadJson.path_display || path;
+
+  // Shareable-link step. Optional — failure here doesn't fail the whole
+  // upload, the file is still safely stored.
+  let shareUrl = null;
+  try {
+    const shareRes = await fetch(
+      "https://api.dropboxapi.com/2/sharing/create_shared_link_with_settings",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          path: actualPath,
+          settings: {
+            requested_visibility: { ".tag": "public" },
+            audience: { ".tag": "public" },
+            access: { ".tag": "viewer" },
+          },
+        }),
+      },
+    );
+    if (shareRes.ok) {
+      const shareJson = await shareRes.json();
+      shareUrl = shareJson.url || null;
+    } else if (shareRes.status === 409) {
+      // Conflict — a link for this path already exists (rare race; the
+      // file was just uploaded with autorename so this shouldn't happen
+      // unless we retry an idempotent transcribe). Look up the existing
+      // link instead.
+      const listRes = await fetch(
+        "https://api.dropboxapi.com/2/sharing/list_shared_links",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ path: actualPath, direct_only: true }),
+        },
+      );
+      if (listRes.ok) {
+        const listJson = await listRes.json();
+        shareUrl = listJson?.links?.[0]?.url || null;
+      }
+    }
+  } catch (e) {
+    // Swallow — shareUrl stays null, file is still uploaded.
+    console.warn("[dropbox] share link failed:", String(e?.message || e));
+  }
+
+  // Convert the ?dl=0 default in Dropbox share URLs to ?raw=1 so the
+  // audio player can stream the file directly without bouncing through
+  // Dropbox's HTML preview page. Optional — both work in a browser,
+  // but ?raw=1 is what an <audio> tag wants.
+  let directUrl = shareUrl;
+  if (directUrl) {
+    directUrl = directUrl.replace(/\?dl=0$/, "?raw=1").replace(/\?dl=1$/, "?raw=1");
+  }
+
+  return { path: actualPath, shareUrl, directUrl };
+}
+
+// Background job that mirrors a freshly-transcribed local SA up to
+// Dropbox and patches the RTDB record with the resulting share URL.
+// Fire-and-forget via ctx.waitUntil from handleSaTranscribeLocal — the
+// trainer doesn't wait on this; the Dropbox link just appears on the
+// SA row whenever the upload completes.
+async function dropboxBackupSaSession(env, chatKey, sessionId, bytes, mimeType, fileName) {
+  const fbPath = `${ROOT}/chats/${encodeKey(chatKey)}/saSessions/${sessionId}`;
+  try {
+    const yyyymm = new Date().toISOString().slice(0, 7); // "2026-05"
+    const dropboxPath = `/sa-recordings/${yyyymm}/${fileName}`;
+    const result = await dropboxUpload(env, dropboxPath, bytes, mimeType);
+    await fbPatch(env, fbPath, {
+      dropboxPath: result.path,
+      dropboxShareUrl: result.shareUrl,
+      dropboxDirectUrl: result.directUrl,
+      dropboxUploadedAt: Date.now(),
+    });
+  } catch (e) {
+    await fbPatch(env, fbPath, {
+      dropboxError: String(e?.message || e).slice(0, 500),
+      dropboxErrorAt: Date.now(),
+    });
+  }
+}
+
 // v1.249: local-only SA transcription. Audio file STAYS on the recording
 // tablet — the worker only does the transcription pass and writes the
 // transcript to RTDB. No R2 write. Designed for the mobile flow where
@@ -2365,6 +2532,12 @@ async function handleSaTranscribeLocal(request, env, ctx) {
   // ready/failed). Mobile's queue watches the status field via onValue and
   // resolves the queue item when it flips to ready or failed.
   ctx.waitUntil(transcribeSaSession(env, chatKey, clientSessionId, bytes, mimeType, fileName));
+
+  // v1.250: ALSO fan out the bytes to Dropbox as an off-tablet backup.
+  // Independent of the transcription path — if Dropbox is misconfigured
+  // or down, transcription still happens. The Dropbox link surfaces on
+  // the SA row via dropboxShareUrl once the upload completes.
+  ctx.waitUntil(dropboxBackupSaSession(env, chatKey, clientSessionId, bytes, mimeType, fileName));
 
   return json({ ok: true, sessionId: clientSessionId });
 }

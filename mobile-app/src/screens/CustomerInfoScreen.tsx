@@ -1133,6 +1133,10 @@ function SaSessionRow({
     status?: string;
     transcript?: string;
     transcriptError?: string;
+    // v1.250: Dropbox auto-backup fields populated by worker after
+    // /sa-transcribe-local completes the off-tablet upload.
+    dropboxShareUrl?: string | null;
+    dropboxError?: string | null;
   };
 }) {
   const styles = useStyles(makeStyles);
@@ -1171,6 +1175,20 @@ function SaSessionRow({
       {meta ? <Text style={styles.saRowMeta}>{meta}</Text> : null}
       {s.uploadedByName ? (
         <Text style={styles.saRowMeta}>by {s.uploadedByName}</Text>
+      ) : null}
+      {/* v1.250: Dropbox link (populated by worker after Dropbox upload). */}
+      {s.dropboxShareUrl ? (
+        <TouchableOpacity
+          onPress={() => Linking.openURL(s.dropboxShareUrl!).catch(() => {})}
+        >
+          <Text style={[styles.saLink, { marginTop: 2 }]}>
+            🗂️ Open in Dropbox
+          </Text>
+        </TouchableOpacity>
+      ) : s.dropboxError ? (
+        <Text style={[styles.saRowMeta, { color: "#d9534f" }]}>
+          ⚠ Dropbox backup failed
+        </Text>
       ) : null}
       {isReady && s.transcript ? (
         expanded ? (
