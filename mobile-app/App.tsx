@@ -24,6 +24,7 @@ import {
   View,
 } from "react-native";
 import { refreshFerraNow } from "@/lib/worker";
+import { kickProcessor as kickSaProcessor } from "@/lib/saTranscriptionQueue";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import {
@@ -368,8 +369,25 @@ function useOtaUpdates() {
   }, []);
 }
 
+// v1.249: kick the SA transcription queue processor on app start and every
+// time the app returns to foreground. The queue persists in AsyncStorage,
+// so a tablet that recorded an SA while offline (or that was killed mid-
+// upload) resumes the upload attempts as soon as the app + network are
+// available. Cheap to call — the processor itself no-ops if the queue is
+// empty or another tick is already running.
+function useSaQueueProcessor() {
+  useEffect(() => {
+    kickSaProcessor();
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") kickSaProcessor();
+    });
+    return () => sub.remove();
+  }, []);
+}
+
 export default function App() {
   useOtaUpdates();
+  useSaQueueProcessor();
   return (
     <SafeAreaProvider>
       <ThemeProvider>

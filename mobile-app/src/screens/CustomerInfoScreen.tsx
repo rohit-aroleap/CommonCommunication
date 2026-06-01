@@ -30,11 +30,19 @@ import {
   normalizePhone,
   samePhone,
 } from "@/lib/normalizePhone";
-import { transcribeAudio, uploadSaRecording } from "@/lib/worker";
+import { transcribeAudio } from "@/lib/worker";
 import {
   makeSaRecordingOptions,
   makeVoiceNoteRecordingOptions,
 } from "@/lib/voiceRecording";
+// v1.249: local-only SA flow. File stays on the tablet (in documentDirectory),
+// queue retries the worker call until it succeeds.
+import * as FileSystem from "expo-file-system/legacy";
+import {
+  addToQueue as addSaToQueue,
+  generateClientSessionId,
+  kickProcessor as kickSaProcessor,
+} from "@/lib/saTranscriptionQueue";
 import { FERRA_TAG_STAGE } from "@/config";
 import type { FerraSubscription, Ticket } from "@/types";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
@@ -1247,27 +1255,25 @@ function SaRecorderModal({
   const isRecording = !!recorderState?.isRecording;
 
   const [elapsedSec, setElapsedSec] = useState(0);
-  const [partIndex, setPartIndex] = useState(0); // 0 = first segment of a possibly-split session
-  const [uploading, setUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<string>("");
+  // v1.249: "saving" covers the file-copy + queue-add window between
+  // tapping Stop and the modal closing. Brief (sub-second on flash
+  // storage), but the spinner lets the trainer know something is
+  // happening so they don't double-tap.
+  const [saving, setSaving] = useState(false);
 
-  // 60-minute auto-split. Set as a constant so it's easy to tweak. The
-  // segmenting is done by stop-then-start; the recorder doesn't have a
-  // native "rotate file" API.
-  const AUTO_SPLIT_SEC = 60 * 60;
+  // v1.249: hard cap on recording length. At 24 kbps (the SA bitrate),
+  // 130 min = ~23.4 MB, leaving 1.6 MB of slack under Groq's 25 MB
+  // single-request transcription limit. If a session is going to run
+  // long, the trainer needs to manually stop + start a fresh one.
+  const MAX_RECORDING_SEC = 130 * 60;
+  // Soft warning at 120 min ("you have 10 minutes left before the
+  // recording auto-stops"). Fires once, then noops.
+  const SOFT_WARN_SEC = 120 * 60;
 
   const startedAtRef = useRef<number | null>(null);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  // v1.248: lock-flag for the auto-split critical section. While
-  // autoSplit() is mid-flight (stop segment 1 → prepare recorder →
-  // start segment 2), the Stop button MUST be disabled — otherwise
-  // a user tap races with the split, recorder.uri gets clobbered by
-  // segment 2 starting on the same file path, and nothing uploads.
-  // (This is the silent-close-at-the-1-hour-mark bug reported by
-  // rohit on 2026-05-25.) Ref drives the actual lock; state mirror
-  // drives the UI re-render to update the disabled-button styling.
-  const isAutoSplittingRef = useRef(false);
-  const [isAutoSplitting, setIsAutoSplitting] = useState(false);
+  const softWarnedRef = useRef(false);
   // v1.244: keep a live ref to onClose so the prepare effect can call the
   // latest closure without listing onClose in deps. The parent passes
   // onClose as an inline arrow (`() => setSaModalOpen(false)`), so its
@@ -1346,58 +1352,57 @@ function SaRecorderModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recorder]);
 
-  // Upload a stopped recording. Returns when the worker has accepted
-  // the file (transcription continues in the background server-side).
-  async function uploadSegment(uri: string, segmentIndex: number) {
-    onUploadStart();
-    setUploading(true);
-    setUploadStatus(
-      segmentIndex > 0
-        ? `Uploading part ${segmentIndex + 1}…`
-        : "Uploading…",
-    );
-    try {
-      const fileName = `sa-${chatKey}-${Date.now()}-p${segmentIndex + 1}.m4a`;
-      const res = await uploadSaRecording({
-        fileUri: uri,
-        chatKey,
-        uploadedByUid,
-        uploadedByName,
-        fileName,
-      });
-      if (!res.ok) {
-        throw new Error(res.error || "upload failed");
-      }
-      setUploadStatus("✓ Uploaded. Transcribing in background…");
-    } catch (e) {
-      Alert.alert(
-        "Upload failed",
-        String((e as Error)?.message || e) +
-          "\n\nThe recording is still on the phone — close and reopen the modal to retry. (For now, this means data may be lost if the app is killed.)",
-      );
-      setUploadStatus("");
-    } finally {
-      onUploadEnd();
-      setUploading(false);
-    }
-  }
+  // v1.249: REDESIGNED — local-only recording with persistent queue.
+  //
+  // Old flow (deleted):
+  //   start → tick to 60 min → autoSplit() stops + restarts + uploads
+  //   in parallel → race conditions at boundary → silent failures.
+  //
+  // New flow:
+  //   start → tick to MAX_RECORDING_SEC (130 min hard cap) → tick force-stops
+  //   if reached → user taps Stop → file copied to documentDirectory →
+  //   queued for upload → modal closes → background processor uploads to
+  //   /sa-transcribe-local → retries indefinitely on failure → on success,
+  //   worker's RTDB write surfaces the transcript via the existing
+  //   saSessions onValue listener.
+  //
+  // Key invariants:
+  //   - Audio NEVER leaves the tablet via cloud storage. Source of truth
+  //     is the local file in documentDirectory. The worker only sees the
+  //     bytes long enough to forward them to Groq for transcription.
+  //   - Stop button → modal closes within ~1 second (the file-copy step).
+  //     Upload itself happens in the background AFTER modal close.
+  //   - Network unavailability at Stop is fine — queue persists across
+  //     app restarts and retries with exponential backoff.
 
   // Start recording. Resets timer, fires recorder.record(), starts the
-  // tick loop that drives the elapsed display + auto-split check.
+  // tick that drives the elapsed display + soft-warn + hard-stop at
+  // MAX_RECORDING_SEC.
   async function start() {
     try {
       recorder.record();
       startedAtRef.current = Date.now();
       setElapsedSec(0);
+      softWarnedRef.current = false;
       tickRef.current = setInterval(() => {
         const t = startedAtRef.current
           ? Math.floor((Date.now() - startedAtRef.current) / 1000)
           : 0;
         setElapsedSec(t);
-        if (t >= AUTO_SPLIT_SEC) {
-          // Hit the 1-hour mark — rotate the file: stop, upload, start
-          // a fresh recording with an incremented part index.
-          autoSplit();
+        if (t >= SOFT_WARN_SEC && !softWarnedRef.current) {
+          softWarnedRef.current = true;
+          Alert.alert(
+            "10 minutes left",
+            "Recording will auto-stop at 130 minutes to keep the file under the transcription size limit. If you need to keep recording past then, tap Stop now to save this session and start a fresh one.",
+          );
+        }
+        if (t >= MAX_RECORDING_SEC) {
+          // Hard cap reached. Force-stop and save the file to the queue.
+          if (tickRef.current) {
+            clearInterval(tickRef.current);
+            tickRef.current = null;
+          }
+          void stopAndQueue(true);
         }
       }, 1000);
     } catch (e) {
@@ -1408,121 +1413,118 @@ function SaRecorderModal({
     }
   }
 
-  // Stop + upload the current segment without starting a new one (user
-  // pressed Stop).
+  // Stop the recorder, copy the file to documentDirectory (persistent
+  // across app close / OS storage pressure), add the file to the
+  // transcription queue. Returns when the file copy + queue-add are
+  // done; the actual upload happens asynchronously in the background.
   //
-  // v1.248: two new guards beyond the original two-line happy path:
-  //   1. If autoSplit is mid-critical-section, wait up to 10 s for it to
-  //      finish so we don't double-call recorder.stop() on a shared
-  //      native session. The button is also disabled during that window,
-  //      but a tap that landed JUST before the lock flipped on still
-  //      gets handled gracefully here.
-  //   2. If recorder.uri is undefined after stop, surface an explicit
-  //      alert. Previously this was a silent no-op — the modal would
-  //      close and the trainer assumed everything was saved.
-  async function stopAndUpload() {
-    let waited = 0;
-    while (isAutoSplittingRef.current && waited < 10000) {
-      await new Promise((r) => setTimeout(r, 200));
-      waited += 200;
-    }
+  // If `forcedByMaxCap` is true, also shows an alert explaining why the
+  // recording was force-stopped.
+  async function stopAndQueue(forcedByMaxCap = false) {
     if (tickRef.current) {
       clearInterval(tickRef.current);
       tickRef.current = null;
     }
+    onUploadStart();
+    setSaving(true);
+    setUploadStatus("Saving locally…");
+    let stopUri: string | undefined;
     try {
       await recorder.stop();
-      const uri = recorder.uri as string | undefined;
-      if (uri) {
-        await uploadSegment(uri, partIndex);
-      } else {
-        Alert.alert(
-          "Recording didn't capture",
-          "The recorder didn't produce an audio file. Please try recording again, and if this keeps happening let Rohit know.",
-        );
-      }
+      stopUri = recorder.uri as string | undefined;
     } catch (e) {
       Alert.alert(
         "Couldn't stop recording",
         String((e as Error)?.message || e),
       );
-    }
-  }
-
-  // Auto-split path. Stops the current segment, re-prepares the recorder,
-  // starts the next segment, THEN uploads the previous segment in the
-  // background.
-  //
-  // v1.248 bug-fix history:
-  //   The old version fire-and-forgot the upload (`.catch(() => {})`)
-  //   BEFORE re-preparing / re-starting. Two consequences:
-  //   1. The catch silently swallowed any upload failure — including
-  //      the failures caused by point (2).
-  //   2. If the user tapped Stop at the 60-min mark (very common, since
-  //      that's exactly when the auto-split watchdog fires), their
-  //      stopAndUpload ran in parallel with the autoSplit. Both called
-  //      recorder.stop() on a shared native session, and segment 2 was
-  //      then started writing to the same file path that segment 1's
-  //      upload was still reading from. The result: corrupted upload,
-  //      no record, silently closed modal.
-  //
-  // Fix: serialise via isAutoSplittingRef. The lock covers the critical
-  // section ONLY (stop → prepare → start), then releases so the user
-  // can stop normally even if the background upload is still running.
-  // The upload's failure path now surfaces an Alert instead of being
-  // swallowed.
-  async function autoSplit() {
-    if (isAutoSplittingRef.current) return; // already running, don't re-enter
-    isAutoSplittingRef.current = true;
-    setIsAutoSplitting(true);
-    if (tickRef.current) {
-      clearInterval(tickRef.current);
-      tickRef.current = null;
-    }
-    let segmentUri: string | undefined;
-    const finishedSegmentIndex = partIndex;
-    try {
-      await recorder.stop();
-      segmentUri = recorder.uri as string | undefined;
-      await recorder.prepareToRecordAsync();
-      setPartIndex((p) => p + 1);
-      await start();
-    } catch (e) {
-      Alert.alert(
-        "Auto-split failed",
-        String((e as Error)?.message || e),
-      );
-      isAutoSplittingRef.current = false;
-      setIsAutoSplitting(false);
+      setSaving(false);
+      setUploadStatus("");
+      onUploadEnd();
       return;
     }
-    // Critical section done — segment 2 is now recording. Release the lock
-    // so the user can press Stop normally even while segment 1's background
-    // upload continues.
-    isAutoSplittingRef.current = false;
-    setIsAutoSplitting(false);
-
-    // Background upload of segment 1 with EXPLICIT error surfacing.
-    // The old fire-and-forget `.catch(() => {})` swallowed failures here.
-    if (segmentUri) {
-      uploadSegment(segmentUri, finishedSegmentIndex).catch((e) => {
-        Alert.alert(
-          `Part ${finishedSegmentIndex + 1} upload failed`,
-          String((e as Error)?.message || e) +
-            "\n\nRecording continues for the next part, but this segment's transcript will be missing.",
-        );
-      });
-    } else {
+    if (!stopUri) {
       Alert.alert(
-        `Part ${finishedSegmentIndex + 1} didn't capture`,
-        "The recorder didn't produce a file for the previous segment. Recording continues for the next part.",
+        "Recording didn't capture",
+        "The recorder didn't produce an audio file. Please try again, and if this keeps happening let Rohit know.",
+      );
+      setSaving(false);
+      setUploadStatus("");
+      onUploadEnd();
+      return;
+    }
+
+    const clientSessionId = generateClientSessionId();
+    const fileName = `sa-${chatKey}-${clientSessionId}.m4a`;
+    const persistentDir = `${FileSystem.documentDirectory}sa-recordings/`;
+    const destUri = `${persistentDir}${fileName}`;
+
+    try {
+      // Make sure the directory exists. getInfoAsync + makeDirectoryAsync
+      // is idempotent on the existing-dir case (with intermediates=true).
+      await FileSystem.makeDirectoryAsync(persistentDir, {
+        intermediates: true,
+      });
+      // Move the recorder's cache file into our persistent directory.
+      // We use move (not copy) since the cache file is already finalized
+      // and we don't need it in two places.
+      await FileSystem.moveAsync({ from: stopUri, to: destUri });
+    } catch (e) {
+      // Fallback: try copy if move failed (some Android variants restrict
+      // cross-storage move). If even copy fails, queue the original cache
+      // path — risky (could be evicted) but better than data loss.
+      try {
+        await FileSystem.copyAsync({ from: stopUri, to: destUri });
+      } catch (e2) {
+        console.warn(
+          "[sa-recorder] couldn't persist file, queueing cache path:",
+          e,
+          e2,
+        );
+      }
+    }
+
+    // Inspect the saved file for size (best-effort; queue accepts null).
+    let sizeBytes: number | null = null;
+    try {
+      const info = await FileSystem.getInfoAsync(destUri);
+      if (info.exists && !info.isDirectory) {
+        sizeBytes = info.size ?? null;
+      }
+    } catch {
+      /* swallow — purely informational */
+    }
+
+    const durationSec = startedAtRef.current
+      ? Math.floor((Date.now() - startedAtRef.current) / 1000)
+      : null;
+
+    await addSaToQueue({
+      clientSessionId,
+      chatKey,
+      localUri: destUri,
+      fileName,
+      uploadedByUid,
+      uploadedByName,
+      durationSec,
+      sizeBytes,
+    });
+    kickSaProcessor();
+
+    setSaving(false);
+    setUploadStatus("");
+    onUploadEnd();
+
+    if (forcedByMaxCap) {
+      Alert.alert(
+        "Recording auto-stopped at 130 minutes",
+        "Saved locally. The transcript will appear in the SA Sessions list once the upload finishes.",
       );
     }
   }
 
-  // User pressed the Stop button — finalize, upload, close the modal.
+  // User pressed the Stop button — finalize, queue, close the modal.
   async function onStop() {
-    await stopAndUpload();
+    await stopAndQueue(false);
     onClose();
   }
 
@@ -1548,17 +1550,17 @@ function SaRecorderModal({
         >
           <Text style={styles.saTimerText}>{formatElapsed(elapsedSec)}</Text>
           <Text style={styles.saTimerLabel}>
-            {isRecording
-              ? partIndex > 0
-                ? `● Recording · Part ${partIndex + 1}`
-                : "● Recording"
-              : "Ready"}
+            {isRecording ? "● Recording" : saving ? "Saving…" : "Ready"}
           </Text>
         </View>
 
+        {/* v1.249: hint copy updated to reflect the new local-only flow.
+            Recording no longer auto-splits — it's one continuous file,
+            capped at 130 min, saved locally and transcribed in the
+            background once Stop is tapped. */}
         <Text style={styles.saHint}>
-          Keep this screen open. Audio keeps recording if the phone
-          locks. Recording auto-splits every hour.
+          Keep this screen open. Audio keeps recording if the phone locks.
+          Stops automatically at 130 minutes if you don't tap Stop first.
         </Text>
 
         {uploadStatus ? (
@@ -1572,14 +1574,14 @@ function SaRecorderModal({
             <TouchableOpacity
               onPress={onClose}
               style={[styles.saActionBtn, styles.saActionBtnSecondary]}
-              disabled={uploading}
+              disabled={saving}
             >
               <Text style={styles.saActionBtnSecondaryTxt}>Cancel</Text>
             </TouchableOpacity>
             <TouchableOpacity
               onPress={start}
               style={[styles.saActionBtn, styles.saActionBtnStart]}
-              disabled={uploading}
+              disabled={saving}
             >
               <Text style={styles.saActionBtnStartTxt}>● Start</Text>
             </TouchableOpacity>
@@ -1587,22 +1589,10 @@ function SaRecorderModal({
         ) : (
           <TouchableOpacity
             onPress={() => {
-              // v1.248: refuse the tap while the auto-split critical
-              // section is running. Without this, a Stop tap right at
-              // the 60-min boundary races with the split and the
-              // segment's audio file gets clobbered before its upload
-              // finishes. Window is ~50-300 ms; user just needs to
-              // tap again.
-              if (isAutoSplittingRef.current) {
-                Alert.alert(
-                  "One moment",
-                  "Saving the previous hour — try Stop again in a few seconds.",
-                );
-                return;
-              }
+              if (saving) return; // already in the file-copy + queue-add window
               Alert.alert(
                 "Stop recording?",
-                "The recording will be uploaded for transcription.",
+                "The recording will be saved on this tablet and transcribed in the background.",
                 [
                   { text: "Keep recording", style: "cancel" },
                   { text: "Stop and save", onPress: onStop },
@@ -1612,11 +1602,11 @@ function SaRecorderModal({
             style={[
               styles.saActionBtn,
               styles.saActionBtnStop,
-              (uploading || isAutoSplitting) && { opacity: 0.5 },
+              saving && { opacity: 0.5 },
             ]}
-            disabled={uploading || isAutoSplitting}
+            disabled={saving}
           >
-            {uploading ? (
+            {saving ? (
               <ActivityIndicator color="white" />
             ) : (
               <Text style={styles.saActionBtnStopTxt}>■ Stop and save</Text>

@@ -171,6 +171,16 @@ export default {
       if (url.pathname === "/sa-upload" && request.method === "POST") {
         return cors(env, await handleSaUpload(request, env, ctx));
       }
+      // v1.249: local-only SA transcription. Mobile-app flow where the
+      // audio file stays on the recording device and is NOT stored in R2.
+      // The worker JUST transcribes via Groq + writes the transcript to
+      // Firebase RTDB. Idempotent on clientSessionId so the phone's
+      // retry queue can hit this endpoint repeatedly without creating
+      // duplicate saSession records. See handleSaTranscribeLocal for
+      // the request shape.
+      if (url.pathname === "/sa-transcribe-local" && request.method === "POST") {
+        return cors(env, await handleSaTranscribeLocal(request, env, ctx));
+      }
       // v1.233: chunked-upload path. Used by the browser when the source
       // file exceeds 25 MB. Browser splits the file into WAV chunks
       // (one full PCM decode + re-wrap, no compression) and uploads
@@ -2237,6 +2247,126 @@ async function handleSaUpload(request, env, ctx) {
   ctx.waitUntil(transcribeSaSession(env, chatKey, sessionId, bytes, mimeType, audioFileName));
 
   return json({ ok: true, sessionId, audioUrl, key });
+}
+
+// v1.249: local-only SA transcription. Audio file STAYS on the recording
+// tablet — the worker only does the transcription pass and writes the
+// transcript to RTDB. No R2 write. Designed for the mobile flow where
+// the trainer's tablet holds the source of truth and a persistent
+// AsyncStorage queue retries this endpoint until success.
+//
+// Multipart form fields:
+//   file              — audio blob (≤ 25 MB for Groq)
+//   chatKey           — chat anchor
+//   uploadedByUid     — trainer uid (audit)
+//   uploadedByName    — trainer display name
+//   sessionAt         — optional epoch-ms; defaults to now
+//   clientSessionId   — REQUIRED on retries; phone-side UUID for idempotency.
+//                       Worker uses it as the saSession key directly so
+//                       a retry hits the same record. On the first attempt
+//                       the phone generates this via uuidv4().
+//   durationSec       — optional total recording duration (display only)
+//
+// Returns: { ok: true, sessionId } — sessionId == clientSessionId.
+//
+// Idempotency: if /commonComm/chats/{chatKey}/saSessions/{sessionId} already
+// exists with status="ready", returns ok immediately without re-transcribing
+// (rare race-with-completion case). If it exists with status="transcribing",
+// also returns ok early (another worker invocation is already on it). Only
+// status in {null, queued, failed} triggers a new transcription pass.
+async function handleSaTranscribeLocal(request, env, ctx) {
+  if (!env.GROQ_API_KEY) {
+    return json({
+      error: "GROQ_API_KEY not set",
+      hint: "Run: wrangler secret put GROQ_API_KEY",
+    }, 500);
+  }
+  let form;
+  try {
+    form = await request.formData();
+  } catch (e) {
+    return json({ error: "bad multipart: " + String(e?.message || e) }, 400);
+  }
+  const file = form.get("file");
+  const chatKey = String(form.get("chatKey") || "");
+  const uploadedByUid = String(form.get("uploadedByUid") || "");
+  const uploadedByName = String(form.get("uploadedByName") || "");
+  const clientSessionId = String(form.get("clientSessionId") || "");
+  const sessionAtRaw = form.get("sessionAt");
+  const sessionAt = sessionAtRaw ? Number(sessionAtRaw) : Date.now();
+  const durationSec = form.get("durationSec")
+    ? Number(form.get("durationSec"))
+    : null;
+
+  if (!file || typeof file === "string") return json({ error: "missing file" }, 400);
+  if (!chatKey) return json({ error: "missing chatKey" }, 400);
+  if (!uploadedByUid) return json({ error: "missing uploadedByUid" }, 400);
+  if (!clientSessionId) return json({ error: "missing clientSessionId" }, 400);
+  // chatKey path-walk guard, mirroring handleSaUpload.
+  if (/[\/\\.]/.test(chatKey.replace(/_/g, ""))) {
+    return json({ error: "bad chatKey" }, 400);
+  }
+  // clientSessionId path-walk guard — phone-generated UUID, should be safe
+  // but defense-in-depth: forbid path-traversal characters.
+  if (!/^[A-Za-z0-9_-]{8,64}$/.test(clientSessionId)) {
+    return json({ error: "bad clientSessionId" }, 400);
+  }
+  if (file.size > SA_MEDIA_MAX_BYTES) {
+    return json({
+      error: `file too large (>${SA_MEDIA_MAX_BYTES / 1024 / 1024} MB). The phone should record at ≤24 kbps so 2-hour SAs fit Groq's limit.`,
+    }, 413);
+  }
+
+  const path = `${ROOT}/chats/${encodeKey(chatKey)}/saSessions/${clientSessionId}`;
+
+  // Idempotency check — if the record already exists in a terminal or
+  // in-flight state, don't re-transcribe.
+  const existing = await fbGet(env, path);
+  if (existing && existing.status === "ready") {
+    return json({ ok: true, sessionId: clientSessionId, alreadyDone: true });
+  }
+  if (existing && existing.status === "transcribing") {
+    // Another invocation is mid-transcription. Don't double-fire — but do
+    // return success so the phone's queue marks it as in-flight.
+    return json({ ok: true, sessionId: clientSessionId, inFlight: true });
+  }
+
+  // Buffer the bytes once — Groq's API call needs them, and we want the
+  // mimeType for the transcribe helper.
+  const mimeType = file.type || "audio/m4a";
+  const fileName = String(file.name || `sa-${clientSessionId}.m4a`);
+  let bytes;
+  try {
+    bytes = await file.arrayBuffer();
+  } catch (e) {
+    return json({ error: "buffer failed: " + String(e?.message || e) }, 500);
+  }
+
+  // Write the queued record. audioUrl is null since the audio stays on
+  // the tablet — the saSession list on web/mobile renders the play button
+  // conditionally on audioUrl, so it'll be hidden for these records.
+  await fbPut(env, path, {
+    audioUrl: null,
+    audioFileName: fileName,
+    sizeBytes: bytes.byteLength,
+    mimeType,
+    durationSec,
+    sessionAt,
+    uploadedAt: Date.now(),
+    uploadedByUid,
+    uploadedByName: uploadedByName || null,
+    status: "queued",
+    storageMode: "local-only",   // marks this as a no-R2-backup session
+    groqModel: SA_GROQ_MODEL,
+  });
+
+  // Background transcription — reuses the existing helper that updates the
+  // RTDB record's status field as it progresses (queued → transcribing →
+  // ready/failed). Mobile's queue watches the status field via onValue and
+  // resolves the queue item when it flips to ready or failed.
+  ctx.waitUntil(transcribeSaSession(env, chatKey, clientSessionId, bytes, mimeType, fileName));
+
+  return json({ ok: true, sessionId: clientSessionId });
 }
 
 // v1.233: chunked-upload endpoint for SA sessions larger than the

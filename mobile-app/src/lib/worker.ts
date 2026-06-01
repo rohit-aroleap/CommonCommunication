@@ -273,6 +273,48 @@ export async function uploadSaRecording(body: {
   }
 }
 
+// v1.249: local-only SA transcription. Audio file stays on the tablet —
+// this just hands the bytes to the worker for one transcription pass.
+// Idempotent on clientSessionId, so a queue-driven retry pings the same
+// endpoint until it succeeds without creating duplicate saSession records.
+export async function transcribeSaRecordingLocal(body: {
+  fileUri: string;
+  chatKey: string;
+  uploadedByUid: string;
+  uploadedByName: string;
+  clientSessionId: string;
+  fileName?: string;
+  durationSec?: number | null;
+}): Promise<{ ok: boolean; sessionId?: string; error?: string }> {
+  try {
+    const form = new FormData();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    form.append("file", {
+      uri: body.fileUri,
+      name: body.fileName || `sa-${body.clientSessionId}.m4a`,
+      type: "audio/m4a",
+    } as any);
+    form.append("chatKey", body.chatKey);
+    form.append("uploadedByUid", body.uploadedByUid);
+    form.append("uploadedByName", body.uploadedByName);
+    form.append("clientSessionId", body.clientSessionId);
+    if (body.durationSec != null) {
+      form.append("durationSec", String(body.durationSec));
+    }
+    const r = await fetch(`${WORKER_URL}/sa-transcribe-local`, {
+      method: "POST",
+      body: form,
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j?.ok === false) {
+      return { ok: false, error: j?.error || `HTTP ${r.status}` };
+    }
+    return { ok: true, sessionId: j?.sessionId };
+  } catch (e) {
+    return { ok: false, error: String((e as Error)?.message || e) };
+  }
+}
+
 // v1.205: notify a teammate that they've just been assigned a ticket.
 // Called from CreateTicketModal (type: "created") and ReassignModal
 // (type: "reassigned"). The worker skips the push if assigneeUid ===
