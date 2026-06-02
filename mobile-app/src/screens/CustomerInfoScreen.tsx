@@ -17,12 +17,11 @@ import {
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import { Modal } from "react-native";
-// v1.252: keep the screen on while the SA recorder modal is open. Without
-// this, screen autolock kills Android's foreground audio session ~30 s
-// later, even though the JS-side recorder still reports isRecording=true.
-// Result: timer keeps ticking, no audio captured after that point. See
-// SaRecorderModal for the diagnosis comment.
-import { useKeepAwake } from "expo-keep-awake";
+// v1.253: keep-awake moved up to App.tsx (was here in v1.252 to fix the
+// SA-recorder screen-lock truncation bug). Now applied app-wide. Leaving
+// this import path documented in case we ever need to re-localize the
+// behavior — e.g., turn keep-awake OFF outside the recorder for power
+// savings on battery.
 import { onValue, push, ref, set } from "firebase/database";
 import { db } from "@/firebase";
 import { ROOT } from "@/config";
@@ -1285,17 +1284,11 @@ function SaRecorderModal({
   onUploadEnd: () => void;
 }) {
   const styles = useStyles(makeStyles);
-  // v1.252: keep the screen awake for the entire lifetime of this modal.
-  // Diagnosis: rohit reported a 74-minute SA that produced only 31 min
-  // of audio in Dropbox. Timer counted to 74 because JS-side recorder
-  // reported isRecording=true throughout — but the tablet had auto-locked
-  // partway through, and Android's audio-policy daemon revoked the mic
-  // feed despite our FOREGROUND_SERVICE_MICROPHONE permission. (This is
-  // documented behavior on Android 14+ and Indian-OEM ROMs.) Trapping
-  // the screen on for the whole recording sidesteps this entirely.
-  // useKeepAwake() activates on mount, deactivates on unmount — no
-  // cleanup logic needed.
-  useKeepAwake();
+  // v1.252→v1.253: screen-stays-on is now app-wide (see useKeepAwake in
+  // App.tsx). The bug this guarded against — Android killing the mic
+  // feed when the screen autolocks — is fixed at the app root, so we no
+  // longer need a per-modal hook here. Removing this also avoids the
+  // double-mounted reference-count behavior of expo-keep-awake.
   // The recorder lives for the modal's lifetime. Re-creating it on every
   // start would defeat the prepareToRecordAsync warmup; expo-audio's
   // useAudioRecorder is the right pattern.
@@ -1640,16 +1633,13 @@ function SaRecorderModal({
           </Text>
         </View>
 
-        {/* v1.252: corrected the misleading "audio keeps recording if the
-            phone locks" line — that turned out to be false on Android 14+
-            and Indian OEM ROMs (the screen lock killed the mic feed
-            silently). useKeepAwake now keeps the screen on for the whole
-            recording, so the lock can't happen. Trainer is reminded to
-            keep the tablet plugged in for long sessions since screen-on
-            burns more battery than usual. */}
+        {/* v1.253: screen-stays-on is app-wide now (App.tsx), so the
+            recorder doesn't need to call it out specifically. Trainer is
+            reminded to keep the tablet plugged in since screen-on +
+            recording burns more battery than usual. */}
         <Text style={styles.saHint}>
-          Screen stays on while recording — keep the tablet plugged in for
-          long sessions. Auto-stops at 130 minutes if you don't tap Stop.
+          Keep the tablet plugged in for long sessions.
+          Auto-stops at 130 minutes if you don't tap Stop.
         </Text>
 
         {uploadStatus ? (

@@ -25,6 +25,15 @@ import {
 } from "react-native";
 import { refreshFerraNow } from "@/lib/worker";
 import { kickProcessor as kickSaProcessor } from "@/lib/saTranscriptionQueue";
+// v1.253: app-wide keep-awake. Trainer asked for the screen to stay on
+// across all CommonComm screens, not just the SA recorder. Useful for
+// long shifts where the tablet sits on a stand — chat list / customer
+// info / team DMs all stay readable without the trainer having to tap
+// the screen every 30 seconds. Cost: screen is always on while the app
+// is foregrounded (tablet should stay plugged in for long shifts;
+// trainer can manually power off via the hardware button when they're
+// done).
+import { useKeepAwake } from "expo-keep-awake";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import {
@@ -388,6 +397,12 @@ function useSaQueueProcessor() {
 export default function App() {
   useOtaUpdates();
   useSaQueueProcessor();
+  // v1.253: hold the screen-on lock for the entire app lifetime. The hook
+  // activates on mount and releases when App unmounts (= app process
+  // dies). Net effect: while CommonComm is foregrounded, screen never
+  // auto-locks. Backgrounding the app doesn't matter — Android's normal
+  // foreground app gets the screen anyway.
+  useKeepAwake();
   return (
     <SafeAreaProvider>
       <ThemeProvider>
