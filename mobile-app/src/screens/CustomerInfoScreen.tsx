@@ -6,6 +6,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  BackHandler,
   Linking,
   ScrollView,
   StyleSheet,
@@ -16,6 +17,12 @@ import {
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import { Modal } from "react-native";
+// v1.252: keep the screen on while the SA recorder modal is open. Without
+// this, screen autolock kills Android's foreground audio session ~30 s
+// later, even though the JS-side recorder still reports isRecording=true.
+// Result: timer keeps ticking, no audio captured after that point. See
+// SaRecorderModal for the diagnosis comment.
+import { useKeepAwake } from "expo-keep-awake";
 import { onValue, push, ref, set } from "firebase/database";
 import { db } from "@/firebase";
 import { ROOT } from "@/config";
@@ -1278,12 +1285,40 @@ function SaRecorderModal({
   onUploadEnd: () => void;
 }) {
   const styles = useStyles(makeStyles);
+  // v1.252: keep the screen awake for the entire lifetime of this modal.
+  // Diagnosis: rohit reported a 74-minute SA that produced only 31 min
+  // of audio in Dropbox. Timer counted to 74 because JS-side recorder
+  // reported isRecording=true throughout — but the tablet had auto-locked
+  // partway through, and Android's audio-policy daemon revoked the mic
+  // feed despite our FOREGROUND_SERVICE_MICROPHONE permission. (This is
+  // documented behavior on Android 14+ and Indian-OEM ROMs.) Trapping
+  // the screen on for the whole recording sidesteps this entirely.
+  // useKeepAwake() activates on mount, deactivates on unmount — no
+  // cleanup logic needed.
+  useKeepAwake();
   // The recorder lives for the modal's lifetime. Re-creating it on every
   // start would defeat the prepareToRecordAsync warmup; expo-audio's
   // useAudioRecorder is the right pattern.
   const recorder = audioMod.useAudioRecorder(makeSaRecordingOptions(audioMod));
   const recorderState = audioMod.useAudioRecorderState(recorder);
   const isRecording = !!recorderState?.isRecording;
+
+  // v1.252: hardware-back guard. While recording is active, intercept the
+  // Android back button so a stray tap can't close the modal and lose the
+  // recording. Trainer must explicitly hit Stop. (When NOT recording —
+  // before Start, or after Stop+save — back works normally.)
+  useEffect(() => {
+    if (!isRecording) return;
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      Alert.alert(
+        "Recording is active",
+        "Tap Stop and save to finish the recording, or keep recording.",
+        [{ text: "Keep recording", style: "cancel" }],
+      );
+      return true; // consume the event — don't propagate to default handler
+    });
+    return () => sub.remove();
+  }, [isRecording]);
 
   const [elapsedSec, setElapsedSec] = useState(0);
   const [uploadStatus, setUploadStatus] = useState<string>("");
@@ -1605,13 +1640,16 @@ function SaRecorderModal({
           </Text>
         </View>
 
-        {/* v1.249: hint copy updated to reflect the new local-only flow.
-            Recording no longer auto-splits — it's one continuous file,
-            capped at 130 min, saved locally and transcribed in the
-            background once Stop is tapped. */}
+        {/* v1.252: corrected the misleading "audio keeps recording if the
+            phone locks" line — that turned out to be false on Android 14+
+            and Indian OEM ROMs (the screen lock killed the mic feed
+            silently). useKeepAwake now keeps the screen on for the whole
+            recording, so the lock can't happen. Trainer is reminded to
+            keep the tablet plugged in for long sessions since screen-on
+            burns more battery than usual. */}
         <Text style={styles.saHint}>
-          Keep this screen open. Audio keeps recording if the phone locks.
-          Stops automatically at 130 minutes if you don't tap Stop first.
+          Screen stays on while recording — keep the tablet plugged in for
+          long sessions. Auto-stops at 130 minutes if you don't tap Stop.
         </Text>
 
         {uploadStatus ? (
