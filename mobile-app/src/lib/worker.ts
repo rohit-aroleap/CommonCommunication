@@ -396,6 +396,24 @@ export async function summarizeMeeting(meetingId: string): Promise<{ ok: boolean
   }
 }
 
+// v1.259: retry transcription on a meeting whose original transcription
+// died mid-way (worker isolate killed by a deploy). Looks up chunks in
+// R2 and re-runs the transcription routine.
+export async function retryMeetingTranscribe(meetingId: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const r = await fetch(`${WORKER_URL}/meeting-retry-transcribe`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ meetingId }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) return { ok: false, error: j?.error || `HTTP ${r.status}` };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String((e as Error)?.message || e) };
+  }
+}
+
 // v1.249: local-only SA transcription. Audio file stays on the tablet —
 // this just hands the bytes to the worker for one transcription pass.
 // Idempotent on clientSessionId, so a queue-driven retry pings the same

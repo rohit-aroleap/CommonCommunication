@@ -215,6 +215,9 @@ export default {
       if (url.pathname === "/meeting-summarize" && request.method === "POST") {
         return cors(env, await handleMeetingSummarize(request, env, ctx));
       }
+      if (url.pathname === "/meeting-retry-transcribe" && request.method === "POST") {
+        return cors(env, await handleMeetingRetryTranscribe(request, env, ctx));
+      }
       if (url.pathname === "/sa-retranscribe" && request.method === "POST") {
         return cors(env, await handleSaRetranscribe(request, env, ctx));
       }
@@ -3094,6 +3097,49 @@ async function transcribeMeetingChunks(env, meetingId, totalChunks) {
       transcribeFinishedAt: Date.now(),
     });
   }
+}
+
+// v1.259: re-run transcription on a meeting whose original transcription
+// got killed mid-flight (most commonly because the worker isolate was
+// recycled by a deploy or an OOM kill). Looks up the chunks still
+// sitting in R2 from the original upload and re-runs the same
+// transcribeMeetingChunks routine. Idempotent — if all chunks were
+// already transcribed and cleaned up, returns ok without doing work.
+async function handleMeetingRetryTranscribe(request, env, ctx) {
+  const body = await request.json().catch(() => ({}));
+  const meetingId = String(body?.meetingId || "");
+  if (!meetingId) return json({ error: "missing meetingId" }, 400);
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(meetingId)) {
+    return json({ error: "bad meetingId" }, 400);
+  }
+  const fbPath = `${ROOT}/meetings/${meetingId}`;
+  const meeting = await fbGet(env, fbPath);
+  if (!meeting) return json({ error: "meeting not found" }, 404);
+
+  // Count chunks actually in R2. This is the authoritative source for
+  // "how many chunks should we transcribe" — survives whatever status
+  // string the meeting was stuck on.
+  if (!env.DM_MEDIA) return json({ error: "R2 bucket not bound" }, 500);
+  const listed = await env.DM_MEDIA.list({ prefix: `meetings/${meetingId}/` });
+  const chunkKeys = (listed.objects || [])
+    .filter((o) => /chunk-\d{3}\.wav$/.test(o.key))
+    .map((o) => o.key)
+    .sort();
+  if (chunkKeys.length === 0) {
+    return json({
+      error: "no chunks left to transcribe (already cleaned up or never uploaded)",
+    }, 400);
+  }
+
+  // Reset status so the UI shows progress again. transcribeMeetingChunks
+  // overwrites this with "transcribing 0/N → N/N → ready" as it runs.
+  await fbPatch(env, fbPath, {
+    status: "transcribing 0/" + chunkKeys.length,
+    transcriptError: null,
+    transcribeStartedAt: Date.now(),
+  });
+  ctx.waitUntil(transcribeMeetingChunks(env, meetingId, chunkKeys.length));
+  return json({ ok: true, totalChunks: chunkKeys.length });
 }
 
 // v1.255: hard-delete a meeting. Removes:

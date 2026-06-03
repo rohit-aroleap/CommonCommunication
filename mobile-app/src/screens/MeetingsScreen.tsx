@@ -35,6 +35,7 @@ import {
   setMeetingDropbox,
   deleteMeeting,
   summarizeMeeting,
+  retryMeetingTranscribe,
 } from "@/lib/worker";
 import * as FileSystem from "expo-file-system/legacy";
 
@@ -208,6 +209,13 @@ function MeetingRow({ meeting: m }: { meeting: MeetingRecord }) {
     if (!res.ok) Alert.alert("Summary failed", res.error || "unknown");
   }
 
+  // v1.259: retry transcription for stuck / failed meetings.
+  async function handleRetry() {
+    const res = await retryMeetingTranscribe(m.id);
+    if (!res.ok) Alert.alert("Retry failed", res.error || "unknown");
+  }
+  const showRetry = status === "failed" || status.startsWith("transcribing");
+
   return (
     <View style={styles.row}>
       <View style={styles.rowHead}>
@@ -217,6 +225,11 @@ function MeetingRow({ meeting: m }: { meeting: MeetingRecord }) {
         <View style={[styles.pill, { backgroundColor: pillBg }]}>
           <Text style={[styles.pillTxt, { color: pillFg }]}>{pillLabel}</Text>
         </View>
+        {showRetry ? (
+          <TouchableOpacity onPress={handleRetry} style={styles.iconBtn}>
+            <Text style={[styles.iconBtnTxt, { color: "#1e40af" }]}>↻</Text>
+          </TouchableOpacity>
+        ) : null}
         <TouchableOpacity onPress={handleDelete} style={styles.iconBtn}>
           <Text style={styles.iconBtnTxt}>🗑</Text>
         </TouchableOpacity>
