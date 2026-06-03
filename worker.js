@@ -218,6 +218,13 @@ export default {
       if (url.pathname === "/meeting-retry-transcribe" && request.method === "POST") {
         return cors(env, await handleMeetingRetryTranscribe(request, env, ctx));
       }
+      // v1.260: self-chain endpoint. transcribeMeetingNext fires a fetch
+      // here after finishing each chunk to kick off the next one. Each
+      // invocation processes exactly one chunk + chains to itself for
+      // the next. Survives isolate eviction since no single run is long.
+      if (url.pathname === "/meeting-transcribe-next" && request.method === "POST") {
+        return cors(env, await handleMeetingTranscribeNext(request, env, ctx));
+      }
       if (url.pathname === "/sa-retranscribe" && request.method === "POST") {
         return cors(env, await handleSaRetranscribe(request, env, ctx));
       }
@@ -3033,70 +3040,167 @@ async function handleMeetingUploadChunk(request, env, ctx) {
     status: `uploading ${chunkIndex + 1}/${totalChunks}`,
   });
 
-  // When the last chunk arrives, kick off transcription.
+  // When the last chunk arrives, kick off transcription (v1.260: single-
+  // chunk-per-invocation, self-chains until done).
   if (chunkIndex === totalChunks - 1) {
-    ctx.waitUntil(transcribeMeetingChunks(env, meetingId, totalChunks));
+    const origin = new URL(request.url).origin;
+    ctx.waitUntil(transcribeMeetingNext(env, meetingId, origin));
   }
 
   return json({ ok: true, meetingId, chunkIndex });
 }
 
-// Background transcription job for meetings. Pulls each chunk from R2,
-// sends to Groq /audio/translations, stitches transcripts. Cleans up R2
-// chunks after successful transcription.
-async function transcribeMeetingChunks(env, meetingId, totalChunks) {
+// v1.260: SINGLE-CHUNK transcription processor + self-chaining.
+//
+// Previous design (v1.254-v1.259) ran ONE worker invocation that looped
+// through all N chunks in a single ctx.waitUntil — 10s × N seconds of
+// wall time. Cloudflare isolates get evicted unpredictably during long
+// runs (especially with concurrent traffic), so transcriptions kept
+// getting stuck mid-loop.
+//
+// New design: each invocation processes EXACTLY ONE chunk (~10s wall
+// time, well within any isolate-eviction window), checkpoints the
+// result to RTDB at meeting.chunkTranscripts[i], then fires a fetch to
+// /meeting-transcribe-next to kick off the next chunk. If an
+// invocation dies mid-chunk, the chunk just isn't checkpointed and the
+// retry button (or a new trigger) picks it up.
+//
+// Once all chunks are checkpointed, the final invocation concatenates
+// transcripts in order, sets status=ready, and cleans up R2.
+
+async function transcribeMeetingNext(env, meetingId, selfUrl) {
   const fbPath = `${ROOT}/meetings/${meetingId}`;
-  const startedAt = Date.now();
-  try {
+  const meeting = await fbGet(env, fbPath);
+  if (!meeting) return;
+
+  // Count chunks in R2 — authoritative source for "how many total".
+  const listed = await env.DM_MEDIA.list({ prefix: `meetings/${meetingId}/` });
+  const chunkKeys = (listed.objects || [])
+    .filter((o) => /chunk-\d{3}\.wav$/.test(o.key))
+    .map((o) => o.key)
+    .sort();
+  const totalChunks = chunkKeys.length;
+  if (totalChunks === 0) {
     await fbPatch(env, fbPath, {
-      status: "transcribing 0/" + totalChunks,
-      transcribeStartedAt: startedAt,
+      status: "failed",
+      transcriptError: "no chunks in R2 — upload may have failed",
+      transcribeFinishedAt: Date.now(),
     });
-    const transcripts = [];
-    for (let i = 0; i < totalChunks; i++) {
-      const padded = String(i).padStart(3, "0");
-      const key = `meetings/${meetingId}/chunk-${padded}.wav`;
-      const obj = await env.DM_MEDIA.get(key);
-      if (!obj) throw new Error(`chunk ${i} missing from R2`);
-      const bytes = await obj.arrayBuffer();
-      const form = new FormData();
-      form.append("file", new Blob([bytes], { type: "audio/wav" }), `chunk-${padded}.wav`);
-      form.append("model", SA_GROQ_MODEL);
-      form.append("response_format", "verbose_json");
-      form.append("temperature", "0");
-      const r = await fetch("https://api.groq.com/openai/v1/audio/translations", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${env.GROQ_API_KEY}` },
-        body: form,
-      });
-      const j = await safeJson(r);
-      if (!r.ok) {
-        throw new Error(`Groq ${r.status} on chunk ${i}: ${JSON.stringify(j).slice(0, 300)}`);
-      }
-      transcripts.push(String(j?.text || "").trim());
-      await fbPatch(env, fbPath, {
-        status: `transcribing ${i + 1}/${totalChunks}`,
-      });
+    return;
+  }
+
+  // Find lowest-index chunk that's not yet transcribed.
+  const existingTranscripts = meeting.chunkTranscripts || {};
+  let nextIndex = -1;
+  for (let i = 0; i < totalChunks; i++) {
+    if (existingTranscripts[String(i)] == null) {
+      nextIndex = i;
+      break;
     }
-    const fullTranscript = transcripts.join("\n\n").trim();
+  }
+
+  // All chunks done — finalize.
+  if (nextIndex === -1) {
+    const parts = [];
+    for (let i = 0; i < totalChunks; i++) {
+      parts.push(String(existingTranscripts[String(i)] || ""));
+    }
+    const fullTranscript = parts.join("\n\n").trim();
     await fbPatch(env, fbPath, {
       status: "ready",
       transcript: fullTranscript,
       transcribeFinishedAt: Date.now(),
-      durationTranscribeMs: Date.now() - startedAt,
+      // chunkTranscripts is left in place — small payload, useful as an
+      // audit trail and lets a regenerate-summary call know which
+      // chunks came from where.
     });
-    // Best-effort R2 cleanup. Failure is non-fatal.
-    for (let i = 0; i < totalChunks; i++) {
-      const padded = String(i).padStart(3, "0");
-      try { await env.DM_MEDIA.delete(`meetings/${meetingId}/chunk-${padded}.wav`); } catch {}
+    // R2 cleanup. Failure is non-fatal — orphan chunks are harmless.
+    for (const key of chunkKeys) {
+      try { await env.DM_MEDIA.delete(key); } catch {}
+    }
+    return;
+  }
+
+  // Transcribe just this one chunk.
+  const padded = String(nextIndex).padStart(3, "0");
+  const key = `meetings/${meetingId}/chunk-${padded}.wav`;
+  const obj = await env.DM_MEDIA.get(key);
+  if (!obj) {
+    await fbPatch(env, fbPath, {
+      status: "failed",
+      transcriptError: `chunk ${nextIndex} missing from R2 mid-transcription`,
+      transcribeFinishedAt: Date.now(),
+    });
+    return;
+  }
+  const bytes = await obj.arrayBuffer();
+  const form = new FormData();
+  form.append("file", new Blob([bytes], { type: "audio/wav" }), `chunk-${padded}.wav`);
+  form.append("model", SA_GROQ_MODEL);
+  form.append("response_format", "verbose_json");
+  form.append("temperature", "0");
+  let r, j;
+  try {
+    r = await fetch("https://api.groq.com/openai/v1/audio/translations", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${env.GROQ_API_KEY}` },
+      body: form,
+    });
+    j = await safeJson(r);
+    if (!r.ok) {
+      throw new Error(`Groq ${r.status} on chunk ${nextIndex}: ${JSON.stringify(j).slice(0, 300)}`);
     }
   } catch (e) {
+    // Don't mark as failed — let retry button pick it up. Just update
+    // status to surface the error inline.
     await fbPatch(env, fbPath, {
       status: "failed",
       transcriptError: String(e?.message || e).slice(0, 500),
       transcribeFinishedAt: Date.now(),
     });
+    return;
   }
+
+  // Checkpoint: save THIS chunk's transcript immediately. If the isolate
+  // dies on the next chunk, this one's work is preserved.
+  const completedCount =
+    Object.keys(existingTranscripts).length + 1;
+  await fbPatch(env, fbPath, {
+    [`chunkTranscripts/${nextIndex}`]: String(j?.text || "").trim(),
+    status: `transcribing ${completedCount}/${totalChunks}`,
+    transcribeStartedAt: meeting.transcribeStartedAt || Date.now(),
+  });
+
+  // Chain: fire a fresh worker invocation for the next chunk. We
+  // intentionally don't await it — the current invocation is done.
+  if (selfUrl) {
+    try {
+      // No await — fire-and-forget. Cloudflare keeps this alive via
+      // the caller's ctx.waitUntil that wrapped us.
+      fetch(`${selfUrl}/meeting-transcribe-next`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ meetingId }),
+      });
+    } catch {
+      /* swallow — retry button picks up the slack */
+    }
+  }
+}
+
+// v1.260: handler for the self-chain endpoint. Just unwraps the body
+// and delegates to transcribeMeetingNext. Wrapped in ctx.waitUntil so
+// the chunk processing continues after the HTTP response returns.
+async function handleMeetingTranscribeNext(request, env, ctx) {
+  const body = await request.json().catch(() => ({}));
+  const meetingId = String(body?.meetingId || "");
+  if (!meetingId) return json({ error: "missing meetingId" }, 400);
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(meetingId)) {
+    return json({ error: "bad meetingId" }, 400);
+  }
+  const origin = new URL(request.url).origin;
+  ctx.waitUntil(transcribeMeetingNext(env, meetingId, origin));
+  return json({ ok: true });
 }
 
 // v1.259: re-run transcription on a meeting whose original transcription
@@ -3131,15 +3235,21 @@ async function handleMeetingRetryTranscribe(request, env, ctx) {
     }, 400);
   }
 
-  // Reset status so the UI shows progress again. transcribeMeetingChunks
-  // overwrites this with "transcribing 0/N → N/N → ready" as it runs.
+  // Reset status so the UI shows progress again. transcribeMeetingNext
+  // takes over and chains through any remaining un-transcribed chunks.
+  // Already-transcribed chunks (stored at chunkTranscripts[N]) are
+  // skipped — only un-done work runs.
+  const meeting = await fbGet(env, fbPath);
+  const existing = (meeting && meeting.chunkTranscripts) || {};
+  const completed = Object.keys(existing).length;
   await fbPatch(env, fbPath, {
-    status: "transcribing 0/" + chunkKeys.length,
+    status: `transcribing ${completed}/${chunkKeys.length}`,
     transcriptError: null,
     transcribeStartedAt: Date.now(),
   });
-  ctx.waitUntil(transcribeMeetingChunks(env, meetingId, chunkKeys.length));
-  return json({ ok: true, totalChunks: chunkKeys.length });
+  const origin = new URL(request.url).origin;
+  ctx.waitUntil(transcribeMeetingNext(env, meetingId, origin));
+  return json({ ok: true, totalChunks: chunkKeys.length, alreadyDone: completed });
 }
 
 // v1.255: hard-delete a meeting. Removes:
