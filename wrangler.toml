@@ -21,6 +21,15 @@ binding = "AI"
 binding = "PERISKOPE_GATEWAY"
 service = "ferra-periskope-gateway"
 
+# v1.261: self-service binding so the meeting-transcribe chain can call
+# /meeting-transcribe-next from inside another invocation. Public-URL
+# fetches between workers on *.workers.dev hit Cloudflare's error 1042
+# block (same lesson from the v1.239 gateway migration). Service
+# binding to self routes internally — free, fast, no 1042.
+[[services]]
+binding = "SELF"
+service = "common-communication"
+
 # v1.176: R2 bucket for internal-DM attachments. Firebase Storage requires
 # the Blaze plan, so we keep that off and store DM media in R2 instead
 # (10 GB free forever, no egress fees). The bucket must exist on the CF

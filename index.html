@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.260</title>
+<title>CommonCommunication v1.261</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2717,7 +2717,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.260";
+const APP_VERSION = "v1.261";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -5876,6 +5876,18 @@ function renderMeetingsList() {
       renderMeetingsList();
     };
   });
+  // v1.261: chain-log toggle. Tap "🪵 Show logs" to see the last 30
+  // worker chain entries for a meeting — what was attempted, what
+  // succeeded, what failed.
+  meetingsList.querySelectorAll("[data-meeting-logs]").forEach((b) => {
+    b.onclick = (e) => {
+      e.stopPropagation();
+      const id = b.dataset.meetingLogs;
+      if (_meetingLogsExpandedSet.has(id)) _meetingLogsExpandedSet.delete(id);
+      else _meetingLogsExpandedSet.add(id);
+      renderMeetingsList();
+    };
+  });
   // v1.255: delete handlers. Trash-can icon → confirm → /meeting-delete.
   meetingsList.querySelectorAll("[data-meeting-delete]").forEach((b) => {
     b.onclick = async (e) => {
@@ -6064,6 +6076,7 @@ if (meetingEditSave) {
 }
 
 const _meetingExpandedSet = new Set();
+const _meetingLogsExpandedSet = new Set();
 function renderMeetingRow(m) {
   const startedAt = m.startedAt
     ? new Date(m.startedAt).toLocaleString()
@@ -6118,6 +6131,7 @@ function renderMeetingRow(m) {
       ${m.dropboxShareUrl
         ? `<div style="margin-top:6px;"><a href="${escapeHtml(m.dropboxShareUrl)}" target="_blank" rel="noopener noreferrer" style="font-size:12px; color:var(--green); text-decoration:none;">🗂️ Open in Dropbox</a></div>`
         : (m.dropboxError ? `<div style="margin-top:6px; font-size:11px; color:#d9534f;" title="${escapeHtml(m.dropboxError)}">⚠ Dropbox upload failed</div>` : "")}
+      ${renderMeetingChainLog(m)}
       ${isReady
         ? `${renderMeetingSummaryBlock(m)}
            ${expanded
@@ -6127,6 +6141,37 @@ function renderMeetingRow(m) {
                  <button data-meeting-toggle="${escapeHtml(m.id)}" style="font-size:11px; background:none; border:none; color:var(--green); cursor:pointer; padding:4px 0 0;">▼ Show full transcript</button>`}`
         : (status === "failed" ? `<div style="margin-top:6px; font-size:12px; color:#d9534f;">${escapeHtml(m.transcriptError || "Transcription failed.")}</div>` : "")}
     </div>`;
+}
+
+// v1.261: chain log block. Always-visible "🪵 Show logs" toggle that
+// expands into the last 30 worker chain entries — useful for diagnosing
+// stuck transcriptions. Only renders when there's at least one log
+// entry (which there will be for any meeting created after v1.261).
+function renderMeetingChainLog(m) {
+  const log = Array.isArray(m.chainLog) ? m.chainLog : [];
+  if (!log.length) return "";
+  const expanded = _meetingLogsExpandedSet.has(m.id);
+  if (!expanded) {
+    return `<div style="margin-top:4px;">
+      <button data-meeting-logs="${escapeHtml(m.id)}" style="font-size:11px; background:none; border:none; color:var(--muted); cursor:pointer; padding:0;">🪵 Show logs (${log.length})</button>
+    </div>`;
+  }
+  const lines = log.map((entry) => {
+    const ts = entry.at ? new Date(entry.at).toLocaleTimeString() : "?";
+    const color =
+      entry.level === "error" ? "#d9534f" : entry.level === "warn" ? "#92400e" : "#374151";
+    const extras = Object.entries(entry)
+      .filter(([k]) => !["at", "level", "message"].includes(k))
+      .map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : v}`)
+      .join(" ");
+    return `<div style="color:${color}; padding:2px 0;">[${ts}] ${escapeHtml(entry.message || "")}${extras ? ` <span style="color:#6b7280;">${escapeHtml(extras)}</span>` : ""}</div>`;
+  }).join("");
+  return `<div style="margin-top:6px; padding:8px 10px; background:#1f2937; color:#d1d5db; border-radius:4px; font-family:monospace; font-size:10px; line-height:1.5; max-height:240px; overflow-y:auto;">
+    ${lines}
+  </div>
+  <div style="margin-top:4px;">
+    <button data-meeting-logs="${escapeHtml(m.id)}" style="font-size:11px; background:none; border:none; color:var(--muted); cursor:pointer; padding:0;">🪵 Hide logs</button>
+  </div>`;
 }
 
 // v1.256: AI summary block. Three states:

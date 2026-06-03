@@ -3041,10 +3041,10 @@ async function handleMeetingUploadChunk(request, env, ctx) {
   });
 
   // When the last chunk arrives, kick off transcription (v1.260: single-
-  // chunk-per-invocation, self-chains until done).
+  // chunk-per-invocation, self-chains until done). v1.261: passes ctx
+  // through so the chain uses ctx.waitUntil + env.SELF.fetch.
   if (chunkIndex === totalChunks - 1) {
-    const origin = new URL(request.url).origin;
-    ctx.waitUntil(transcribeMeetingNext(env, meetingId, origin));
+    ctx.waitUntil(transcribeMeetingNext(env, meetingId, ctx));
   }
 
   return json({ ok: true, meetingId, chunkIndex });
@@ -3068,12 +3068,45 @@ async function handleMeetingUploadChunk(request, env, ctx) {
 // Once all chunks are checkpointed, the final invocation concatenates
 // transcripts in order, sets status=ready, and cleans up R2.
 
-async function transcribeMeetingNext(env, meetingId, selfUrl) {
+// v1.261: transcribeMeetingNext + service-binding self-chain + detailed
+// logging to RTDB so failures are visible in the UI, not just in
+// wrangler tail. Every step writes a `chainLog` entry on the meeting
+// record (capped at the last 30 entries) so the trainer can see exactly
+// where the chain died last.
+async function appendChainLog(env, fbPath, level, message, ctx_extra) {
+  try {
+    const meeting = await fbGet(env, fbPath);
+    const existing = Array.isArray(meeting?.chainLog) ? meeting.chainLog : [];
+    const entry = {
+      at: Date.now(),
+      level,                       // "info" | "warn" | "error"
+      message: String(message).slice(0, 500),
+      ...(ctx_extra || {}),
+    };
+    const trimmed = [...existing, entry].slice(-30);
+    await fbPatch(env, fbPath, { chainLog: trimmed });
+  } catch (e) {
+    console.warn("[chain-log] failed to write", e);
+  }
+  // ALSO log to wrangler tail for live debugging.
+  console.log(`[transcribe-chain] ${level.toUpperCase()} ${message}`, ctx_extra || "");
+}
+
+async function transcribeMeetingNext(env, meetingId, ctx) {
   const fbPath = `${ROOT}/meetings/${meetingId}`;
+  await appendChainLog(env, fbPath, "info", "tick start", { meetingId });
+
   const meeting = await fbGet(env, fbPath);
-  if (!meeting) return;
+  if (!meeting) {
+    await appendChainLog(env, fbPath, "error", "meeting record disappeared");
+    return;
+  }
 
   // Count chunks in R2 — authoritative source for "how many total".
+  if (!env.DM_MEDIA) {
+    await appendChainLog(env, fbPath, "error", "R2 DM_MEDIA binding missing");
+    return;
+  }
   const listed = await env.DM_MEDIA.list({ prefix: `meetings/${meetingId}/` });
   const chunkKeys = (listed.objects || [])
     .filter((o) => /chunk-\d{3}\.wav$/.test(o.key))
@@ -3086,6 +3119,7 @@ async function transcribeMeetingNext(env, meetingId, selfUrl) {
       transcriptError: "no chunks in R2 — upload may have failed",
       transcribeFinishedAt: Date.now(),
     });
+    await appendChainLog(env, fbPath, "error", "no chunks in R2");
     return;
   }
 
@@ -3101,6 +3135,7 @@ async function transcribeMeetingNext(env, meetingId, selfUrl) {
 
   // All chunks done — finalize.
   if (nextIndex === -1) {
+    await appendChainLog(env, fbPath, "info", "all chunks done — finalizing", { totalChunks });
     const parts = [];
     for (let i = 0; i < totalChunks; i++) {
       parts.push(String(existingTranscripts[String(i)] || ""));
@@ -3110,16 +3145,15 @@ async function transcribeMeetingNext(env, meetingId, selfUrl) {
       status: "ready",
       transcript: fullTranscript,
       transcribeFinishedAt: Date.now(),
-      // chunkTranscripts is left in place — small payload, useful as an
-      // audit trail and lets a regenerate-summary call know which
-      // chunks came from where.
     });
-    // R2 cleanup. Failure is non-fatal — orphan chunks are harmless.
     for (const key of chunkKeys) {
       try { await env.DM_MEDIA.delete(key); } catch {}
     }
+    await appendChainLog(env, fbPath, "info", "transcription complete", { length: fullTranscript.length });
     return;
   }
+
+  await appendChainLog(env, fbPath, "info", `transcribing chunk ${nextIndex} of ${totalChunks}`);
 
   // Transcribe just this one chunk.
   const padded = String(nextIndex).padStart(3, "0");
@@ -3128,9 +3162,10 @@ async function transcribeMeetingNext(env, meetingId, selfUrl) {
   if (!obj) {
     await fbPatch(env, fbPath, {
       status: "failed",
-      transcriptError: `chunk ${nextIndex} missing from R2 mid-transcription`,
+      transcriptError: `chunk ${nextIndex} missing from R2`,
       transcribeFinishedAt: Date.now(),
     });
+    await appendChainLog(env, fbPath, "error", `R2 chunk missing: ${key}`);
     return;
   }
   const bytes = await obj.arrayBuffer();
@@ -3139,6 +3174,8 @@ async function transcribeMeetingNext(env, meetingId, selfUrl) {
   form.append("model", SA_GROQ_MODEL);
   form.append("response_format", "verbose_json");
   form.append("temperature", "0");
+
+  const groqStart = Date.now();
   let r, j;
   try {
     r = await fetch("https://api.groq.com/openai/v1/audio/translations", {
@@ -3148,43 +3185,64 @@ async function transcribeMeetingNext(env, meetingId, selfUrl) {
     });
     j = await safeJson(r);
     if (!r.ok) {
-      throw new Error(`Groq ${r.status} on chunk ${nextIndex}: ${JSON.stringify(j).slice(0, 300)}`);
+      const errMsg = `Groq HTTP ${r.status}: ${JSON.stringify(j).slice(0, 300)}`;
+      await appendChainLog(env, fbPath, "error", errMsg, { chunk: nextIndex, groqStatus: r.status });
+      throw new Error(errMsg);
     }
   } catch (e) {
-    // Don't mark as failed — let retry button pick it up. Just update
-    // status to surface the error inline.
     await fbPatch(env, fbPath, {
       status: "failed",
       transcriptError: String(e?.message || e).slice(0, 500),
       transcribeFinishedAt: Date.now(),
     });
+    await appendChainLog(env, fbPath, "error", "Groq call failed", {
+      chunk: nextIndex,
+      error: String(e?.message || e).slice(0, 200),
+      durationMs: Date.now() - groqStart,
+    });
     return;
   }
+  await appendChainLog(env, fbPath, "info", `Groq OK for chunk ${nextIndex}`, {
+    durationMs: Date.now() - groqStart,
+    textLength: String(j?.text || "").length,
+  });
 
-  // Checkpoint: save THIS chunk's transcript immediately. If the isolate
-  // dies on the next chunk, this one's work is preserved.
-  const completedCount =
-    Object.keys(existingTranscripts).length + 1;
+  // Checkpoint: save THIS chunk's transcript immediately.
+  const completedCount = Object.keys(existingTranscripts).length + 1;
   await fbPatch(env, fbPath, {
     [`chunkTranscripts/${nextIndex}`]: String(j?.text || "").trim(),
     status: `transcribing ${completedCount}/${totalChunks}`,
     transcribeStartedAt: meeting.transcribeStartedAt || Date.now(),
   });
 
-  // Chain: fire a fresh worker invocation for the next chunk. We
-  // intentionally don't await it — the current invocation is done.
-  if (selfUrl) {
+  // v1.261: SELF service-binding chain. Public-URL fetch hits Cloudflare's
+  // worker-to-worker block (error 1042 — same lesson as the v1.239
+  // PERISKOPE_GATEWAY migration). Service binding routes internally.
+  if (env.SELF) {
     try {
-      // No await — fire-and-forget. Cloudflare keeps this alive via
-      // the caller's ctx.waitUntil that wrapped us.
-      fetch(`${selfUrl}/meeting-transcribe-next`, {
+      const chainReq = new Request("https://self/meeting-transcribe-next", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ meetingId }),
       });
-    } catch {
-      /* swallow — retry button picks up the slack */
+      // Wrap in ctx.waitUntil so Cloudflare keeps the parent invocation
+      // alive long enough for the chain hand-off to actually complete.
+      if (ctx && ctx.waitUntil) {
+        ctx.waitUntil(env.SELF.fetch(chainReq));
+      } else {
+        // No ctx — fire-and-forget. Less reliable but better than nothing.
+        env.SELF.fetch(chainReq).catch((e) => {
+          console.warn("[chain] fire-and-forget self-fetch failed:", e);
+        });
+      }
+      await appendChainLog(env, fbPath, "info", "fired chain → next chunk");
+    } catch (e) {
+      await appendChainLog(env, fbPath, "error", "chain self-fetch failed", {
+        error: String(e?.message || e).slice(0, 200),
+      });
     }
+  } else {
+    await appendChainLog(env, fbPath, "error", "env.SELF binding missing — chain broken");
   }
 }
 
@@ -3198,8 +3256,7 @@ async function handleMeetingTranscribeNext(request, env, ctx) {
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(meetingId)) {
     return json({ error: "bad meetingId" }, 400);
   }
-  const origin = new URL(request.url).origin;
-  ctx.waitUntil(transcribeMeetingNext(env, meetingId, origin));
+  ctx.waitUntil(transcribeMeetingNext(env, meetingId, ctx));
   return json({ ok: true });
 }
 
@@ -3246,8 +3303,7 @@ async function handleMeetingRetryTranscribe(request, env, ctx) {
     transcriptError: null,
     transcribeStartedAt: Date.now(),
   });
-  const origin = new URL(request.url).origin;
-  ctx.waitUntil(transcribeMeetingNext(env, meetingId, origin));
+  ctx.waitUntil(transcribeMeetingNext(env, meetingId, ctx));
   return json({ ok: true, totalChunks: chunkKeys.length, alreadyDone: completed });
 }
 
