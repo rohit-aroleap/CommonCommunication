@@ -152,6 +152,8 @@ export function MeetingsScreen() {
 function MeetingRow({ meeting: m }: { meeting: MeetingRecord }) {
   const styles = useStyles(makeStyles);
   const [expanded, setExpanded] = useState(false);
+  // v1.262: summary defaults to collapsed (preview-only).
+  const [summaryExpanded, setSummaryExpanded] = useState(false);
   const startedAt = m.startedAt ? new Date(m.startedAt).toLocaleString() : "";
   const dur = m.durationSec
     ? `${Math.floor(m.durationSec / 60)}m ${Math.round(m.durationSec % 60)}s`
@@ -253,11 +255,29 @@ function MeetingRow({ meeting: m }: { meeting: MeetingRecord }) {
         <>
           {m.summaryStatus === "ready" && m.summary ? (
             <View style={styles.summaryBox}>
-              <Text style={styles.summaryHead}>✨ Summary</Text>
-              <Text style={styles.summaryTxt}>{m.summary}</Text>
-              <TouchableOpacity onPress={handleSummarize}>
-                <Text style={styles.summaryRetry}>↻ Regenerate</Text>
-              </TouchableOpacity>
+              <View style={{ flexDirection: "row", alignItems: "center" }}>
+                <Text style={[styles.summaryHead, { flex: 1 }]}>✨ Summary</Text>
+                <TouchableOpacity onPress={() => setSummaryExpanded((v) => !v)}>
+                  <Text style={styles.summaryRetry}>
+                    {summaryExpanded ? "▲ Hide" : "▼ Show"}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+              {summaryExpanded ? (
+                <>
+                  <Text style={styles.summaryTxt} selectable>{m.summary}</Text>
+                  <TouchableOpacity onPress={handleSummarize}>
+                    <Text style={styles.summaryRetry}>↻ Regenerate</Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <Text
+                  style={[styles.summaryTxt, { color: "#6b7280" }]}
+                  numberOfLines={2}
+                >
+                  {(m.summary.split(/\n+/).map((s) => s.trim()).find((s) => s.length > 0) || "").slice(0, 200)}
+                </Text>
+              )}
             </View>
           ) : m.summaryStatus === "generating" ? (
             <Text style={styles.summaryGenerating}>⏳ Generating summary…</Text>

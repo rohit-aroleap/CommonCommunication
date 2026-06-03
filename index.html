@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.261</title>
+<title>CommonCommunication v1.262</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2717,7 +2717,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.261";
+const APP_VERSION = "v1.262";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -5876,6 +5876,16 @@ function renderMeetingsList() {
       renderMeetingsList();
     };
   });
+  // v1.262: summary expand/collapse toggle. Defaults to collapsed.
+  meetingsList.querySelectorAll("[data-meeting-summary-toggle]").forEach((b) => {
+    b.onclick = (e) => {
+      e.stopPropagation();
+      const id = b.dataset.meetingSummaryToggle;
+      if (_meetingSummaryExpandedSet.has(id)) _meetingSummaryExpandedSet.delete(id);
+      else _meetingSummaryExpandedSet.add(id);
+      renderMeetingsList();
+    };
+  });
   // v1.261: chain-log toggle. Tap "🪵 Show logs" to see the last 30
   // worker chain entries for a meeting — what was attempted, what
   // succeeded, what failed.
@@ -6077,6 +6087,10 @@ if (meetingEditSave) {
 
 const _meetingExpandedSet = new Set();
 const _meetingLogsExpandedSet = new Set();
+// v1.262: summary defaults to collapsed (preview-only); tap to expand.
+// Trainers complained the always-expanded summary made long lists hard
+// to scan.
+const _meetingSummaryExpandedSet = new Set();
 function renderMeetingRow(m) {
   const startedAt = m.startedAt
     ? new Date(m.startedAt).toLocaleString()
@@ -6185,12 +6199,26 @@ function renderMeetingSummaryBlock(m) {
     return `<div style="margin-top:8px; padding:8px 10px; background:#dbeafe; border-radius:6px; font-size:12px; color:#1e3a8a;">⏳ Generating summary…</div>`;
   }
   if (status === "ready" && m.summary) {
-    return `<div style="margin-top:8px; padding:10px 12px; background:#f5f3ff; border-left:3px solid #8b5cf6; border-radius:4px; font-size:12px; line-height:1.55; white-space:pre-wrap;">
-      <div style="font-weight:600; color:#5b21b6; margin-bottom:4px;">✨ Summary</div>
-      ${escapeHtml(m.summary)}
-      <div style="margin-top:6px;">
-        <button data-meeting-summarize="${escapeHtml(m.id)}" style="font-size:11px; background:none; border:none; color:#5b21b6; cursor:pointer; padding:0;">↻ Regenerate</button>
+    const expanded = _meetingSummaryExpandedSet.has(m.id);
+    // First non-empty line of the summary, capped — used as the preview
+    // when collapsed.
+    const previewLine =
+      String(m.summary)
+        .split(/\n+/)
+        .map((s) => s.trim())
+        .find((s) => s.length > 0) || "";
+    const preview = previewLine.slice(0, 200) + (previewLine.length > 200 ? "…" : "");
+    return `<div style="margin-top:8px; padding:10px 12px; background:#f5f3ff; border-left:3px solid #8b5cf6; border-radius:4px;">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <div style="font-weight:600; color:#5b21b6; font-size:12px; flex:1;">✨ Summary</div>
+        <button data-meeting-summary-toggle="${escapeHtml(m.id)}" style="font-size:11px; background:none; border:none; color:#5b21b6; cursor:pointer; padding:0;">${expanded ? "▲ Hide" : "▼ Show"}</button>
       </div>
+      ${expanded
+        ? `<div style="margin-top:6px; font-size:12px; line-height:1.55; white-space:pre-wrap; max-height:340px; overflow-y:auto;">${escapeHtml(m.summary)}</div>
+           <div style="margin-top:6px;">
+             <button data-meeting-summarize="${escapeHtml(m.id)}" style="font-size:11px; background:none; border:none; color:#5b21b6; cursor:pointer; padding:0;">↻ Regenerate</button>
+           </div>`
+        : `<div style="margin-top:4px; font-size:12px; color:#6b7280; line-height:1.4;">${escapeHtml(preview)}</div>`}
     </div>`;
   }
   if (status === "failed") {
