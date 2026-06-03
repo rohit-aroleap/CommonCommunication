@@ -190,6 +190,22 @@ export default {
       if (url.pathname === "/sa-upload-chunk" && request.method === "POST") {
         return cors(env, await handleSaUploadChunk(request, env, ctx));
       }
+      // v1.254: meetings — internal team recording feature. Same chunked-
+      // upload pattern as SA, but stored under /commonComm/meetings/{id}
+      // instead of /chats/{chatKey}/saSessions/{id}. See meeting handlers
+      // for the request shapes.
+      if (url.pathname === "/meeting-create" && request.method === "POST") {
+        return cors(env, await handleMeetingCreate(request, env));
+      }
+      if (url.pathname === "/meeting-dropbox-url" && request.method === "POST") {
+        return cors(env, await handleMeetingDropboxUrl(request, env));
+      }
+      if (url.pathname === "/meeting-set-dropbox" && request.method === "POST") {
+        return cors(env, await handleMeetingSetDropbox(request, env));
+      }
+      if (url.pathname === "/meeting-upload-chunk" && request.method === "POST") {
+        return cors(env, await handleMeetingUploadChunk(request, env, ctx));
+      }
       if (url.pathname === "/sa-retranscribe" && request.method === "POST") {
         return cors(env, await handleSaRetranscribe(request, env, ctx));
       }
@@ -2589,6 +2605,334 @@ async function handleSaTranscribeLocal(request, env, ctx) {
   ));
 
   return json({ ok: true, sessionId: clientSessionId });
+}
+
+// ============================================================
+// v1.254: MEETINGS — internal team recording with transcription
+// ============================================================
+//
+// Flow:
+//   1. POST /meeting-create   — caller sends { name, attendees, createdByUid,
+//                                createdByName }. Worker allocates a Firebase
+//                                push key as meetingId, writes a placeholder
+//                                RTDB record at /commonComm/meetings/{id} with
+//                                status="recording". Returns { meetingId }.
+//   2. (browser records, then stops)
+//   3. POST /meeting-dropbox-url — caller sends { meetingId, fileName }. Worker
+//                                  mints a single-use Dropbox temporary upload
+//                                  link via Dropbox's API; returns { url, path }.
+//                                  Browser PUTs the recorded blob to that URL
+//                                  directly — no big upload through worker.
+//   4. POST /meeting-set-dropbox — after the direct-to-Dropbox upload, browser
+//                                  reports the Dropbox path back. Worker creates
+//                                  a shareable link and patches the RTDB record
+//                                  with dropboxPath + dropboxShareUrl.
+//   5. POST /meeting-upload-chunk — browser splits the audio via Web Audio API
+//                                   into ~23 MB WAV chunks and uploads each.
+//                                   Worker stores in R2 at
+//                                   meetings/{meetingId}/chunk-NNN.wav. The last
+//                                   chunk's arrival kicks off background
+//                                   transcription (transcribeMultipartMeeting)
+//                                   which iterates Groq /translations calls and
+//                                   stitches the chunk transcripts into one.
+//                                   Status flips queued → transcribing 1/N →
+//                                   ready / failed via RTDB patches the UI
+//                                   listens to via onValue.
+//
+// Storage:
+//   - Audio file (full meeting):   Dropbox /Apps/CommonComm/meetings/{filename}
+//   - Transcript + metadata:       Firebase /commonComm/meetings/{meetingId}
+//   - Chunks (transcription only): R2 commoncomm-dm-media meetings/{id}/...
+//                                  (deleted after successful transcription)
+
+async function handleMeetingCreate(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const name = String(body?.name || "").trim().slice(0, 200);
+  const attendees = Array.isArray(body?.attendees) ? body.attendees : [];
+  const createdByUid = String(body?.createdByUid || "");
+  const createdByName = String(body?.createdByName || "");
+  if (!name) return json({ error: "missing name" }, 400);
+  if (!createdByUid) return json({ error: "missing createdByUid" }, 400);
+
+  // Allocate a Firebase push key — chronologically sortable, globally unique.
+  const startedAt = Date.now();
+  const pushed = await fbPush(env, `${ROOT}/meetings`, {
+    name,
+    attendees,
+    createdByUid,
+    createdByName: createdByName || null,
+    startedAt,
+    durationSec: null,
+    status: "recording",
+    transcript: null,
+    dropboxPath: null,
+    dropboxShareUrl: null,
+  });
+  const meetingId = pushed?.name;
+  if (!meetingId) return json({ error: "couldn't allocate meetingId" }, 500);
+  return json({ ok: true, meetingId });
+}
+
+// Returns a one-time Dropbox upload URL for the browser to PUT the recorded
+// audio blob to directly. Path is computed from the meeting's name + start
+// time. Single-use, expires after ~4 hours.
+async function handleMeetingDropboxUrl(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const meetingId = String(body?.meetingId || "");
+  const fileExt = String(body?.fileExt || "webm");
+  if (!meetingId) return json({ error: "missing meetingId" }, 400);
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(meetingId)) {
+    return json({ error: "bad meetingId" }, 400);
+  }
+
+  // Read the meeting record to compute the Dropbox path (name + startedAt).
+  const meeting = await fbGet(env, `${ROOT}/meetings/${meetingId}`);
+  if (!meeting) return json({ error: "meeting not found" }, 404);
+  const startedAt = Number(meeting.startedAt) || Date.now();
+  const cleanName = sanitizeNameForFs(meeting.name || "meeting");
+  const d = new Date(startedAt);
+  // ISO-ish local-time path: 2026-05-26 14-30 - Q1 Planning.webm
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const min = String(d.getUTCMinutes()).padStart(2, "0");
+  // Worker runs in UTC. Trainers are in IST. Shift forward 5h30m for display.
+  const ist = new Date(startedAt + 5.5 * 60 * 60 * 1000);
+  const istYyyy = ist.getUTCFullYear();
+  const istMm = String(ist.getUTCMonth() + 1).padStart(2, "0");
+  const istDd = String(ist.getUTCDate()).padStart(2, "0");
+  const istHh = String(ist.getUTCHours()).padStart(2, "0");
+  const istMin = String(ist.getUTCMinutes()).padStart(2, "0");
+  const dropboxPath = `/meetings/${istYyyy}-${istMm}-${istDd} ${istHh}-${istMin} - ${cleanName}.${fileExt}`;
+
+  const accessToken = await getDropboxAccessToken(env);
+  const res = await fetch("https://api.dropboxapi.com/2/files/get_temporary_upload_link", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      commit_info: {
+        path: dropboxPath,
+        mode: "add",
+        autorename: true,
+        mute: true,
+      },
+      duration: 14400, // 4 hours — enough for a slow upload of a long file
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    return json({ error: `dropbox link failed ${res.status}: ${text.slice(0, 300)}` }, 502);
+  }
+  const j = await res.json();
+  return json({ ok: true, url: j.link, path: dropboxPath });
+}
+
+// After the browser-to-Dropbox direct upload completes, the browser pings
+// this endpoint with the actual Dropbox path (Dropbox may have appended a
+// " (1)" suffix via autorename). Worker creates a shareable link and
+// patches the RTDB record.
+async function handleMeetingSetDropbox(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const meetingId = String(body?.meetingId || "");
+  const dropboxPath = String(body?.dropboxPath || "");
+  const sizeBytes = Number(body?.sizeBytes) || null;
+  const durationSec = Number(body?.durationSec) || null;
+  if (!meetingId || !dropboxPath) {
+    return json({ error: "missing meetingId or dropboxPath" }, 400);
+  }
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(meetingId)) {
+    return json({ error: "bad meetingId" }, 400);
+  }
+
+  // Mint a shareable link for the freshly-uploaded file.
+  const accessToken = await getDropboxAccessToken(env);
+  let shareUrl = null;
+  let directUrl = null;
+  try {
+    const r = await fetch(
+      "https://api.dropboxapi.com/2/sharing/create_shared_link_with_settings",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          path: dropboxPath,
+          settings: {
+            requested_visibility: { ".tag": "public" },
+            audience: { ".tag": "public" },
+            access: { ".tag": "viewer" },
+          },
+        }),
+      },
+    );
+    if (r.ok) {
+      const j = await r.json();
+      shareUrl = j.url || null;
+      directUrl = shareUrl
+        ? shareUrl.replace(/\?dl=0$/, "?raw=1").replace(/\?dl=1$/, "?raw=1")
+        : null;
+    } else if (r.status === 409) {
+      // Link already exists — fetch it.
+      const lr = await fetch(
+        "https://api.dropboxapi.com/2/sharing/list_shared_links",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ path: dropboxPath, direct_only: true }),
+        },
+      );
+      if (lr.ok) {
+        const lj = await lr.json();
+        shareUrl = lj?.links?.[0]?.url || null;
+        directUrl = shareUrl
+          ? shareUrl.replace(/\?dl=0$/, "?raw=1").replace(/\?dl=1$/, "?raw=1")
+          : null;
+      }
+    }
+  } catch (e) {
+    // share link is nice-to-have; not fatal
+  }
+
+  await fbPatch(env, `${ROOT}/meetings/${meetingId}`, {
+    dropboxPath,
+    dropboxShareUrl: shareUrl,
+    dropboxDirectUrl: directUrl,
+    dropboxUploadedAt: Date.now(),
+    sizeBytes,
+    durationSec,
+  });
+  return json({ ok: true });
+}
+
+// Chunked-upload endpoint for meeting transcription. Mirrors /sa-upload-chunk
+// but writes to /commonComm/meetings/{meetingId} and meetings/{id}/chunk-NNN
+// in R2. Form fields:
+//   file              — the WAV chunk
+//   meetingId         — required
+//   chunkIndex        — 0-based
+//   totalChunks       — total expected
+async function handleMeetingUploadChunk(request, env, ctx) {
+  if (!env.DM_MEDIA) return json({ error: "R2 bucket DM_MEDIA not bound" }, 500);
+  if (!env.GROQ_API_KEY) return json({ error: "GROQ_API_KEY not set" }, 500);
+  let form;
+  try {
+    form = await request.formData();
+  } catch (e) {
+    return json({ error: "bad multipart: " + String(e?.message || e) }, 400);
+  }
+  const file = form.get("file");
+  const meetingId = String(form.get("meetingId") || "");
+  const chunkIndex = parseInt(String(form.get("chunkIndex") || ""), 10);
+  const totalChunks = parseInt(String(form.get("totalChunks") || ""), 10);
+
+  if (!file || typeof file === "string") return json({ error: "missing file" }, 400);
+  if (!meetingId) return json({ error: "missing meetingId" }, 400);
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(meetingId)) {
+    return json({ error: "bad meetingId" }, 400);
+  }
+  if (!Number.isFinite(chunkIndex) || chunkIndex < 0) {
+    return json({ error: "bad chunkIndex" }, 400);
+  }
+  if (!Number.isFinite(totalChunks) || totalChunks < 1 || totalChunks > 200) {
+    return json({ error: "bad totalChunks" }, 400);
+  }
+  if (chunkIndex >= totalChunks) {
+    return json({ error: "chunkIndex >= totalChunks" }, 400);
+  }
+  if (file.size > SA_MEDIA_MAX_BYTES) {
+    return json({ error: `chunk too large (>${SA_MEDIA_MAX_BYTES / 1024 / 1024} MB)` }, 413);
+  }
+
+  const padded = String(chunkIndex).padStart(3, "0");
+  const key = `meetings/${meetingId}/chunk-${padded}.wav`;
+  let bytes;
+  try {
+    bytes = await file.arrayBuffer();
+    await env.DM_MEDIA.put(key, bytes, {
+      httpMetadata: { contentType: "audio/wav" },
+    });
+  } catch (e) {
+    return json({ error: "r2 put failed: " + String(e?.message || e) }, 500);
+  }
+
+  const fbPathMeeting = `${ROOT}/meetings/${meetingId}`;
+  await fbPatch(env, fbPathMeeting, {
+    status: `uploading ${chunkIndex + 1}/${totalChunks}`,
+  });
+
+  // When the last chunk arrives, kick off transcription.
+  if (chunkIndex === totalChunks - 1) {
+    ctx.waitUntil(transcribeMeetingChunks(env, meetingId, totalChunks));
+  }
+
+  return json({ ok: true, meetingId, chunkIndex });
+}
+
+// Background transcription job for meetings. Pulls each chunk from R2,
+// sends to Groq /audio/translations, stitches transcripts. Cleans up R2
+// chunks after successful transcription.
+async function transcribeMeetingChunks(env, meetingId, totalChunks) {
+  const fbPath = `${ROOT}/meetings/${meetingId}`;
+  const startedAt = Date.now();
+  try {
+    await fbPatch(env, fbPath, {
+      status: "transcribing 0/" + totalChunks,
+      transcribeStartedAt: startedAt,
+    });
+    const transcripts = [];
+    for (let i = 0; i < totalChunks; i++) {
+      const padded = String(i).padStart(3, "0");
+      const key = `meetings/${meetingId}/chunk-${padded}.wav`;
+      const obj = await env.DM_MEDIA.get(key);
+      if (!obj) throw new Error(`chunk ${i} missing from R2`);
+      const bytes = await obj.arrayBuffer();
+      const form = new FormData();
+      form.append("file", new Blob([bytes], { type: "audio/wav" }), `chunk-${padded}.wav`);
+      form.append("model", SA_GROQ_MODEL);
+      form.append("response_format", "verbose_json");
+      form.append("temperature", "0");
+      const r = await fetch("https://api.groq.com/openai/v1/audio/translations", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${env.GROQ_API_KEY}` },
+        body: form,
+      });
+      const j = await safeJson(r);
+      if (!r.ok) {
+        throw new Error(`Groq ${r.status} on chunk ${i}: ${JSON.stringify(j).slice(0, 300)}`);
+      }
+      transcripts.push(String(j?.text || "").trim());
+      await fbPatch(env, fbPath, {
+        status: `transcribing ${i + 1}/${totalChunks}`,
+      });
+    }
+    const fullTranscript = transcripts.join("\n\n").trim();
+    await fbPatch(env, fbPath, {
+      status: "ready",
+      transcript: fullTranscript,
+      transcribeFinishedAt: Date.now(),
+      durationTranscribeMs: Date.now() - startedAt,
+    });
+    // Best-effort R2 cleanup. Failure is non-fatal.
+    for (let i = 0; i < totalChunks; i++) {
+      const padded = String(i).padStart(3, "0");
+      try { await env.DM_MEDIA.delete(`meetings/${meetingId}/chunk-${padded}.wav`); } catch {}
+    }
+  } catch (e) {
+    await fbPatch(env, fbPath, {
+      status: "failed",
+      transcriptError: String(e?.message || e).slice(0, 500),
+      transcribeFinishedAt: Date.now(),
+    });
+  }
 }
 
 // v1.233: chunked-upload endpoint for SA sessions larger than the
