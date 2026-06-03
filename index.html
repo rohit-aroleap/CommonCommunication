@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.254</title>
+<title>CommonCommunication v1.255</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2699,7 +2699,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.254";
+const APP_VERSION = "v1.255";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -5844,6 +5844,37 @@ function renderMeetingsList() {
       renderMeetingsList();
     };
   });
+  // v1.255: delete handlers. Trash-can icon → confirm → /meeting-delete.
+  meetingsList.querySelectorAll("[data-meeting-delete]").forEach((b) => {
+    b.onclick = async (e) => {
+      e.stopPropagation();
+      const id = b.dataset.meetingDelete;
+      const m = meetingsCache[id];
+      if (!m) return;
+      const name = m.name || "this meeting";
+      if (!confirm(`Delete "${name}"? The transcript, Dropbox file, and all metadata will be permanently removed. This can't be undone.`)) {
+        return;
+      }
+      b.disabled = true;
+      b.textContent = "…";
+      try {
+        const r = await fetch(`${WORKER_URL}/meeting-delete`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ meetingId: id }),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j.ok) {
+          throw new Error(j?.error || `HTTP ${r.status}`);
+        }
+        // Row disappears automatically via the onValue listener.
+      } catch (err) {
+        alert(`Couldn't delete: ${err?.message || err}`);
+        b.disabled = false;
+        b.textContent = "🗑";
+      }
+    };
+  });
 }
 
 const _meetingExpandedSet = new Set();
@@ -5890,6 +5921,7 @@ function renderMeetingRow(m) {
       <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
         <div style="font-size:14px; font-weight:600; flex:1;">${escapeHtml(m.name || "Untitled meeting")}</div>
         <span style="background:${pillBg}; color:${pillFg}; font-size:10px; font-weight:600; padding:2px 8px; border-radius:10px;">${escapeHtml(pillLabel)}</span>
+        <button data-meeting-delete="${escapeHtml(m.id)}" title="Delete this meeting" style="background:none; border:none; color:var(--muted); font-size:14px; cursor:pointer; padding:0 4px;">🗑</button>
       </div>
       <div style="font-size:11px; color:var(--muted);">${escapeHtml(meta || "")}</div>
       ${attendeeNames ? `<div style="font-size:11px; color:var(--muted); margin-top:2px;">Attendees: ${escapeHtml(attendeeNames)}</div>` : ""}

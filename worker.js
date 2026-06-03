@@ -206,6 +206,9 @@ export default {
       if (url.pathname === "/meeting-upload-chunk" && request.method === "POST") {
         return cors(env, await handleMeetingUploadChunk(request, env, ctx));
       }
+      if (url.pathname === "/meeting-delete" && request.method === "POST") {
+        return cors(env, await handleMeetingDelete(request, env));
+      }
       if (url.pathname === "/sa-retranscribe" && request.method === "POST") {
         return cors(env, await handleSaRetranscribe(request, env, ctx));
       }
@@ -2933,6 +2936,70 @@ async function transcribeMeetingChunks(env, meetingId, totalChunks) {
       transcribeFinishedAt: Date.now(),
     });
   }
+}
+
+// v1.255: hard-delete a meeting. Removes:
+//   - Firebase /commonComm/meetings/{meetingId} (metadata + transcript)
+//   - Dropbox file at meeting.dropboxPath (if present)
+//   - R2 chunks at meetings/{meetingId}/chunk-NNN.wav (best-effort cleanup
+//     in case transcription failed mid-flight and chunks were never tidied)
+//
+// Body: { meetingId, deletedByUid, deletedByName }
+// Returns: { ok: true } even if Dropbox / R2 cleanup fails — the
+// Firebase delete is authoritative; orphan files in storage are tolerable.
+async function handleMeetingDelete(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const meetingId = String(body?.meetingId || "");
+  if (!meetingId) return json({ error: "missing meetingId" }, 400);
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(meetingId)) {
+    return json({ error: "bad meetingId" }, 400);
+  }
+
+  const fbPath = `${ROOT}/meetings/${meetingId}`;
+  const meeting = await fbGet(env, fbPath);
+  if (!meeting) {
+    // Already gone — return success so the UI cleans up regardless.
+    return json({ ok: true, alreadyGone: true });
+  }
+
+  // (1) Best-effort Dropbox delete.
+  if (meeting.dropboxPath && env.DROPBOX_REFRESH_TOKEN) {
+    try {
+      const accessToken = await getDropboxAccessToken(env);
+      await fetch("https://api.dropboxapi.com/2/files/delete_v2", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ path: meeting.dropboxPath }),
+      });
+      // Don't await response status — if Dropbox 404s (file gone) or 409s
+      // (already deleted), that's fine. Anything else and we just leak
+      // one file in Dropbox, trainer can prune manually.
+    } catch (e) {
+      console.warn("[meeting-delete] dropbox cleanup failed:", String(e?.message || e));
+    }
+  }
+
+  // (2) Best-effort R2 cleanup. Chunks may still exist if transcription
+  // failed or hasn't completed yet. R2 .list scoped to the meeting's prefix.
+  if (env.DM_MEDIA) {
+    try {
+      const listed = await env.DM_MEDIA.list({ prefix: `meetings/${meetingId}/` });
+      for (const obj of listed.objects || []) {
+        try { await env.DM_MEDIA.delete(obj.key); } catch {}
+      }
+    } catch (e) {
+      console.warn("[meeting-delete] r2 cleanup failed:", String(e?.message || e));
+    }
+  }
+
+  // (3) Authoritative delete: remove the Firebase record. After this fires,
+  // the dashboard's onValue listener removes the row from the UI.
+  await fbPut(env, fbPath, null);
+
+  return json({ ok: true });
 }
 
 // v1.233: chunked-upload endpoint for SA sessions larger than the
