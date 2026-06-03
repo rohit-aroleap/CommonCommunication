@@ -3239,7 +3239,6 @@ async function handleMeetingRetryTranscribe(request, env, ctx) {
   // takes over and chains through any remaining un-transcribed chunks.
   // Already-transcribed chunks (stored at chunkTranscripts[N]) are
   // skipped — only un-done work runs.
-  const meeting = await fbGet(env, fbPath);
   const existing = (meeting && meeting.chunkTranscripts) || {};
   const completed = Object.keys(existing).length;
   await fbPatch(env, fbPath, {
