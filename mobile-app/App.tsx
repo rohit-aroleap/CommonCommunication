@@ -58,6 +58,7 @@ import { LoginScreen } from "@/auth/LoginScreen";
 import { ChatsScreen } from "@/screens/ChatsScreen";
 import { TicketsScreen } from "@/screens/TicketsScreen";
 import { TeamScreen } from "@/screens/TeamScreen";
+import { MeetingsScreen } from "@/screens/MeetingsScreen";
 import { ThreadScreen } from "@/screens/ThreadScreen";
 import { CustomerInfoScreen } from "@/screens/CustomerInfoScreen";
 import { SettingsScreen } from "@/screens/SettingsScreen";
@@ -259,6 +260,10 @@ function TabsNav() {
       <Tabs.Screen name="Chats" component={ChatsScreen} />
       <Tabs.Screen name="Tickets" component={TicketsScreen} />
       <Tabs.Screen name="Team" component={TeamScreen} />
+      {/* v1.256: Meetings tab — mirrors the web's meetings feature for
+          on-the-go recording. Mobile uses single-file upload (no chunking)
+          so the practical recording cap is ~3 hr / 25 MB. */}
+      <Tabs.Screen name="Meetings" component={MeetingsScreen} />
     </Tabs.Navigator>
   );
 }

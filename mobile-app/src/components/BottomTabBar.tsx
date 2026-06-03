@@ -22,12 +22,14 @@ const TAB_GLYPH: Record<string, string> = {
   Chats: "💬",
   Tickets: "🎫",
   Team: "👥",
+  Meetings: "🎤",
 };
 
 const TAB_LABEL: Record<string, string> = {
   Chats: "Chats",
   Tickets: "My tickets",
   Team: "Team",
+  Meetings: "Meetings",
 };
 
 export function BottomTabBar({ state, navigation }: MaterialTopTabBarProps) {

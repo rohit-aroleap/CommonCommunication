@@ -273,6 +273,129 @@ export async function uploadSaRecording(body: {
   }
 }
 
+// v1.256: meetings — internal team recording with transcription + Dropbox.
+// Mobile uses a simpler single-file upload path than the web (no chunking),
+// which caps mobile recordings at ~25 MB (≈3 hr at 24 kbps). For longer
+// meetings, recommend the web flow which splits browser-side.
+export async function createMeeting(body: {
+  name: string;
+  attendees: Array<{ uid: string; name: string; email: string }>;
+  createdByUid: string;
+  createdByName: string;
+}): Promise<{ ok: boolean; meetingId?: string; name?: string; error?: string }> {
+  try {
+    const r = await fetch(`${WORKER_URL}/meeting-create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) return { ok: false, error: j?.error || `HTTP ${r.status}` };
+    return { ok: true, meetingId: j.meetingId, name: j.name };
+  } catch (e) {
+    return { ok: false, error: String((e as Error)?.message || e) };
+  }
+}
+
+export async function uploadMeetingSingleChunk(body: {
+  meetingId: string;
+  fileUri: string;
+  fileName: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const form = new FormData();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    form.append("file", {
+      uri: body.fileUri,
+      name: body.fileName,
+      type: "audio/m4a",
+    } as any);
+    form.append("meetingId", body.meetingId);
+    form.append("chunkIndex", "0");
+    form.append("totalChunks", "1");
+    const r = await fetch(`${WORKER_URL}/meeting-upload-chunk`, {
+      method: "POST",
+      body: form,
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) return { ok: false, error: j?.error || `HTTP ${r.status}` };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String((e as Error)?.message || e) };
+  }
+}
+
+// v1.256: get a temporary Dropbox upload link for a meeting. Mobile uses
+// the returned URL to upload the recorded audio directly to Dropbox,
+// then calls setMeetingDropbox to register the path.
+export async function getMeetingDropboxUrl(body: {
+  meetingId: string;
+  fileExt: string;
+}): Promise<{ ok: boolean; url?: string; path?: string; error?: string }> {
+  try {
+    const r = await fetch(`${WORKER_URL}/meeting-dropbox-url`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) return { ok: false, error: j?.error || `HTTP ${r.status}` };
+    return { ok: true, url: j.url, path: j.path };
+  } catch (e) {
+    return { ok: false, error: String((e as Error)?.message || e) };
+  }
+}
+
+export async function setMeetingDropbox(body: {
+  meetingId: string;
+  dropboxPath: string;
+  sizeBytes?: number;
+  durationSec?: number;
+}): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const r = await fetch(`${WORKER_URL}/meeting-set-dropbox`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) return { ok: false, error: j?.error || `HTTP ${r.status}` };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String((e as Error)?.message || e) };
+  }
+}
+
+export async function deleteMeeting(meetingId: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const r = await fetch(`${WORKER_URL}/meeting-delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ meetingId }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) return { ok: false, error: j?.error || `HTTP ${r.status}` };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String((e as Error)?.message || e) };
+  }
+}
+
+export async function summarizeMeeting(meetingId: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const r = await fetch(`${WORKER_URL}/meeting-summarize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ meetingId }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) return { ok: false, error: j?.error || `HTTP ${r.status}` };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String((e as Error)?.message || e) };
+  }
+}
+
 // v1.249: local-only SA transcription. Audio file stays on the tablet —
 // this just hands the bytes to the worker for one transcription pass.
 // Idempotent on clientSessionId, so a queue-driven retry pings the same

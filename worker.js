@@ -209,6 +209,12 @@ export default {
       if (url.pathname === "/meeting-delete" && request.method === "POST") {
         return cors(env, await handleMeetingDelete(request, env));
       }
+      if (url.pathname === "/meeting-update" && request.method === "POST") {
+        return cors(env, await handleMeetingUpdate(request, env));
+      }
+      if (url.pathname === "/meeting-summarize" && request.method === "POST") {
+        return cors(env, await handleMeetingSummarize(request, env, ctx));
+      }
       if (url.pathname === "/sa-retranscribe" && request.method === "POST") {
         return cors(env, await handleSaRetranscribe(request, env, ctx));
       }
@@ -2650,12 +2656,20 @@ async function handleSaTranscribeLocal(request, env, ctx) {
 
 async function handleMeetingCreate(request, env) {
   const body = await request.json().catch(() => ({}));
-  const name = String(body?.name || "").trim().slice(0, 200);
+  let name = String(body?.name || "").trim().slice(0, 200);
   const attendees = Array.isArray(body?.attendees) ? body.attendees : [];
   const createdByUid = String(body?.createdByUid || "");
   const createdByName = String(body?.createdByName || "");
   if (!name) return json({ error: "missing name" }, 400);
   if (!createdByUid) return json({ error: "missing createdByUid" }, 400);
+
+  // v1.256: auto-number duplicate names. If "Retention meeting" already
+  // exists, the next one becomes "Retention meeting (1)", then "(2)", etc.
+  // We compare on a normalized form (collapse whitespace, lowercase, strip
+  // any existing "(N)" suffix on the base) so re-typing the same base name
+  // — even with a stray space or odd capitalization — still picks up the
+  // next number.
+  name = await assignNextMeetingName(env, name);
 
   // Allocate a Firebase push key — chronologically sortable, globally unique.
   const startedAt = Date.now();
@@ -2673,7 +2687,151 @@ async function handleMeetingCreate(request, env) {
   });
   const meetingId = pushed?.name;
   if (!meetingId) return json({ error: "couldn't allocate meetingId" }, 500);
-  return json({ ok: true, meetingId });
+  return json({ ok: true, meetingId, name });
+}
+
+// Strip a trailing " (N)" suffix off a meeting name and normalize the
+// remainder for case-insensitive comparison. Used by the auto-numbering
+// scan to figure out the "base name" + the highest existing suffix.
+function meetingNameBase(name) {
+  const stripped = String(name || "").replace(/\s*\(\d+\)\s*$/, "").trim();
+  return stripped.toLowerCase().replace(/\s+/g, " ");
+}
+function meetingNameSuffix(name) {
+  const m = String(name || "").match(/\((\d+)\)\s*$/);
+  return m ? Number(m[1]) : 0;
+}
+async function assignNextMeetingName(env, desiredName) {
+  const base = meetingNameBase(desiredName);
+  if (!base) return desiredName;
+  const all = await fbGet(env, `${ROOT}/meetings`);
+  if (!all || typeof all !== "object") return desiredName;
+  let maxSuffix = -1; // -1 = no match; 0 = unsuffixed match; N = "(N)" match
+  for (const m of Object.values(all)) {
+    if (!m || !m.name) continue;
+    if (meetingNameBase(m.name) !== base) continue;
+    const s = meetingNameSuffix(m.name);
+    if (s > maxSuffix) maxSuffix = s;
+  }
+  if (maxSuffix === -1) return desiredName.trim(); // no conflict — use as-is
+  // Conflict — append the next number. The bare base (no suffix) counts
+  // as "0", so the next collision becomes "(1)".
+  const baseDisplay = String(desiredName).replace(/\s*\(\d+\)\s*$/, "").trim();
+  return `${baseDisplay} (${maxSuffix + 1})`;
+}
+
+// v1.256: edit a meeting's name and/or attendee list. Body: { meetingId,
+// name?, attendees? }. Doesn't touch transcript / Dropbox / audio.
+async function handleMeetingUpdate(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const meetingId = String(body?.meetingId || "");
+  if (!meetingId) return json({ error: "missing meetingId" }, 400);
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(meetingId)) {
+    return json({ error: "bad meetingId" }, 400);
+  }
+  const fbPath = `${ROOT}/meetings/${meetingId}`;
+  const existing = await fbGet(env, fbPath);
+  if (!existing) return json({ error: "meeting not found" }, 404);
+
+  const patch = {};
+  if (typeof body.name === "string") {
+    const newName = body.name.trim().slice(0, 200);
+    if (!newName) return json({ error: "name cannot be empty" }, 400);
+    // Only run the auto-number scan if the BASE name changed. Editing the
+    // suffix or fixing typos within the same base shouldn't re-collide.
+    if (meetingNameBase(newName) !== meetingNameBase(existing.name)) {
+      patch.name = await assignNextMeetingName(env, newName);
+    } else {
+      patch.name = newName;
+    }
+  }
+  if (Array.isArray(body.attendees)) {
+    patch.attendees = body.attendees;
+  }
+  if (Object.keys(patch).length === 0) {
+    return json({ error: "nothing to update" }, 400);
+  }
+  patch.updatedAt = Date.now();
+  await fbPatch(env, fbPath, patch);
+  return json({ ok: true, name: patch.name || existing.name });
+}
+
+// v1.256: AI summary of a meeting's transcript. Calls Claude Haiku (the
+// same model used by /summarize, /ai-query, etc.) with a meeting-flavored
+// prompt. Stores the summary on the meeting record at .summary. Trainer
+// hits "✨ Generate summary" on a ready meeting row and the result lands
+// in RTDB within ~10-20s.
+async function handleMeetingSummarize(request, env, ctx) {
+  if (!env.CLAUDE_API_KEY) {
+    return json({ error: "CLAUDE_API_KEY not set" }, 500);
+  }
+  const body = await request.json().catch(() => ({}));
+  const meetingId = String(body?.meetingId || "");
+  if (!meetingId) return json({ error: "missing meetingId" }, 400);
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(meetingId)) {
+    return json({ error: "bad meetingId" }, 400);
+  }
+  const fbPath = `${ROOT}/meetings/${meetingId}`;
+  const meeting = await fbGet(env, fbPath);
+  if (!meeting) return json({ error: "meeting not found" }, 404);
+  if (!meeting.transcript) {
+    return json({ error: "meeting has no transcript yet" }, 400);
+  }
+
+  await fbPatch(env, fbPath, { summaryStatus: "generating" });
+
+  // Long-running task — run via waitUntil so the caller doesn't have to
+  // hold the request open for 20+ seconds.
+  ctx.waitUntil((async () => {
+    try {
+      const prompt = `You are summarizing an internal team meeting transcript. Produce:
+1. A two-sentence overview of what the meeting was about.
+2. Up to 5 bullet points of key decisions or topics discussed.
+3. Up to 5 bullet points of explicit action items (who needs to do what by when, if mentioned).
+4. Open questions or things to follow up on, if any.
+
+Be concise. If a section has nothing, write "None mentioned." Don't invent details that aren't in the transcript.
+
+Attendees: ${(meeting.attendees || []).map((a) => a.name).join(", ") || "(unknown)"}
+Meeting name: ${meeting.name}
+Duration: ${meeting.durationSec ? Math.round(meeting.durationSec / 60) + " minutes" : "(unknown)"}
+
+Transcript:
+${meeting.transcript}`;
+
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": env.CLAUDE_API_KEY,
+          "anthropic-version": "2023-06-01",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 1500,
+          messages: [{ role: "user", content: prompt }],
+        }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(`Claude ${res.status}: ${JSON.stringify(j).slice(0, 300)}`);
+      }
+      const summary = String(j?.content?.[0]?.text || "").trim();
+      if (!summary) throw new Error("Claude returned empty summary");
+      await fbPatch(env, fbPath, {
+        summary,
+        summaryStatus: "ready",
+        summaryGeneratedAt: Date.now(),
+      });
+    } catch (e) {
+      await fbPatch(env, fbPath, {
+        summaryStatus: "failed",
+        summaryError: String(e?.message || e).slice(0, 500),
+      });
+    }
+  })());
+
+  return json({ ok: true, status: "generating" });
 }
 
 // Returns a one-time Dropbox upload URL for the browser to PUT the recorded
