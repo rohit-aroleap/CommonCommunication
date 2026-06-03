@@ -67,7 +67,11 @@ interface MeetingRecord {
 
 export function MeetingsScreen() {
   const styles = useStyles(makeStyles);
-  const { user } = useAuth();
+  // v1.257: meetings list is admin-only. Anyone can record (the + New
+  // button is always available) but the list of past meetings — with
+  // transcripts, summaries, Dropbox links — is hidden from non-admins.
+  // Matches the web's visibility gate.
+  const { user, isAdmin } = useAuth();
   const { teamUsers } = useAppData();
   const [meetings, setMeetings] = useState<Record<string, MeetingRecord>>({});
   const [newModalOpen, setNewModalOpen] = useState(false);
@@ -81,10 +85,14 @@ export function MeetingsScreen() {
   }, []);
 
   const rows: MeetingRecord[] = useMemo(() => {
+    // v1.257: non-admins see an empty list. Data is still fetched by
+    // Firebase but we never render it. (RTDB rules would be a stronger
+    // gate; this is UI-only for now.)
+    if (!isAdmin) return [];
     return Object.entries(meetings)
       .map(([id, m]) => ({ id, ...(m as Omit<MeetingRecord, "id">) }))
       .sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
-  }, [meetings]);
+  }, [meetings, isAdmin]);
 
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
@@ -100,7 +108,9 @@ export function MeetingsScreen() {
       {rows.length === 0 ? (
         <View style={styles.empty}>
           <Text style={styles.emptyTxt}>
-            No meetings yet. Tap + New to record the first one.
+            {isAdmin
+              ? "No meetings yet. Tap + New to record the first one."
+              : "Tap + New to record a meeting.\n\nPast meetings are only visible to admins."}
           </Text>
         </View>
       ) : (
