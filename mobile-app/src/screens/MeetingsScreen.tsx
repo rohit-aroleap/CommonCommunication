@@ -72,7 +72,11 @@ export function MeetingsScreen() {
   // transcripts, summaries, Dropbox links — is hidden from non-admins.
   // Matches the web's visibility gate.
   const { user, isAdmin } = useAuth();
-  const { teamUsers } = useAppData();
+  // v1.258 hot-fix: pull teamMembers too so we can pass it to
+  // resolveTeammateName (signature is uid, email, teamUsers, teamMembers).
+  // Missing teamUsers/teamMembers args caused teamUsers[uid] to throw on
+  // app launch — crashing every Android device on v1.256/v1.257.
+  const { teamUsers, teamMembers } = useAppData();
   const [meetings, setMeetings] = useState<Record<string, MeetingRecord>>({});
   const [newModalOpen, setNewModalOpen] = useState(false);
   const [recorderModalOpen, setRecorderModalOpen] = useState(false);
@@ -121,17 +125,25 @@ export function MeetingsScreen() {
           contentContainerStyle={{ padding: 12 }}
         />
       )}
-      <NewMeetingModal
-        visible={newModalOpen}
-        onClose={() => setNewModalOpen(false)}
-        onStartRecording={() => {
-          setNewModalOpen(false);
-          setRecorderModalOpen(true);
-        }}
-        teamUsers={teamUsers}
-        currentUser={user}
-        setRecorderState={setRecorderModalOpen}
-      />
+      {/* v1.258: only mount NewMeetingModal when needed. Previously it
+          rendered alongside MeetingsScreen on every app launch, triggering
+          the resolveTeammateName crash before the user even tapped + New.
+          Lazy mount also avoids wasted useAudioRecorder hook instantiation
+          when nobody's recording. */}
+      {newModalOpen && (
+        <NewMeetingModal
+          visible={newModalOpen}
+          onClose={() => setNewModalOpen(false)}
+          onStartRecording={() => {
+            setNewModalOpen(false);
+            setRecorderModalOpen(true);
+          }}
+          teamUsers={teamUsers}
+          teamMembers={teamMembers}
+          currentUser={user}
+          setRecorderState={setRecorderModalOpen}
+        />
+      )}
     </SafeAreaView>
   );
 }
@@ -282,6 +294,7 @@ function NewMeetingModal({
   onClose,
   onStartRecording,
   teamUsers,
+  teamMembers,
   currentUser,
   setRecorderState,
 }: {
@@ -290,6 +303,8 @@ function NewMeetingModal({
   onStartRecording: () => void;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   teamUsers: Record<string, any>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  teamMembers: Record<string, any>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   currentUser: any;
   setRecorderState: (open: boolean) => void;
@@ -308,15 +323,9 @@ function NewMeetingModal({
   const startedAtRef = useRef<number | null>(null);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const recorder = useMemo(() => {
-    if (!audioMod || !visible) return null;
-    return audioMod.useAudioRecorder
-      ? null // we'll create via hook below
-      : null;
-  }, [visible]);
-
-  // expo-audio hook MUST be called unconditionally if the module is loaded.
-  // Guard with a defensive check on audioMod.
+  // expo-audio hook. Called unconditionally if the module is loaded
+  // (audioMod is module-level, so it's stable across renders within a
+  // session — safe to gate on).
   const expoRecorder = audioMod?.useAudioRecorder
     ? audioMod.useAudioRecorder(makeSaRecordingOptions(audioMod))
     : null;
@@ -325,13 +334,16 @@ function NewMeetingModal({
     return Object.entries(teamUsers || {})
       .map(([uid, u]) => ({
         uid,
+        // v1.258: resolveTeammateName signature is (uid, email, teamUsers,
+        // teamMembers). Calling with just 2 args was the crash that nuked
+        // the app on launch in v1.256/v1.257.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        name: resolveTeammateName(uid, (u as any)?.email),
+        name: resolveTeammateName(uid, (u as any)?.email, teamUsers, teamMembers),
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         email: ((u as any)?.email as string) || "",
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [teamUsers]);
+  }, [teamUsers, teamMembers]);
 
   async function handleStart() {
     if (!name.trim()) {
