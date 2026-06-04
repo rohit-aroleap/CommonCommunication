@@ -36,6 +36,8 @@ import {
   chatKeyFromPairKey,
 } from "@/data/AppDataContext";
 import { useAuth } from "@/auth/AuthContext";
+// v1.264: 1:1 audio call helpers — used by the 📞 button on each row.
+import { createCallRoom, ringCall, updateCallStatus } from "@/lib/calls";
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "@/screens/types";
@@ -209,6 +211,38 @@ export function TeamScreen() {
     });
   };
 
+  // v1.264: initiate a 1:1 audio call to this teammate. Creates a Daily
+  // room via the worker, rings the recipient (RTDB write + Phase B
+  // will add FCM push), navigates the caller into the Call screen.
+  const initiateCall = async (row: UnifiedRow) => {
+    if (!user) return;
+    if (!row.otherUid) {
+      Alert.alert("Can't call", "This teammate hasn't signed in yet.");
+      return;
+    }
+    const myName = user.displayName || user.email || "Unknown";
+    const create = await createCallRoom({
+      initiatorUid: user.uid,
+      initiatorName: myName,
+      recipientUid: row.otherUid,
+      recipientName: row.name,
+    });
+    if (!create.ok || !create.callId) {
+      Alert.alert("Couldn't start call", create.error || "Unknown error");
+      return;
+    }
+    const callId = create.callId;
+    const rung = await ringCall(callId);
+    if (!rung.ok) {
+      Alert.alert("Couldn't ring teammate", rung.error || "Unknown error");
+      // Best-effort: tell the server the call is ended so it doesn't
+      // sit in "creating" state forever.
+      void updateCallStatus(callId, "ended");
+      return;
+    }
+    navigation.navigate("Call", { callId });
+  };
+
   return (
     <SafeAreaView style={styles.root} edges={[]}>
       <View style={styles.searchRow}>
@@ -243,6 +277,14 @@ export function TeamScreen() {
             row={item}
             isMe={item.lastMsgFromUid === user?.uid}
             onPress={() => openDm(item)}
+            // v1.264: tap the 📞 icon to ring this teammate. Only
+            // shown for active teammates (those who've signed in and
+            // have a uid). The handler is wired up below.
+            onCall={
+              item.kind !== "new-inactive" && item.otherUid && user
+                ? () => initiateCall(item)
+                : undefined
+            }
           />
         )}
         ListEmptyComponent={
@@ -263,10 +305,13 @@ function UnifiedRowItem({
   row,
   isMe,
   onPress,
+  // v1.264: 📞 button — passed undefined for inactive/sign-in-required rows.
+  onCall,
 }: {
   row: UnifiedRow;
   isMe: boolean;
   onPress: () => void;
+  onCall?: () => void;
 }) {
   const styles = useStyles(makeStyles);
   const initial = (row.name?.[0] || "?").toUpperCase();
@@ -319,6 +364,22 @@ function UnifiedRowItem({
           {row.unread && <View style={styles.unreadDot} />}
         </View>
       </View>
+      {/* v1.264: per-row call button. Tapped → initiateCall. The
+          outer TouchableOpacity for the row needs the onCall
+          stopPropagation pattern so the row's main onPress doesn't
+          fire too. */}
+      {onCall && (
+        <TouchableOpacity
+          onPress={(e) => {
+            e.stopPropagation();
+            onCall();
+          }}
+          style={styles.callBtn}
+          accessibilityLabel="Call teammate"
+        >
+          <Text style={styles.callBtnTxt}>📞</Text>
+        </TouchableOpacity>
+      )}
     </TouchableOpacity>
   );
 }
@@ -569,6 +630,16 @@ function makeStyles(colors: Colors) {
       borderRadius: 4,
       backgroundColor: DM_BLUE,
       marginLeft: 6,
+    },
+    // v1.264: 📞 call button on each teammate row.
+    callBtn: {
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      marginLeft: 4,
+      alignSelf: "center",
+    },
+    callBtnTxt: {
+      fontSize: 22,
     },
 
     empty: { padding: 60, alignItems: "center" },

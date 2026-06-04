@@ -17,4 +17,9 @@ export type RootStackParamList = {
   Thread: { chatKey: string; initialTitle?: string; anchorMsgKey?: string };
   CustomerInfo: { chatKey: string };
   Settings: undefined;
+  // v1.264: 1:1 audio call route. callId is the Daily.co room name /
+  // Firebase /commonComm/calls/{callId} key. Initiator side navigates
+  // here right after creating the room; recipient side navigates here
+  // from IncomingCallOverlay after tapping Accept.
+  Call: { callId: string };
 };

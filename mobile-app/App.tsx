@@ -59,6 +59,8 @@ import { ChatsScreen } from "@/screens/ChatsScreen";
 import { TicketsScreen } from "@/screens/TicketsScreen";
 import { TeamScreen } from "@/screens/TeamScreen";
 import { MeetingsScreen } from "@/screens/MeetingsScreen";
+import { CallScreen } from "@/screens/CallScreen";
+import { IncomingCallOverlay } from "@/components/IncomingCallOverlay";
 import { ThreadScreen } from "@/screens/ThreadScreen";
 import { CustomerInfoScreen } from "@/screens/CustomerInfoScreen";
 import { SettingsScreen } from "@/screens/SettingsScreen";
@@ -338,7 +340,18 @@ function PostAuth() {
             component={SettingsScreen}
             options={{ title: "Settings", headerBackTitleVisible: false }}
           />
+          {/* v1.264: 1:1 audio call screen. headerShown=false so the
+              call UI takes the whole screen. */}
+          <Stack.Screen
+            name="Call"
+            component={CallScreen}
+            options={{ headerShown: false, gestureEnabled: false }}
+          />
         </Stack.Navigator>
+        {/* v1.264: incoming-call overlay. Mounted INSIDE the
+            NavigationContainer so it can navigate to the Call screen,
+            but OUTSIDE the Stack.Navigator so it covers any screen. */}
+        <IncomingCallOverlay />
       </NavigationContainer>
     </AppDataProvider>
   );
