@@ -1000,6 +1000,10 @@ async function handleWebhook(request, env) {
   }
 
   const media = extractMedia(msg);
+  // v1.265: parse shared WhatsApp contacts (vCard messages) into a structured
+  // form the bubble can render. Periskope sends message_type="vcard" with
+  // body="N contacts" and a vcards: [...] array of vCard 3.0 strings.
+  const contacts = parseVcards(msg?.vcards);
   const record = {
     direction: isFromMe ? "out" : "in",
     text: media?.caption || text,
@@ -1010,6 +1014,7 @@ async function handleWebhook(request, env) {
     raw: msg,
   };
   if (media) record.media = media;
+  if (contacts) record.contacts = contacts;
 
   const pushed = await fbPush(env, `${ROOT}/chats/${encodeKey(chatId)}/messages`, record);
   if (periskopeMsgId && pushed?.name) {
@@ -1696,6 +1701,10 @@ async function backfillOneChat(env, chat, msgsPerChat) {
       backfilled: true,
     };
     if (media) msgRecord.media = media;
+    // v1.265: same vCard extraction as the webhook path so backfilled
+    // contact-share messages also render properly.
+    const backfillContacts = parseVcards(m?.vcards);
+    if (backfillContacts) msgRecord.contacts = backfillContacts;
     updates[`${ROOT}/chats/${chatKey}/messages/${msgKey}`] = msgRecord;
     updates[`${ROOT}/byPeriskopeId/${msgKey}`] = { chatId, msgKey };
     written++;
@@ -1848,6 +1857,62 @@ function extractMedia(msg) {
     fileSize: mediaObj.size || mediaObj.file_size || mediaObj.fileSize || null,
     caption:  mediaObj.caption  || null,
   };
+}
+
+// v1.265: parse a single vCard 3.0 string into { name, phones }. Periskope
+// sends shared WhatsApp contacts as message_type="vcard" with a `vcards`
+// array of vCard strings. Sample line shapes:
+//   FN:Night Watchmen SR Residency Gunjur
+//   N:Gunjur;Night Watchmen SR;Residency;;
+//   item1.TEL;waid=918083152313:+91 80831 52313
+//   item1.X-ABLabel:Other
+//   X-WA-BIZ-NAME:...
+// Returns null if neither name nor phone can be extracted.
+function parseVcard(text) {
+  if (!text || typeof text !== "string") return null;
+  const lines = text.split(/\r?\n/);
+  let fn = null;
+  let nFallback = null;
+  const phones = [];
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+    const colon = line.indexOf(":");
+    if (colon === -1) continue;
+    const head = line.slice(0, colon);
+    const val = line.slice(colon + 1).trim();
+    // Strip any "itemN." property-group prefix and parameter list after ;
+    const key = head.replace(/^item\d+\./i, "").split(";")[0].toUpperCase();
+    if (key === "FN" && !fn) {
+      fn = val;
+    } else if (key === "N" && !nFallback) {
+      // N is structured "Family;Given;Middle;Prefix;Suffix". Use as
+      // fallback display name if FN is missing.
+      const parts = val.split(";").filter((p) => p && p.trim());
+      if (parts.length) nFallback = parts.join(" ").trim();
+    } else if (key === "TEL") {
+      // val might be "+91 80831 52313" or "918083152313" or similar.
+      // Keep the display form for rendering; also derive a digits-only
+      // canonical form for tel: links.
+      const display = val;
+      const digits = val.replace(/[^\d+]/g, "");
+      if (digits) phones.push({ display, digits });
+    }
+  }
+  const name = fn || nFallback || null;
+  if (!name && phones.length === 0) return null;
+  return { name, phones };
+}
+
+// Parse Periskope's vcards array. Returns null if nothing usable.
+function parseVcards(arr) {
+  if (!Array.isArray(arr)) return null;
+  const out = [];
+  for (const v of arr) {
+    const c = parseVcard(v);
+    if (c) out.push(c);
+  }
+  return out.length > 0 ? out : null;
 }
 
 // Pretty preview string for the chat list when a message is media-only.

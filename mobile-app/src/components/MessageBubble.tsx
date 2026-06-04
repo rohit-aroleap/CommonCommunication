@@ -7,7 +7,7 @@
 // Media is rendered through the Worker's /media proxy because Periskope-
 // hosted URLs require auth headers we can't attach to a plain <Image>.
 
-import React from "react";
+import React, { useMemo } from "react";
 import {
   Image,
   Linking,
@@ -78,7 +78,16 @@ export function MessageBubble({
   // Deleted messages get their own bubble, so skip the empty-bubble cull.
   const hasText = !!(m.text && m.text.trim());
   const hasMedia = !!(m.media && (m.media.url || m.media.fileName));
-  if (!isDeleted && !hasText && !hasMedia) {
+  // v1.265: shared-contact messages. Prefer the worker-parsed m.contacts;
+  // fall back to parsing m.raw.vcards for messages written before v1.265.
+  const contacts = useMemo(() => {
+    if (m.contacts && m.contacts.length) return m.contacts;
+    const vcards = m.raw?.vcards;
+    if (Array.isArray(vcards)) return parseVcardsFallback(vcards);
+    return null;
+  }, [m.contacts, m.raw?.vcards]);
+  const hasContacts = !!(contacts && contacts.length);
+  if (!isDeleted && !hasText && !hasMedia && !hasContacts) {
     return null;
   }
 
@@ -179,7 +188,23 @@ export function MessageBubble({
               onLongPress={() => onLongPress(m)}
               onImagePress={onImagePress}
             />
-            {hasText ? (
+            {/* v1.265: shared WhatsApp contacts (vCards). Renders one
+                card per contact with the name + tap-to-call phone. The
+                rest of the body (text/media) renders normally too —
+                Periskope's `body` is "N contacts" which we skip-display
+                for vCard messages since the cards say everything. */}
+            {hasContacts && contacts ? (
+              <View style={styles.contactsBlock}>
+                {contacts.map((c, i) => (
+                  <ContactCard
+                    key={i}
+                    name={c.name}
+                    phones={c.phones}
+                  />
+                ))}
+              </View>
+            ) : null}
+            {hasText && !hasContacts ? (
               <FormattedText text={m.text!} baseStyle={styles.text} />
             ) : null}
           </>
@@ -197,6 +222,84 @@ export function MessageBubble({
       <ReactionsPill reactions={m.reactions} out={out} />
     </View>
   );
+}
+
+// v1.265: shared-contact card. One per vCard inside a "vcard" message.
+// Renders the contact's name + each phone number on a tappable row that
+// opens the system dialer via tel: URL.
+function ContactCard({
+  name,
+  phones,
+}: {
+  name: string | null;
+  phones: Array<{ display: string; digits: string }>;
+}) {
+  const styles = useStyles(makeStyles);
+  return (
+    <View style={styles.contactCard}>
+      <View style={styles.contactRow}>
+        <Text style={styles.contactIcon}>👤</Text>
+        <Text style={styles.contactName} numberOfLines={2}>
+          {name || "(unnamed contact)"}
+        </Text>
+      </View>
+      {phones.map((p, i) => (
+        <TouchableOpacity
+          key={i}
+          style={styles.contactPhoneRow}
+          onPress={() =>
+            Linking.openURL(`tel:${p.digits}`).catch(() => {})
+          }
+        >
+          <Text style={styles.contactPhoneIcn}>📞</Text>
+          <Text style={styles.contactPhoneTxt}>{p.display}</Text>
+        </TouchableOpacity>
+      ))}
+    </View>
+  );
+}
+
+// v1.265: client-side fallback parser for vCards on messages written
+// before the worker started extracting them server-side. Mirrors the
+// worker's parseVcard / parseVcards logic.
+function parseVcardsFallback(arr: unknown): Array<{
+  name: string | null;
+  phones: Array<{ display: string; digits: string }>;
+}> | null {
+  if (!Array.isArray(arr)) return null;
+  const out: Array<{
+    name: string | null;
+    phones: Array<{ display: string; digits: string }>;
+  }> = [];
+  for (const v of arr) {
+    if (typeof v !== "string") continue;
+    let fn: string | null = null;
+    let nFallback: string | null = null;
+    const phones: Array<{ display: string; digits: string }> = [];
+    for (const raw of v.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line) continue;
+      const colon = line.indexOf(":");
+      if (colon === -1) continue;
+      const head = line.slice(0, colon);
+      const val = line.slice(colon + 1).trim();
+      const key = head
+        .replace(/^item\d+\./i, "")
+        .split(";")[0]
+        .toUpperCase();
+      if (key === "FN" && !fn) fn = val;
+      else if (key === "N" && !nFallback) {
+        const parts = val.split(";").filter((p) => p && p.trim());
+        if (parts.length) nFallback = parts.join(" ").trim();
+      } else if (key === "TEL") {
+        const digits = val.replace(/[^\d+]/g, "");
+        if (digits) phones.push({ display: val, digits });
+      }
+    }
+    const name = fn || nFallback || null;
+    if (name || phones.length) out.push({ name, phones });
+  }
+  return out.length ? out : null;
 }
 
 // Group reactions by emoji and render a compact pill. Shows up to 4
@@ -455,6 +558,35 @@ function makeStyles(colors: Colors) {
       borderColor: colors.border,
     },
     reactionsPillTxt: { fontSize: 12, color: colors.text },
+    // v1.265: shared-contact card styles. Each contact is a small
+    // self-contained card inside the bubble. Tappable phone rows open
+    // the system dialer via tel: URLs.
+    contactsBlock: {
+      marginTop: 2,
+    },
+    contactCard: {
+      backgroundColor: "rgba(0,0,0,0.04)",
+      borderRadius: 8,
+      paddingVertical: 8,
+      paddingHorizontal: 10,
+      marginTop: 4,
+    },
+    contactRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+      marginBottom: 4,
+    },
+    contactIcon: { fontSize: 18 },
+    contactName: { flex: 1, fontSize: 14, fontWeight: "600", color: colors.text },
+    contactPhoneRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+      paddingVertical: 4,
+    },
+    contactPhoneIcn: { fontSize: 13 },
+    contactPhoneTxt: { fontSize: 13, color: "#1d4ed8", textDecorationLine: "underline" },
     // v1.153 quoted card inside a reply bubble. Left accent stripe +
     // muted label + clipped snippet. Tinted background so it reads as
     // a distinct sub-block within the bubble.

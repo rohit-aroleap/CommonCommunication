@@ -123,6 +123,20 @@ export interface Message {
   // the writer doesn't have to cast.
   fromUid?: string;
   fromName?: string | null;
+  // v1.265: shared WhatsApp contacts (vCards). Periskope sends these as
+  // message_type="vcard" with vcards: [...] of vCard 3.0 strings; the
+  // worker parses them into this structured form on intake. Backfilled
+  // / pre-v1.265 messages won't have this field — MessageBubble has a
+  // client-side fallback that parses from m.raw.vcards.
+  contacts?: Array<{
+    name: string | null;
+    phones: Array<{ display: string; digits: string }>;
+  }> | null;
+  // v1.265: raw Periskope payload kept for fallback parsing of old
+  // vCard messages. The worker has stored this for a while; we just
+  // didn't have a type for it.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  raw?: any;
 }
 
 export interface Ticket {

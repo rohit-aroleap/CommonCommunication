@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.264</title>
+<title>CommonCommunication v1.265</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -849,6 +849,27 @@
   .bubble.out { background: var(--bubble-out); }
   .bubble.in  { background: var(--bubble-in); }
   .bubble .text { white-space: pre-wrap; }
+  /* v1.265: shared-contact (vCard) card styles. Renders inside the
+     message bubble, one card per contact. Phone numbers are tappable
+     tel: links. */
+  .contacts-block { display: flex; flex-direction: column; gap: 4px; margin-top: 2px; }
+  .contact-card {
+    background: rgba(0,0,0,0.05);
+    border-radius: 8px;
+    padding: 8px 10px;
+  }
+  .contact-head {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 13px; font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .contact-name { word-break: break-word; }
+  .contact-phone {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; color: #1d4ed8; text-decoration: underline;
+    padding: 3px 0;
+  }
+  .contact-phone + .contact-phone { margin-left: 0; display: flex; }
   /* v1.183 WhatsApp-style formatting (rendered by formatWhatsApp). */
   .bubble .text .wa-para { display: inline; }
   .bubble .text strong { font-weight: 700; }
@@ -2717,7 +2738,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.264";
+const APP_VERSION = "v1.265";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -9402,7 +9423,26 @@ function renderMessages(list) {
     const isDeleted = !!m.deleted;
     const isEdited = !!m.editedAt;
     const mediaHtml = isDeleted ? "" : renderMediaHtml(m);
-    const textHtml = (!isDeleted && m.text)
+    // v1.265: shared WhatsApp contacts (vCards). Periskope sends as
+    // message_type="vcard" with vcards: [...] of vCard 3.0 strings.
+    // Worker (v1.265+) parses into m.contacts; older messages fall back
+    // to parsing from m.raw.vcards client-side.
+    let contactsForRender = null;
+    if (!isDeleted) {
+      if (Array.isArray(m.contacts) && m.contacts.length) {
+        contactsForRender = m.contacts;
+      } else if (m.raw?.vcards) {
+        contactsForRender = parseVcardsClient(m.raw.vcards);
+      }
+    }
+    const contactsHtml = contactsForRender
+      ? `<div class="contacts-block">${contactsForRender
+          .map((c) => renderContactCard(c))
+          .join("")}</div>`
+      : "";
+    // Skip the body text ("N contacts") when we have parsed cards — the
+    // cards say everything more usefully.
+    const textHtml = (!isDeleted && m.text && !contactsForRender)
       ? `<div class="text">${formatWhatsApp(m.text)}</div>`
       : "";
     const ribbon = renderTicketRibbon(m.id);
@@ -9461,9 +9501,11 @@ function renderMessages(list) {
       </div>`;
     }
     // v1.200: deleted body replaces media/text.
+    // v1.265: contacts block sits between media and text — shared
+    // vCards render as tappable contact cards inside the bubble.
     const bodyHtml = isDeleted
       ? `<div class="text deleted-body">🚫 This message was deleted</div>`
-      : `${mediaHtml}${textHtml}`;
+      : `${mediaHtml}${contactsHtml}${textHtml}`;
     // v1.200: edited tag in footer when m.editedAt is set.
     const editedTag = (isEdited && !isDeleted) ? `<span class="edited-tag">edited</span>` : "";
     // v1.200: reactions pill aggregated by emoji. Click → toggle MY reaction
@@ -10131,6 +10173,54 @@ async function handleDelete(message) {
 }
 
 // Render media inside a message bubble. Periskope media URLs need auth, so
+// v1.265: client-side fallback parser for vCards on messages written
+// before the worker started extracting them server-side. Mirrors the
+// worker's parseVcard / parseVcards.
+function parseVcardsClient(arr) {
+  if (!Array.isArray(arr)) return null;
+  const out = [];
+  for (const v of arr) {
+    if (typeof v !== "string") continue;
+    let fn = null;
+    let nFallback = null;
+    const phones = [];
+    for (const raw of v.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line) continue;
+      const colon = line.indexOf(":");
+      if (colon === -1) continue;
+      const head = line.slice(0, colon);
+      const val = line.slice(colon + 1).trim();
+      const key = head.replace(/^item\d+\./i, "").split(";")[0].toUpperCase();
+      if (key === "FN" && !fn) fn = val;
+      else if (key === "N" && !nFallback) {
+        const parts = val.split(";").filter((p) => p && p.trim());
+        if (parts.length) nFallback = parts.join(" ").trim();
+      } else if (key === "TEL") {
+        const digits = val.replace(/[^\d+]/g, "");
+        if (digits) phones.push({ display: val, digits });
+      }
+    }
+    const name = fn || nFallback || null;
+    if (name || phones.length) out.push({ name, phones });
+  }
+  return out.length ? out : null;
+}
+
+// v1.265: render one parsed vCard contact as a small card inside the
+// message bubble. Each phone is a tappable tel: link.
+function renderContactCard(c) {
+  const name = c.name || "(unnamed contact)";
+  const phones = (c.phones || []).map((p) => {
+    const digits = p.digits || p.display || "";
+    return `<a class="contact-phone" href="tel:${escapeHtml(digits)}">📞 ${escapeHtml(p.display || digits)}</a>`;
+  }).join("");
+  return `<div class="contact-card">
+    <div class="contact-head">👤 <span class="contact-name">${escapeHtml(name)}</span></div>
+    ${phones}
+  </div>`;
+}
+
 // route them through the worker's /media proxy (which attaches the right
 // headers and streams the bytes back). Falls back to direct link if WORKER_URL
 // isn't set.
