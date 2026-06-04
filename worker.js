@@ -225,6 +225,22 @@ export default {
       if (url.pathname === "/meeting-transcribe-next" && request.method === "POST") {
         return cors(env, await handleMeetingTranscribeNext(request, env, ctx));
       }
+      // v1.264: CALLING — Daily.co 1:1 audio calls between teammates.
+      // Phase 1 ships the worker plumbing only; mobile UI follows in
+      // Phase 2 once the new EAS Builds are in. iOS VoIP push waits for
+      // the user's VoIP cert to land.
+      if (url.pathname === "/call-create-room" && request.method === "POST") {
+        return cors(env, await handleCallCreateRoom(request, env));
+      }
+      if (url.pathname === "/call-ring" && request.method === "POST") {
+        return cors(env, await handleCallRing(request, env, ctx));
+      }
+      if (url.pathname === "/call-status" && request.method === "POST") {
+        return cors(env, await handleCallStatusUpdate(request, env));
+      }
+      if (url.pathname === "/daily-webhook" && request.method === "POST") {
+        return cors(env, await handleDailyWebhook(request, env, ctx));
+      }
       if (url.pathname === "/sa-retranscribe" && request.method === "POST") {
         return cors(env, await handleSaRetranscribe(request, env, ctx));
       }
@@ -3316,6 +3332,198 @@ async function handleMeetingRetryTranscribe(request, env, ctx) {
 // Body: { meetingId, deletedByUid, deletedByName }
 // Returns: { ok: true } even if Dropbox / R2 cleanup fails — the
 // Firebase delete is authoritative; orphan files in storage are tolerable.
+// ============================================================
+// v1.264: CALLING — Daily.co 1:1 audio calls between teammates.
+// ============================================================
+//
+// Architecture:
+//   1. Caller taps 📞 → POST /call-create-room with { initiatorUid,
+//      recipientUid }. Worker hits Daily.co's REST API to create a
+//      short-lived audio-only room. Returns { callId, roomUrl }.
+//   2. Caller taps "Ring" → POST /call-ring with { callId }. Worker
+//      writes the call record to RTDB at /commonComm/calls/{callId}
+//      so recipient's app sees the incoming call via onValue. Phase 4
+//      will also fire FCM (Android) + APNs VoIP push (iOS) for
+//      lock-screen ringing.
+//   3. Recipient accepts → mobile reports via POST /call-status with
+//      { callId, status: "accepted" }. Mobile then joins the Daily
+//      room. Caller's RTDB listener sees the status flip and stops
+//      ringing.
+//   4. Call ends → POST /call-status with status: "ended". Daily fires
+//      a recording.ready webhook to /daily-webhook. Worker downloads
+//      the recording, transcribes via the existing /translations
+//      pipeline, uploads to Dropbox, stores under /commonComm/calls.
+//
+// Daily.co room properties we set:
+//   audio_only: true           — no video tracks, smaller bandwidth.
+//   enable_recording: "cloud"  — Daily records server-side, fires
+//                                webhook when ready. NOTE: requires
+//                                Daily's pay-as-you-go tier (~$0.0006/
+//                                min for audio recording). Trainer
+//                                will need to upgrade once we're
+//                                actually testing recordings.
+//   exp: now + 4 hours         — room auto-expires; no orphaned rooms.
+//   eject_at_room_exp: true    — boots anyone still inside at exp.
+
+async function handleCallCreateRoom(request, env) {
+  if (!env.DAILY_API_KEY) {
+    return json({ error: "DAILY_API_KEY not set" }, 500);
+  }
+  const body = await request.json().catch(() => ({}));
+  const initiatorUid = String(body?.initiatorUid || "");
+  const initiatorName = String(body?.initiatorName || "");
+  const recipientUid = String(body?.recipientUid || "");
+  const recipientName = String(body?.recipientName || "");
+  if (!initiatorUid) return json({ error: "missing initiatorUid" }, 400);
+  if (!recipientUid) return json({ error: "missing recipientUid" }, 400);
+
+  // Daily room name: prefix + short timestamp + random. Daily requires
+  // alphanumeric + hyphens, 1-128 chars.
+  const callId = "call-" + Date.now().toString(36) + "-" + Math.floor(Math.random() * 1e9).toString(36);
+  const expSec = Math.floor(Date.now() / 1000) + 4 * 3600;
+
+  const dailyRes = await fetch("https://api.daily.co/v1/rooms", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.DAILY_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      name: callId,
+      properties: {
+        audio_only: true,
+        exp: expSec,
+        eject_at_room_exp: true,
+        // Recording requires Daily's paid tier — uncomment when ready
+        // and trainer has upgraded:
+        // enable_recording: "cloud",
+        // recordings_bucket: { ... } // optional: route to our R2 bucket
+      },
+    }),
+  });
+  const dailyJson = await safeJson(dailyRes);
+  if (!dailyRes.ok) {
+    return json({
+      error: `Daily.co room creation failed (HTTP ${dailyRes.status})`,
+      details: dailyJson,
+    }, 502);
+  }
+  const roomUrl = dailyJson?.url || null;
+  const roomName = dailyJson?.name || callId;
+  if (!roomUrl) {
+    return json({ error: "Daily.co returned no room URL", details: dailyJson }, 502);
+  }
+
+  // Write the call record to RTDB so the recipient's app (subscribed to
+  // /commonComm/calls listener) can react. Status starts as "creating"
+  // so the recipient doesn't see it until /call-ring is hit.
+  await fbPut(env, `${ROOT}/calls/${callId}`, {
+    initiatorUid,
+    initiatorName: initiatorName || null,
+    recipientUid,
+    recipientName: recipientName || null,
+    roomUrl,
+    roomName,
+    isVideo: false,
+    status: "creating",
+    createdAt: Date.now(),
+  });
+
+  return json({ ok: true, callId, roomUrl, roomName });
+}
+
+// Fires the actual ringing — recipient's app sees the RTDB write +
+// (Phase 4) gets a VoIP/FCM push for lock-screen ringing.
+async function handleCallRing(request, env, ctx) {
+  const body = await request.json().catch(() => ({}));
+  const callId = String(body?.callId || "");
+  if (!callId) return json({ error: "missing callId" }, 400);
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(callId)) {
+    return json({ error: "bad callId" }, 400);
+  }
+  const fbPath = `${ROOT}/calls/${callId}`;
+  const call = await fbGet(env, fbPath);
+  if (!call) return json({ error: "call not found" }, 404);
+  if (call.status !== "creating") {
+    return json({ error: `call already in status: ${call.status}` }, 409);
+  }
+
+  await fbPatch(env, fbPath, {
+    status: "ringing",
+    ringAt: Date.now(),
+  });
+
+  // Phase 4 TODO: send FCM push to recipient's Android device + VoIP push
+  // to iOS device. For now (Phase 1), the recipient's app picks this up
+  // via its onValue listener on /commonComm/calls and shows the in-app
+  // incoming-call modal — works as long as the app is open. Lock-screen
+  // ringing comes in Phase 4 once the iOS VoIP cert is in place.
+  // ctx.waitUntil(sendCallPush(env, call.recipientUid, callId, call.initiatorName));
+
+  return json({ ok: true });
+}
+
+// Recipient accepts / declines, or either side ends the call.
+async function handleCallStatusUpdate(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const callId = String(body?.callId || "");
+  const newStatus = String(body?.status || "");
+  if (!callId) return json({ error: "missing callId" }, 400);
+  const validStatuses = new Set([
+    "accepted",
+    "declined",
+    "missed",
+    "in-progress",
+    "ended",
+  ]);
+  if (!validStatuses.has(newStatus)) {
+    return json({ error: "bad status" }, 400);
+  }
+  const fbPath = `${ROOT}/calls/${callId}`;
+  const call = await fbGet(env, fbPath);
+  if (!call) return json({ error: "call not found" }, 404);
+
+  const patch = { status: newStatus };
+  if (newStatus === "accepted") patch.acceptedAt = Date.now();
+  if (newStatus === "ended") {
+    patch.endedAt = Date.now();
+    if (call.acceptedAt) {
+      patch.durationSec = Math.floor((Date.now() - call.acceptedAt) / 1000);
+    }
+  }
+  await fbPatch(env, fbPath, patch);
+  return json({ ok: true, status: newStatus });
+}
+
+// Daily.co fires webhooks on various events. The one we care about is
+// recording.ready-to-download — when the cloud recording is finalized.
+// Worker downloads the recording, transcribes via the existing meeting
+// pipeline, uploads to Dropbox, patches the call record.
+//
+// Phase 1 stubs this out; real implementation comes after recording is
+// actually enabled on a paid Daily tier.
+async function handleDailyWebhook(request, env, ctx) {
+  const body = await request.json().catch(() => ({}));
+  const eventType = String(body?.type || "");
+  const payload = body?.payload || {};
+  console.log("[daily-webhook]", eventType, JSON.stringify(payload).slice(0, 300));
+
+  if (eventType === "recording.ready-to-download") {
+    // payload contains: room_name (= our callId), recording_id,
+    // download_link (signed URL, valid ~10 min).
+    const callId = String(payload.room_name || "");
+    const downloadLink = String(payload.download_link || "");
+    if (!callId || !downloadLink) {
+      return json({ error: "missing room_name or download_link" }, 400);
+    }
+    // Phase 5 TODO: fetch the recording, run the existing meeting
+    // chunked-transcribe pipeline against it, upload to Dropbox,
+    // patch /commonComm/calls/{callId} with transcript + summary.
+    // ctx.waitUntil(processCallRecording(env, callId, downloadLink));
+  }
+  return json({ ok: true });
+}
+
 async function handleMeetingDelete(request, env) {
   const body = await request.json().catch(() => ({}));
   const meetingId = String(body?.meetingId || "");
