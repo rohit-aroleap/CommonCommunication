@@ -48,6 +48,10 @@ import {
   addToQueue as addSaToQueue,
   generateClientSessionId,
   kickProcessor as kickSaProcessor,
+  // v1.263: subscribe to the queue from the recorder modal so the "next
+  // steps" view can show the upload-to-server stage in real time.
+  subscribe as subscribeSaQueue,
+  type SaQueueItem,
 } from "@/lib/saTranscriptionQueue";
 import { FERRA_TAG_STAGE } from "@/config";
 import type { FerraSubscription, Ticket } from "@/types";
@@ -1321,6 +1325,22 @@ function SaRecorderModal({
   // happening so they don't double-tap.
   const [saving, setSaving] = useState(false);
 
+  // v1.263: post-stop "next steps" view. After Stop completes, instead
+  // of closing the modal immediately we switch to a checklist view
+  // showing the four pipeline stages — Saved → Uploaded → Dropbox →
+  // Transcribed — with live status from the queue + RTDB. Trainer
+  // can't dismiss the modal until ALL four are ✓ (Variant A: strict
+  // mode, no early-close). currentSessionId is the clientSessionId we
+  // generated when stopping; it's the RTDB key for the saSession
+  // record AND the lookup key for the AsyncStorage queue item.
+  const [postStopMode, setPostStopMode] = useState(false);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [savedFileBytes, setSavedFileBytes] = useState<number | null>(null);
+  const [savedDurationSec, setSavedDurationSec] = useState<number | null>(null);
+  const [queueItem, setQueueItem] = useState<SaQueueItem | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [serverSession, setServerSession] = useState<any>(null);
+
   // v1.249: hard cap on recording length. At 24 kbps (the SA bitrate),
   // 130 min = ~23.4 MB, leaving 1.6 MB of slack under Groq's 25 MB
   // single-request transcription limit. If a session is going to run
@@ -1345,6 +1365,31 @@ function SaRecorderModal({
   useEffect(() => {
     onCloseRef.current = onClose;
   }, [onClose]);
+
+  // v1.263: subscribe to the SA upload queue once we have a session ID.
+  // Tells us when the file is queued vs uploading vs uploaded vs failed
+  // — drives the "Uploading to server" stage in the post-stop checklist.
+  useEffect(() => {
+    if (!currentSessionId) return;
+    const unsub = subscribeSaQueue((items) => {
+      const item = items.find((i) => i.clientSessionId === currentSessionId);
+      setQueueItem(item || null);
+    });
+    return () => unsub();
+  }, [currentSessionId]);
+
+  // v1.263: subscribe to the worker's RTDB record for this session.
+  // Worker writes here once it accepts the upload, then updates as
+  // transcription progresses + Dropbox completes. Drives the "Saving
+  // to Dropbox" and "Transcribing" stages.
+  useEffect(() => {
+    if (!currentSessionId || !chatKey) return;
+    const path = `${ROOT}/chats/${chatKey}/saSessions/${currentSessionId}`;
+    const unsub = onValue(ref(db, path), (snap) => {
+      setServerSession(snap.val() || null);
+    });
+    return () => unsub();
+  }, [currentSessionId, chatKey]);
 
   // Prepare the recorder on mount; request mic permission if needed.
   useEffect(() => {
@@ -1589,28 +1634,202 @@ function SaRecorderModal({
     });
     kickSaProcessor();
 
+    // v1.263: switch the modal to the post-stop "next steps" view
+    // instead of closing immediately. Trainer waits here while the
+    // pipeline runs — Save → Upload → Dropbox → Transcribe — and the
+    // modal closes only when they explicitly tap Close (which is
+    // disabled until all four stages are ✓ per Variant A).
+    //
+    // We intentionally DON'T call onUploadEnd here — that would release
+    // the parent's hardware-back guard. Move it into handleCloseDone()
+    // which only fires once everything is finished.
+    setSavedFileBytes(sizeBytes);
+    setSavedDurationSec(durationSec);
+    setCurrentSessionId(clientSessionId);
+    setPostStopMode(true);
     setSaving(false);
     setUploadStatus("");
-    onUploadEnd();
 
     if (forcedByMaxCap) {
       Alert.alert(
         "Recording auto-stopped at 130 minutes",
-        "Saved locally. The transcript will appear in the SA Sessions list once the upload finishes.",
+        "Saved locally. Upload + transcription will continue automatically — keep this screen open until you see all four ✓ marks.",
       );
     }
   }
 
-  // User pressed the Stop button — finalize, queue, close the modal.
+  // User pressed the Stop button — finalize + transition to next-steps view.
+  // v1.263: no longer closes the modal; postStopMode takes over.
   async function onStop() {
     await stopAndQueue(false);
-    onClose();
+  }
+
+  // v1.263: invoked when user taps Close on the post-stop view. Releases
+  // the parent's saUploading lock (so hardware back works again) and
+  // dismisses the modal.
+  function handleCloseDone() {
+    onUploadEnd();
+    setPostStopMode(false);
+    setCurrentSessionId(null);
+    setSavedFileBytes(null);
+    setSavedDurationSec(null);
+    setQueueItem(null);
+    setServerSession(null);
+    onCloseRef.current();
+  }
+
+  // v1.263: compute the live status of each pipeline stage for the
+  // post-stop checklist. Returns one of "pending" | "in-progress" |
+  // "done" | "failed" per stage.
+  type StageStatus = "pending" | "in-progress" | "done" | "failed";
+  function computeStages(): {
+    saved: StageStatus;
+    uploaded: StageStatus;
+    dropbox: StageStatus;
+    transcribed: StageStatus;
+  } {
+    // Stage 1: file saved locally. We get here only after the move
+    // completed, so this is always "done" in post-stop mode.
+    const saved: StageStatus = postStopMode ? "done" : "pending";
+
+    // Stage 2: queue → worker upload. Queue status:
+    //   pending / in-flight / failed-retry → "in-progress"
+    //   ready                              → "done"
+    //   failed-stop                        → "failed"
+    // OR if the worker has already written the RTDB record, the
+    // upload definitively succeeded (treat as done even if the queue
+    // hasn't reflected it yet — RTDB-write is post-upload).
+    let uploaded: StageStatus = "pending";
+    if (queueItem) {
+      const s = queueItem.status;
+      if (s === "ready") uploaded = "done";
+      else if (s === "failed-stop") uploaded = "failed";
+      else uploaded = "in-progress";
+    }
+    if (serverSession) uploaded = "done";
+
+    // Stage 3: Dropbox upload (runs in parallel on the worker once it
+    // has the audio). Visible via dropboxShareUrl / dropboxError on the
+    // RTDB record.
+    let dropbox: StageStatus = "pending";
+    if (serverSession) {
+      if (serverSession.dropboxShareUrl) dropbox = "done";
+      else if (serverSession.dropboxError) dropbox = "failed";
+      else dropbox = "in-progress";
+    }
+
+    // Stage 4: transcription via Groq. RTDB status field:
+    //   queued / transcribing  → "in-progress"
+    //   ready                  → "done"
+    //   failed                 → "failed"
+    let transcribed: StageStatus = "pending";
+    if (serverSession) {
+      const status = String(serverSession.status || "");
+      if (status === "ready") transcribed = "done";
+      else if (status === "failed") transcribed = "failed";
+      else transcribed = "in-progress";
+    }
+
+    return { saved, uploaded, dropbox, transcribed };
   }
 
   function formatElapsed(sec: number) {
     const m = Math.floor(sec / 60);
     const s = sec % 60;
     return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }
+
+  // v1.263: post-stop "next steps" checklist view.
+  if (postStopMode) {
+    const stages = computeStages();
+    const allDone =
+      stages.saved === "done" &&
+      stages.uploaded === "done" &&
+      stages.dropbox === "done" &&
+      stages.transcribed === "done";
+    const sizeMB = savedFileBytes ? `${(savedFileBytes / 1024 / 1024).toFixed(1)} MB` : "";
+    const durStr = savedDurationSec
+      ? `${Math.floor(savedDurationSec / 60)}m ${Math.round(savedDurationSec % 60)}s`
+      : "";
+    const fileMeta = [durStr, sizeMB].filter(Boolean).join(" · ");
+    return (
+      <View style={styles.saModalRoot}>
+        <View style={styles.saModalHeader}>
+          <Text style={styles.saModalTitle}>Saving Strength Assessment</Text>
+          <Text style={styles.saModalSubtitle}>{customerName}</Text>
+        </View>
+        <View style={styles.saStagesBody}>
+          <StageRow
+            label="Recording saved"
+            sub={fileMeta || undefined}
+            status={stages.saved}
+          />
+          <StageRow
+            label="Uploading to server"
+            sub={
+              stages.uploaded === "in-progress" && queueItem?.retryCount
+                ? `Retry ${queueItem.retryCount}…`
+                : undefined
+            }
+            status={stages.uploaded}
+            errorText={
+              stages.uploaded === "failed"
+                ? queueItem?.lastError || "Upload failed"
+                : undefined
+            }
+          />
+          <StageRow
+            label="Saving to Dropbox"
+            status={stages.dropbox}
+            errorText={
+              stages.dropbox === "failed"
+                ? serverSession?.dropboxError || "Dropbox upload failed"
+                : undefined
+            }
+          />
+          <StageRow
+            label="Transcribing"
+            sub={
+              stages.transcribed === "in-progress"
+                ? "Usually ~30s per minute of audio"
+                : undefined
+            }
+            status={stages.transcribed}
+            errorText={
+              stages.transcribed === "failed"
+                ? serverSession?.transcriptError || "Transcription failed"
+                : undefined
+            }
+          />
+          <Text style={styles.saStagesHint}>
+            {allDone
+              ? "All done — tap Close to return."
+              : "Keep this screen open until every step is ✓. Closing early might lose progress."}
+          </Text>
+        </View>
+        <View style={styles.saModalActions}>
+          <TouchableOpacity
+            onPress={handleCloseDone}
+            style={[
+              styles.saActionBtn,
+              allDone ? styles.saActionBtnStart : styles.saActionBtnSecondary,
+              !allDone && { opacity: 0.4 },
+            ]}
+            disabled={!allDone}
+          >
+            <Text
+              style={
+                allDone
+                  ? styles.saActionBtnStartTxt
+                  : styles.saActionBtnSecondaryTxt
+              }
+            >
+              {allDone ? "✓ Close" : "Close"}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
   }
 
   return (
@@ -1693,6 +1912,49 @@ function SaRecorderModal({
           </TouchableOpacity>
         )}
       </View>
+    </View>
+  );
+}
+
+// v1.263: single row in the post-stop checklist. Icon + label + optional
+// sub-text or error message.
+function StageRow({
+  label,
+  sub,
+  status,
+  errorText,
+}: {
+  label: string;
+  sub?: string;
+  status: "pending" | "in-progress" | "done" | "failed";
+  errorText?: string;
+}) {
+  const styles = useStyles(makeStyles);
+  let icon = "○";
+  let iconColor = "#9ca3af"; // gray
+  if (status === "done") {
+    icon = "✓";
+    iconColor = "#16a34a";
+  } else if (status === "failed") {
+    icon = "⚠";
+    iconColor = "#d9534f";
+  } else if (status === "in-progress") {
+    icon = "⏳";
+    iconColor = "#1e40af";
+  }
+  return (
+    <View style={styles.stageRow}>
+      <Text style={[styles.stageIcon, { color: iconColor }]}>{icon}</Text>
+      <View style={styles.stageTextCol}>
+        <Text style={styles.stageLabel}>{label}</Text>
+        {sub ? <Text style={styles.stageSub}>{sub}</Text> : null}
+        {errorText ? (
+          <Text style={styles.stageError}>{errorText}</Text>
+        ) : null}
+      </View>
+      {status === "in-progress" ? (
+        <ActivityIndicator size="small" color={iconColor} />
+      ) : null}
     </View>
   );
 }
@@ -2062,6 +2324,55 @@ function makeStyles(colors: Colors) {
     gap: 16,
     justifyContent: "center",
     paddingTop: 16,
+  },
+  // v1.263: post-stop "next steps" checklist styles.
+  saStagesBody: {
+    flex: 1,
+    paddingHorizontal: 16,
+    paddingTop: 24,
+    gap: 14,
+  },
+  saStagesHint: {
+    marginTop: 16,
+    fontSize: 12,
+    color: colors.muted,
+    textAlign: "center",
+    lineHeight: 18,
+  },
+  stageRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: colors.panel,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+  },
+  stageIcon: {
+    fontSize: 22,
+    fontWeight: "600",
+    width: 28,
+    textAlign: "center",
+  },
+  stageTextCol: {
+    flex: 1,
+  },
+  stageLabel: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.text,
+  },
+  stageSub: {
+    fontSize: 12,
+    color: colors.muted,
+    marginTop: 2,
+  },
+  stageError: {
+    fontSize: 12,
+    color: "#d9534f",
+    marginTop: 2,
   },
   saActionBtn: {
     paddingVertical: 16,
