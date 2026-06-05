@@ -3,7 +3,7 @@
 // reflections of data the central ferra-sync worker writes; we never write
 // to those paths from the mobile app.
 
-import type { FerraUser } from "@/types";
+import type { CustomerDetail, FerraSubscription, FerraUser } from "@/types";
 // v1.241: phone normalization delegates to the shared canonical helper
 // (ferra-periskope-gateway/lib/normalize-phone.js v1.0.0). Same canonical
 // 12-digit output for happy-path inputs; more robust on edge cases
@@ -96,6 +96,13 @@ export function getFerraDisplayName(
   habitUsers: Record<string, FerraUser> | FerraUser[] | null,
   cancelledUsers: Record<string, FerraUser> | FerraUser[] | null,
   index: FerraIndex,
+  // v1.267: optional subscription-side fallbacks. New subscribers (paid,
+  // ACTIVE, but no workouts yet) are absent from ferraHabitData/v1/users
+  // and would otherwise show as just the phone number in the chat list.
+  // The Ferra-sync worker writes them to customerDetails immediately on
+  // payment, well before first workout — so we fall through to that feed.
+  customerDetails?: Record<string, CustomerDetail> | null,
+  subsByPhone?: Map<string, FerraSubscription[]> | null,
 ): string | null {
   const norm = normalizeFerraPhone(phone);
   if (!norm) return null;
@@ -119,6 +126,36 @@ export function getFerraDisplayName(
       if (normalizeFerraPhone(u.phone || u.phoneNumber || "") === norm) {
         return u.name || null;
       }
+    }
+  }
+  // v1.267: customerDetails fallback — richer/canonical name field, keyed
+  // by canonical phone, populated by ferra-sync from the subscriptions
+  // CSV at payment time.
+  const detail = customerDetails?.[norm];
+  if (detail?.name) return detail.name;
+  // v1.267: bySubscription fallback — last resort, useful if customerDetails
+  // hasn't been backfilled for an older subscription.
+  if (subsByPhone) {
+    const subs = subsByPhone.get(norm);
+    if (subs && subs.length) {
+      for (const s of subs) {
+        if (
+          s?.customerName &&
+          normalizeFerraPhone(s.customerPhone || "") === norm
+        ) {
+          return s.customerName;
+        }
+      }
+      for (const s of subs) {
+        const phones = s?.memberPhones || [];
+        const names = s?.memberNames || [];
+        for (let i = 0; i < phones.length; i++) {
+          if (normalizeFerraPhone(phones[i] || "") === norm && names[i]) {
+            return names[i]!;
+          }
+        }
+      }
+      if (subs[0]?.customerName) return subs[0].customerName;
     }
   }
   return null;

@@ -33,6 +33,8 @@ export function TicketsScreen() {
     cancelledUsers,
     ferraIndex,
     contacts,
+    sharedCustomerDetails,
+    subsByPhone,
   } = useAppData();
 
   const mine = useMemo(
@@ -56,7 +58,14 @@ export function TicketsScreen() {
             meta.phone || "",
             meta.contactName || meta.displayName,
             { chatType, groupName: meta.groupName },
-            { habitUsers, cancelledUsers, ferraIndex, contacts },
+            {
+              habitUsers,
+              cancelledUsers,
+              ferraIndex,
+              contacts,
+              customerDetails: sharedCustomerDetails,
+              subsByPhone,
+            },
           );
           return (
             <TouchableOpacity

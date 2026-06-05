@@ -437,12 +437,38 @@ async function handleSend(request, env) {
   // reference still means the same thing semantically).
   const ok = periskopeRes.ok && periskopeJson?.ok === true;
   const uniqueId = periskopeJson?.messageId || null;
+  // v1.267: when ok=false, surface the actual gateway response in worker
+  // logs so `wrangler tail` can see WHY the send was marked failed. Until
+  // now this was silently swallowed — a trainer would see "✗ failed" with
+  // no way to debug. The reported PDF case (v1.266 Hemant Murthy 90s Lab
+  // Report) was Periskope-accepted but gateway-rejected back to us; this
+  // log gives us the gateway's exact response shape for next time.
+  if (!ok) {
+    console.error("send-not-ok", {
+      gatewayHttpStatus: periskopeRes.status,
+      gatewayResponse: periskopeJson,
+      chatId: resolvedChatId,
+      hasMedia: !!body.media,
+      mediaType: body.media?.type || body.media?.mimetype || null,
+      mediaFileName: body.media?.filename || null,
+    });
+  }
 
   // Predict the message_id format that Periskope's webhook will use for
   // the from_me=true echo of this send: "true_{chat_id}_{unique_id}". By
   // pre-writing the byPeriskopeId dedup entry, we prevent the webhook from
   // duplicating the message when it arrives a moment later.
-  const expectedWebhookMsgId = (ok && uniqueId) ? `true_${resolvedChatId}_${uniqueId}` : null;
+  //
+  // v1.267: include the dedup entry even when ok=false BUT a uniqueId is
+  // present in the gateway response. Observed failure mode: Periskope
+  // accepts the send (the message reaches the customer) yet the gateway
+  // returns ok=false to us due to a downstream gateway-side issue. Without
+  // the dedup entry, the from_me=true echo a few seconds later creates a
+  // SECOND bubble and the original stays stuck at "failed". With it, the
+  // webhook recognizes the echo and patches the failed bubble to "sent"
+  // (see handleWebhook dedup branch). If Periskope truly rejected the
+  // send, no echo ever arrives, so the bubble correctly stays "failed".
+  const expectedWebhookMsgId = uniqueId ? `true_${resolvedChatId}_${uniqueId}` : null;
 
   const ts = Date.now();
   const msgRecord = {
@@ -992,8 +1018,27 @@ async function handleWebhook(request, env) {
       // If this echo carries media (Periskope-hosted URL we couldn't have at
       // /send time), patch the existing message so receivers see the image.
       const echoMedia = extractMedia(msg);
-      if (echoMedia && existing.chatId && existing.msgKey) {
-        await fbPatch(env, `${ROOT}/chats/${encodeKey(existing.chatId)}/messages/${existing.msgKey}`, { media: echoMedia });
+      // v1.267: self-heal a false-failed status. /send writes the dedup
+      // entry even when the gateway returned ok=false (as long as a
+      // uniqueId came back). If we now see Periskope's from_me=true echo
+      // for that same uniqueId, the send actually succeeded — patch the
+      // bubble's status from "failed" → "sent" so the trainer sees the
+      // truth instead of a misleading red cross. Read the existing
+      // message first so we only touch records currently in the failed
+      // state (no point writing the same status back, and don't
+      // overwrite a more advanced state like "delivered" or "read").
+      const patch = {};
+      if (echoMedia) patch.media = echoMedia;
+      if (existing.chatId && existing.msgKey) {
+        const existingMsg = await fbGet(env, `${ROOT}/chats/${encodeKey(existing.chatId)}/messages/${existing.msgKey}`);
+        if (existingMsg?.status === "failed") {
+          patch.status = "sent";
+          patch.healedAt = ts;
+          patch.error = null;
+        }
+        if (Object.keys(patch).length > 0) {
+          await fbPatch(env, `${ROOT}/chats/${encodeKey(existing.chatId)}/messages/${existing.msgKey}`, patch);
+        }
       }
       return json({ ok: true, dedup: true });
     }

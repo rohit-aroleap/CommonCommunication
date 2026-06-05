@@ -40,6 +40,8 @@ export function ChatsScreen() {
     cancelledUsers,
     ferraIndex,
     contacts,
+    sharedCustomerDetails,
+    subsByPhone,
     tickets,
     sharedSubsByPhone,
     myLastSeen,
@@ -171,10 +173,21 @@ export function ChatsScreen() {
               cancelledUsers,
               ferraIndex,
               contacts,
+              customerDetails: sharedCustomerDetails,
+              subsByPhone,
             },
           ),
         })),
-    [chatRows, habitUsers, cancelledUsers, ferraIndex, contacts, teamPhones],
+    [
+      chatRows,
+      habitUsers,
+      cancelledUsers,
+      ferraIndex,
+      contacts,
+      sharedCustomerDetails,
+      subsByPhone,
+      teamPhones,
+    ],
   );
 
   // v1.196: limited-trainer visibility filter. A chat is visible iff

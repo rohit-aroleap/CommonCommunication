@@ -136,6 +136,8 @@ export function ThreadScreen({ route, navigation }: Props) {
     cancelledUsers,
     ferraIndex,
     contacts,
+    sharedCustomerDetails,
+    subsByPhone,
     markChatSeen,
     bumpSendActivity,
     templates,
@@ -183,7 +185,14 @@ export function ThreadScreen({ route, navigation }: Props) {
         chatType: isGroup ? "group" : "user",
         groupName: meta.groupName,
       },
-      { habitUsers, cancelledUsers, ferraIndex, contacts },
+      {
+        habitUsers,
+        cancelledUsers,
+        ferraIndex,
+        contacts,
+        customerDetails: sharedCustomerDetails,
+        subsByPhone,
+      },
     );
   }, [
     initialTitle,
@@ -196,6 +205,8 @@ export function ThreadScreen({ route, navigation }: Props) {
     cancelledUsers,
     ferraIndex,
     contacts,
+    sharedCustomerDetails,
+    subsByPhone,
   ]);
 
   const [messages, setMessages] = useState<Message[]>([]);
@@ -1613,9 +1624,23 @@ export function ThreadScreen({ route, navigation }: Props) {
         senderPhone,
         null,
         { chatType: "user" },
-        { habitUsers, cancelledUsers, ferraIndex, contacts },
+        {
+          habitUsers,
+          cancelledUsers,
+          ferraIndex,
+          contacts,
+          customerDetails: sharedCustomerDetails,
+          subsByPhone,
+        },
       ),
-    [habitUsers, cancelledUsers, ferraIndex, contacts],
+    [
+      habitUsers,
+      cancelledUsers,
+      ferraIndex,
+      contacts,
+      sharedCustomerDetails,
+      subsByPhone,
+    ],
   );
 
   // Day-divider rendering. With the v1.132 inverted FlatList, data is sorted

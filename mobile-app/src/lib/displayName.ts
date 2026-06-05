@@ -3,7 +3,13 @@
 // resolveDisplayName in index.html so a chat shows the same name across web,
 // PWA, and the RN app.
 
-import type { ChatType, ContactInfo, FerraUser } from "@/types";
+import type {
+  ChatType,
+  ContactInfo,
+  CustomerDetail,
+  FerraSubscription,
+  FerraUser,
+} from "@/types";
 import { type FerraIndex, getFerraDisplayName } from "./ferra";
 
 export interface NameOpts {
@@ -16,6 +22,12 @@ export interface NameResolverDeps {
   cancelledUsers: Record<string, FerraUser> | FerraUser[] | null;
   ferraIndex: FerraIndex;
   contacts: Record<string, ContactInfo>;
+  // v1.267: optional — chat list shows brand-new subscribers' names from
+  // these even before any habit data lands. Pre-existing callsites that
+  // don't pass them still work (name resolution just stops one step
+  // earlier than the web build).
+  customerDetails?: Record<string, CustomerDetail> | null;
+  subsByPhone?: Map<string, FerraSubscription[]> | null;
 }
 
 export function resolveDisplayName(
@@ -31,6 +43,8 @@ export function resolveDisplayName(
     deps.habitUsers,
     deps.cancelledUsers,
     deps.ferraIndex,
+    deps.customerDetails ?? null,
+    deps.subsByPhone ?? null,
   );
   const manual = explicitName && String(explicitName).trim();
   if (manual) {

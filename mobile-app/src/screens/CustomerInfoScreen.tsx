@@ -119,7 +119,14 @@ export function CustomerInfoScreen({ route, navigation }: Props) {
           chatType: isGroup ? "group" : "user",
           groupName: meta.groupName,
         },
-        { habitUsers, cancelledUsers, ferraIndex, contacts },
+        {
+          habitUsers,
+          cancelledUsers,
+          ferraIndex,
+          contacts,
+          customerDetails: sharedCustomerDetails,
+          subsByPhone,
+        },
       ),
     [
       phone,
@@ -131,6 +138,8 @@ export function CustomerInfoScreen({ route, navigation }: Props) {
       cancelledUsers,
       ferraIndex,
       contacts,
+      sharedCustomerDetails,
+      subsByPhone,
     ],
   );
 

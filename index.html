@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.266</title>
+<title>CommonCommunication v1.267</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2762,7 +2762,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.266";
+const APP_VERSION = "v1.267";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -4197,6 +4197,36 @@ function getFerraDisplayName(phone) {
         return u.name || null;
       }
     }
+  }
+  // v1.267: brand-new subscribers (Status ACTIVE, but no workouts logged
+  // yet) have no entry in ferraHabitData/v1/users — so the two checks
+  // above miss them and the chat list falls back to the raw phone. Fall
+  // through to the same Ferra-subscription feed the customer-info drawer
+  // reads, so the chat list sees the name as soon as the subscription
+  // record arrives (typically within minutes of payment, well before
+  // first workout). Check customerDetails first (richer / canonical
+  // name), then bySubscription as a secondary fallback.
+  const detail = sharedSubs?.customerDetails?.[norm];
+  if (detail?.name) return detail.name;
+  const subs = subsByPhoneIdx.get(norm);
+  if (subs && subs.length) {
+    for (const s of subs) {
+      if (s?.customerName && samePhone(s.customerPhone, phone)) {
+        return s.customerName;
+      }
+    }
+    // Phone matched as a member but not the holder — fall back to the
+    // matching memberName if present, else the holder's name.
+    for (const s of subs) {
+      const phones = s?.memberPhones || [];
+      const names = s?.memberNames || [];
+      for (let i = 0; i < phones.length; i++) {
+        if (normalizeFerraPhone(phones[i]) === norm && names[i]) {
+          return names[i];
+        }
+      }
+    }
+    if (subs[0]?.customerName) return subs[0].customerName;
   }
   return null;
 }
