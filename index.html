@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.265</title>
+<title>CommonCommunication v1.266</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -74,6 +74,18 @@
     padding: 4px 10px; border-radius: 4px; font-size: 11px; cursor: pointer;
   }
   .topbar .logout:hover { background: rgba(255,255,255,.2); }
+
+  /* v1.266 — embed mode. When the page is loaded with ?embed=1 the
+     SA Tracker (or any other host) gets just the thread pane: no top
+     bar, no left icon rail, no chat-list sidebar. The deep-link reader
+     (?chat=<key>) still works, so the iframe lands directly on the
+     trainer's selected customer's thread. Toggled via a class on
+     <html> set by an inline script that runs before the module body. */
+  html.embed-mode .topbar { display: none !important; }
+  html.embed-mode .left-rail { display: none !important; }
+  html.embed-mode .sidebar { display: none !important; }
+  html.embed-mode .main { grid-template-columns: 1fr !important; }
+  html.embed-mode .thread { width: 100% !important; }
 
   .main {
     flex: 1; display: grid;
@@ -2714,6 +2726,18 @@
   </div>
 </div>
 
+<!-- v1.266 — embed-mode detector. Runs synchronously before the module
+     so the css class is set BEFORE any layout paint. Hosts (e.g. the
+     SA Tracker's Customer Reach Out tab) iframe this app with
+     ?embed=1 to get a thread-only view. -->
+<script>
+  try {
+    if (new URLSearchParams(location.search).get('embed') === '1') {
+      document.documentElement.classList.add('embed-mode');
+    }
+  } catch (_) { /* no-op on URL parse failure */ }
+</script>
+
 <!-- ============== Firebase + App ============== -->
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
@@ -2738,7 +2762,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.265";
+const APP_VERSION = "v1.266";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
