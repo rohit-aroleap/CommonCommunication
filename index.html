@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.267</title>
+<title>CommonCommunication v1.268</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2762,7 +2762,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.267";
+const APP_VERSION = "v1.268";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -8583,6 +8583,32 @@ function computeStatusCounts(visibleRows, myChatKeys) {
   }
   return counts;
 }
+
+// v1.267 — postMessage handler for cross-frame chat switching. A host
+// page that has embedded this app (e.g. SA Tracker's Reach Out tab)
+// can post { type: 'open-chat', chatKey: '<phone>@c_us' } and we'll
+// open that thread without a full iframe reload. Saves the host from
+// tearing down + re-mounting the iframe every time a different
+// customer is clicked (which was triggering a full sign-in + Firebase
+// connect + chat history fetch each time).
+window.addEventListener('message', (ev) => {
+  if (!ev.data || typeof ev.data !== 'object') return;
+  if (ev.data.type !== 'open-chat') return;
+  const ck = ev.data.chatKey;
+  if (!ck || typeof ck !== 'string') return;
+  // Defensive: chatKey is always <digits>@c_us in our schema. Reject
+  // anything else so a stray postMessage can't drive us to a bogus key.
+  if (!/^\d+@c_us$/.test(ck)) return;
+  // Wait for chatsCache to populate before opening (same pattern as
+  // the existing ?chat= deep-link reader).
+  const start = Date.now();
+  const tryOpen = () => {
+    if (Date.now() - start > 15000) return;
+    if (chatsCache && chatsCache[ck]) openChat(ck);
+    else setTimeout(tryOpen, 250);
+  };
+  tryOpen();
+});
 
 // kept for back-compat with anything else that might call it
 function hasMyOpenTicket(chatKey, uid) {
