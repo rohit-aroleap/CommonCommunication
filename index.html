@@ -2798,6 +2798,21 @@ let currentChatId = null;
 let chatsCache = {};      // chatId -> meta
 let lastChatRows = [];    // last computed row list for re-render on search
 let messagesUnsub = null; // detach for current thread listener
+// v1.269: paginated message loading. The thread listener pulls only the
+// most recent INITIAL_MESSAGE_LIMIT messages on first open — was 500,
+// which made the FIRST open of any chat noticeably slow (network +
+// JSON parse + 500-bubble render all sequential). 50 covers the vast
+// majority of "I just need to reply" use cases. If the trainer scrolls
+// to the top of the thread, we bump messagesPageLimit by
+// PAGE_MORE_INCREMENT and reattach the listener with a wider window.
+// Capped at MAX_MESSAGE_LIMIT so a runaway scroll-up doesn't pull a
+// 5000-message chat in one go.
+const INITIAL_MESSAGE_LIMIT = 50;
+const PAGE_MORE_INCREMENT = 50;
+const MAX_MESSAGE_LIMIT = 1000;
+let messagesPageLimit = INITIAL_MESSAGE_LIMIT;
+let loadingMoreMessages = false; // in-flight guard for scroll-to-top
+let postRenderHook = null;       // one-shot fn called after next renderMessages
 let notesUnsub = null;    // detach for current notes listener
 let currentNotes = {};    // notes for the currently-open chat
 let addingNote = false;
@@ -2863,6 +2878,50 @@ const threadName = $("threadName");
 const threadSub = $("threadSub");
 const threadAvatar = $("threadAvatar");
 const messagesEl = $("messages");
+// v1.269: scroll-to-top auto-paginate. When the trainer scrolls within
+// 80px of the top of the thread, bump the page window and re-attach
+// the Firebase listener with a wider limitToLast. The post-render
+// hook restores their scroll position so older bubbles slot in above
+// without yanking the view.
+//
+// In-flight guard (loadingMoreMessages) blocks reentry while we're
+// still loading the previous page — without it a fast scroll keeps
+// queuing reattaches and the listener thrashes.
+//
+// Skipped for DMs in v1 because DMs are short-lived and rarely deep
+// enough to need pagination (the team has < 100 internal messages
+// even after months). Easy follow-up if that changes.
+messagesEl.addEventListener("scroll", () => {
+  if (!currentChatId) return;
+  if (isDmKey(currentChatId)) return;
+  if (loadingMoreMessages) return;
+  if (messagesEl.scrollTop > 80) return;
+  if (messagesPageLimit >= MAX_MESSAGE_LIMIT) return;
+  loadingMoreMessages = true;
+  // Capture position so we can land the trainer on the same bubble
+  // they were reading once the wider window paints.
+  const previousScrollHeight = messagesEl.scrollHeight;
+  const previousScrollTop = messagesEl.scrollTop;
+  messagesPageLimit = Math.min(
+    messagesPageLimit + PAGE_MORE_INCREMENT,
+    MAX_MESSAGE_LIMIT,
+  );
+  postRenderHook = () => {
+    // After the new (wider) render lays out, the older bubbles
+    // prepended above pushed the previously-visible bubbles down by
+    // (newScrollHeight - previousScrollHeight) pixels. Add that to
+    // the previous scrollTop to keep the viewport anchored on the
+    // SAME message the trainer was reading.
+    const newScrollHeight = messagesEl.scrollHeight;
+    messagesEl.scrollTop =
+      previousScrollTop + (newScrollHeight - previousScrollHeight);
+    loadingMoreMessages = false;
+  };
+  // Detach + reattach with the new wider window. Firebase RTDB will
+  // re-fetch the wider slice and refire onValue — the existing
+  // listenMessages handler picks the chat key off currentChatId.
+  listenMessages(currentChatId);
+});
 const composerInput = $("composerInput");
 const sendBtn = $("sendBtn");
 const suggestReplyBtn = $("suggestReplyBtn");
@@ -8706,6 +8765,12 @@ function openChat(chatKey) {
   // B. The chip stays only as long as you're in the chat you picked it
   // for.
   if (typeof setPendingTemplateMedia === "function") setPendingTemplateMedia(null);
+  // v1.269: reset paginated message window. Every fresh chat open
+  // starts at the recent-50 window, regardless of how far the previous
+  // chat had been scrolled back.
+  messagesPageLimit = INITIAL_MESSAGE_LIMIT;
+  loadingMoreMessages = false;
+  postRenderHook = null;
   currentChatId = chatKey;
   // Reset note edit state when switching chats so a half-typed note from one
   // chat doesn't appear in another. Notes are collapsed by default — count is
@@ -8772,7 +8837,8 @@ function showThreadHeaderCustomerTools() {
 // /dms/{pairKey}/messages and skips the customer-meta self-heal step.
 function listenDmMessages(pairKey) {
   if (messagesUnsub) { messagesUnsub(); messagesUnsub = null; }
-  const msgsRef = query(ref(db, `${ROOT}/dms/${pairKey}/messages`), orderByChild("ts"), limitToLast(500));
+  // v1.269: window-paginated. See listenMessages comment.
+  const msgsRef = query(ref(db, `${ROOT}/dms/${pairKey}/messages`), orderByChild("ts"), limitToLast(messagesPageLimit));
   messagesUnsub = onValue(msgsRef, (snap) => {
     const v = snap.val() || {};
     // DM messages don't carry a "direction" field (sender is determined by
@@ -9436,7 +9502,10 @@ backBtn.onclick = () => {
 
 function listenMessages(chatKey) {
   if (messagesUnsub) { messagesUnsub(); messagesUnsub = null; }
-  const msgsRef = query(ref(db, `${ROOT}/chats/${chatKey}/messages`), orderByChild("ts"), limitToLast(500));
+  // v1.269: window-paginated. limitToLast was 500 unconditionally, which
+  // dominated first-open latency for long chats. messagesPageLimit
+  // grows in steps when the trainer scrolls to the top of the thread.
+  const msgsRef = query(ref(db, `${ROOT}/chats/${chatKey}/messages`), orderByChild("ts"), limitToLast(messagesPageLimit));
   const unsub = onValue(msgsRef, (snap) => {
     const v = snap.val() || {};
     const list = Object.entries(v).map(([k, m]) => ({ id: k, ...m })).sort((a,b) => (a.ts||0) - (b.ts||0));
@@ -9650,7 +9719,20 @@ function renderMessages(list) {
     </div>`;
   }
   messagesEl.innerHTML = html;
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  // v1.269: post-render hook. The scroll-to-top load-more handler sets
+  // this to a function that restores the trainer's reading position so
+  // they don't get yanked back to "today" when older messages prepend.
+  // If unset (normal render path), keep the historical behavior of
+  // pinning to the bottom — that's where new replies appear and the
+  // composer is, which is what the trainer is almost always reading
+  // toward.
+  if (postRenderHook) {
+    const fn = postRenderHook;
+    postRenderHook = null;
+    requestAnimationFrame(fn);
+  } else {
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
 
   // Wire click-to-create-ticket on every bubble
   messagesEl.querySelectorAll(".bubble").forEach(b => {
