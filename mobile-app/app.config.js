@@ -113,6 +113,24 @@ module.exports = ({ config }) => ({
       "WAKE_LOCK",
       "FOREGROUND_SERVICE",
       "FOREGROUND_SERVICE_MICROPHONE",
+      // v1.268: incoming-call background ring. The data-only Expo Push
+      // arrives even when the app is killed; Notifee then displays a
+      // call-style full-screen notification on the lock screen with
+      // Accept / Decline actions. Permissions needed:
+      //   VIBRATE                — the call ringtone vibrates
+      //   USE_FULL_SCREEN_INTENT — locked-screen full-screen ring (Android 14
+      //                            requires this declared explicitly)
+      //   POST_NOTIFICATIONS     — Android 13+ runtime permission for any
+      //                            notification (we already register it via
+      //                            expo-notifications, declared here for
+      //                            clarity and to satisfy Notifee's check)
+      //   FOREGROUND_SERVICE_PHONE_CALL — Android 14+ typed sub-permission
+      //                            for the foreground service Notifee runs
+      //                            while displaying the call notification
+      "VIBRATE",
+      "USE_FULL_SCREEN_INTENT",
+      "POST_NOTIFICATIONS",
+      "FOREGROUND_SERVICE_PHONE_CALL",
     ],
   },
   web: { favicon: "./assets/favicon.png" },

@@ -3563,14 +3563,103 @@ async function handleCallRing(request, env, ctx) {
     ringAt: Date.now(),
   });
 
-  // Phase 4 TODO: send FCM push to recipient's Android device + VoIP push
-  // to iOS device. For now (Phase 1), the recipient's app picks this up
-  // via its onValue listener on /commonComm/calls and shows the in-app
-  // incoming-call modal — works as long as the app is open. Lock-screen
-  // ringing comes in Phase 4 once the iOS VoIP cert is in place.
-  // ctx.waitUntil(sendCallPush(env, call.recipientUid, callId, call.initiatorName));
+  // v1.268: data-only Expo Push to the recipient's device. Wakes the
+  // app from killed state (Android) — the background notification
+  // task in mobile-app/src/notifications/backgroundNotificationTask.ts
+  // intercepts the data payload and hands it to Notifee, which renders
+  // a full-screen call notification on the lock screen with Accept /
+  // Decline actions.
+  //
+  // The push is intentionally data-ONLY (no title/body) so Android
+  // doesn't try to display its own auto-generated notification — we
+  // want Notifee's call-styled UI to be the only thing the user sees.
+  // Sent via the existing sendCallPushToUid helper which uses Expo
+  // Push (FCM under the hood) with priority=high.
+  //
+  // iOS recipients won't ring from a killed state yet — that needs a
+  // PushKit + CallKit native integration (Phase E for iOS calling).
+  // They still see the foreground IncomingCallOverlay if the app is
+  // open, which is the same behavior as v1.264-v1.267.
+  ctx.waitUntil(
+    sendCallPushToUid(env, call.recipientUid, {
+      callId,
+      callerName: call.initiatorName || "Someone",
+      callerUid: call.initiatorUid || "",
+      roomUrl: call.roomUrl || "",
+    }),
+  );
 
   return json({ ok: true });
+}
+
+// v1.268: send a data-only high-priority push to a specific uid's
+// Expo tokens. Distinct from sendPushToUids because:
+//   - No title/body — we want Notifee on the device to render the UI,
+//     not the OS auto-notification. _contentAvailable + omitting the
+//     notification fields keeps Expo from translating to a visible
+//     FCM notification entry.
+//   - priority=high + channelId=incoming-calls so it bypasses doze
+//     and is routed to the dedicated calls channel.
+//   - ttl=30 — if the recipient is offline for >30s, drop the push.
+//     A call that's already over by the time the recipient gets push
+//     isn't worth ringing for.
+async function sendCallPushToUid(env, uid, payload) {
+  return sendCallDataPush(env, uid, {
+    type: "incoming-call",
+    ...payload,
+  });
+}
+
+// v1.268: cancel-call data push. Tells the recipient's Notifee handler
+// to dismiss the ringing notification (caller hung up / call timed
+// out / recipient declined on another device). Same channel + same
+// data-only path as the incoming-call push so it travels identically.
+async function sendCallCancelPushToUid(env, uid, callId) {
+  return sendCallDataPush(env, uid, {
+    type: "cancel-call",
+    callId,
+  });
+}
+
+// Internal: shared low-level send. All call-related pushes go through
+// here so priority / channel / ttl stay consistent.
+async function sendCallDataPush(env, uid, data) {
+  if (!uid) return;
+  const all = await fbGet(env, `${ROOT}/pushTokens`);
+  if (!all || typeof all !== "object") return;
+  const userMap = all[uid];
+  if (!userMap || typeof userMap !== "object") return;
+
+  const messages = [];
+  for (const entry of Object.values(userMap)) {
+    if (!entry || !entry.token) continue;
+    if (!/^ExponentPushToken\[.+\]$/.test(entry.token)) continue;
+    messages.push({
+      to: entry.token,
+      data,
+      priority: "high",
+      channelId: "incoming-calls",
+      _contentAvailable: true,
+      ttl: 30,
+    });
+  }
+  if (!messages.length) return;
+  const headers = {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+  };
+  if (env.EXPO_ACCESS_TOKEN) {
+    headers["Authorization"] = `Bearer ${env.EXPO_ACCESS_TOKEN}`;
+  }
+  try {
+    await fetch("https://exp.host/--/api/v2/push/send", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(messages),
+    });
+  } catch (e) {
+    console.warn("[call-push] failed:", e);
+  }
 }
 
 // Recipient accepts / declines, or either side ends the call.
@@ -3602,6 +3691,26 @@ async function handleCallStatusUpdate(request, env) {
     }
   }
   await fbPatch(env, fbPath, patch);
+
+  // v1.268: if the call is over before the recipient picked up, push a
+  // cancel-call data message so their device dismisses the Notifee
+  // ring. Without this, a caller who hangs up after 5s of ringing
+  // leaves the recipient's phone ringing for the full 60s timeout.
+  //
+  // Only fire on transitions that mean "no more call" AND the
+  // recipient hadn't already accepted (post-accept, the in-call screen
+  // owns dismissal). Recipient declined: their own phone already
+  // dismissed via Notifee.cancelNotification — push to caller is a no-op.
+  const isTerminal =
+    newStatus === "ended" ||
+    newStatus === "missed" ||
+    newStatus === "declined";
+  const everAccepted = !!call.acceptedAt || newStatus === "accepted";
+  if (isTerminal && !everAccepted && call.recipientUid) {
+    ctx.waitUntil(
+      sendCallCancelPushToUid(env, call.recipientUid, callId),
+    );
+  }
   return json({ ok: true, status: newStatus });
 }
 

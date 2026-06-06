@@ -25,6 +25,7 @@ import { ROOT } from "@/config";
 import { useAuth } from "@/auth/AuthContext";
 import { space, useStyles, type Colors } from "@/theme";
 import { updateCallStatus, type CallRecord } from "@/lib/calls";
+import { dismissIncomingCall } from "@/notifications/incomingCall";
 import type { RootStackParamList } from "@/screens/types";
 
 interface RingingCall extends CallRecord {
@@ -63,8 +64,15 @@ export function IncomingCallOverlay() {
   }, [user]);
 
   // Vibrate while ringing. Pattern: short buzz, pause, short buzz.
+  // v1.268: also dismiss any Notifee call notification for THIS call —
+  // if the data-push arrived a moment before the RTDB listener fired,
+  // Notifee may already be showing its lock-screen ring. We want only
+  // one UI active: the in-app overlay when foregrounded, Notifee when
+  // background/killed. Calling dismissIncomingCall is a no-op if
+  // Notifee never showed.
   useEffect(() => {
     if (!activeRing) return;
+    void dismissIncomingCall(activeRing.callId);
     const pattern = [0, 600, 600, 600];
     Vibration.vibrate(pattern, true);
     return () => Vibration.cancel();

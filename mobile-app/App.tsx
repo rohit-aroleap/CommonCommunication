@@ -66,6 +66,13 @@ import { CustomerInfoScreen } from "@/screens/CustomerInfoScreen";
 import { SettingsScreen } from "@/screens/SettingsScreen";
 import { BottomTabBar } from "@/components/BottomTabBar";
 import { registerForPushAsync } from "@/notifications/registerForPush";
+import { registerBackgroundNotificationTaskAsync } from "@/notifications/backgroundNotificationTask";
+import {
+  registerForegroundCallEventListener,
+  setCallNavigator,
+  consumeInitialCallNotification,
+  takePendingCallAction,
+} from "@/notifications/callEvents";
 import { getDisplayVersion } from "@/lib/version";
 import { ThemeProvider, useTheme } from "@/theme";
 import type { RootStackParamList } from "@/screens/types";
@@ -296,6 +303,50 @@ function TabsHeaderTitle({
   return <Text style={titleStyle}>{title}</Text>;
 }
 
+// v1.268: bridges Notifee call events into React Navigation. Mounted
+// inside the NavigationContainer so it can call navigation.navigate
+// safely. Handles three sources of "go to Call screen for this id":
+//   1. Foreground Notifee event (Accept tapped while app open).
+//   2. Background pending action (Accept tapped while killed/bg —
+//      stashed by callEvents.ts, consumed here on next foreground).
+//   3. Initial notification (app cold-started by tapping the call
+//      notification — consumed once at mount).
+function CallEventsBridge() {
+  const navigation =
+    useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+
+  useEffect(() => {
+    const navigateToCall = (callId: string) => {
+      navigation.navigate("Call", { callId });
+    };
+    setCallNavigator(navigateToCall);
+
+    // 1. Foreground events — Accept/Decline/body tap while app is open.
+    const unsubFg = registerForegroundCallEventListener();
+
+    // 2. Pending bg action — pulled the moment we mount; may be null.
+    const pending = takePendingCallAction();
+    if (pending && pending.callId) {
+      // 60s grace — older entries are stale and we ignore them.
+      if (Date.now() - pending.at < 60_000) {
+        navigateToCall(pending.callId);
+      }
+    }
+
+    // 3. Initial notification — only fires once per cold start.
+    void consumeInitialCallNotification().then((init) => {
+      if (init?.callId) navigateToCall(init.callId);
+    });
+
+    return () => {
+      unsubFg();
+      setCallNavigator(null);
+    };
+  }, [navigation]);
+
+  return null;
+}
+
 function PostAuth() {
   const { user } = useAuth();
   const { colors } = useTheme();
@@ -303,6 +354,13 @@ function PostAuth() {
     if (!user) return;
     registerForPushAsync(user.uid).catch((e) =>
       console.warn("[push] register failed:", e),
+    );
+    // v1.268: register the Expo background notification task once
+    // we have a signed-in user. The task itself was defined at
+    // module-load via index.ts; this call tells the OS to actually
+    // route data pushes to it. Idempotent.
+    registerBackgroundNotificationTaskAsync().catch((e) =>
+      console.warn("[bg-notif] register failed:", e),
     );
   }, [user]);
   return (
@@ -350,8 +408,18 @@ function PostAuth() {
         </Stack.Navigator>
         {/* v1.264: incoming-call overlay. Mounted INSIDE the
             NavigationContainer so it can navigate to the Call screen,
-            but OUTSIDE the Stack.Navigator so it covers any screen. */}
+            but OUTSIDE the Stack.Navigator so it covers any screen.
+            v1.268: now coexists with the Notifee call notification —
+            when the app is foregrounded with no notification (e.g.
+            ring happened while the app was already open and the
+            background task wasn't needed), this overlay is the
+            primary UI. When the notification is showing, this stays
+            suppressed because Notifee's full-screen intent has
+            already taken over. */}
         <IncomingCallOverlay />
+        {/* v1.268: bridges Notifee accept/decline events into the
+            navigator. Must be inside NavigationContainer. */}
+        <CallEventsBridge />
       </NavigationContainer>
     </AppDataProvider>
   );
