@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.268</title>
+<title>CommonCommunication v1.269</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2762,7 +2762,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.268";
+const APP_VERSION = "v1.269";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -8599,13 +8599,31 @@ window.addEventListener('message', (ev) => {
   // Defensive: chatKey is always <digits>@c_us in our schema. Reject
   // anything else so a stray postMessage can't drive us to a bogus key.
   if (!/^\d+@c_us$/.test(ck)) return;
-  // Wait for chatsCache to populate before opening (same pattern as
-  // the existing ?chat= deep-link reader).
+  // v1.269 — ack-based open. Try chatsCache first; if missing, poll
+  // up to 15s; post a status back to the parent in either case so the
+  // host can hide its loading overlay (success) or surface an error
+  // (chat not found in cache after 15s, which usually means the chat
+  // hasn't been seeded by Periskope yet for this phone).
   const start = Date.now();
+  const ack = (status, extra) => {
+    try {
+      if (ev.source) ev.source.postMessage(
+        Object.assign({ type: 'chat-open-' + status, chatKey: ck }, extra || {}),
+        ev.origin || '*'
+      );
+    } catch (_) { /* parent might have navigated away */ }
+  };
   const tryOpen = () => {
-    if (Date.now() - start > 15000) return;
-    if (chatsCache && chatsCache[ck]) openChat(ck);
-    else setTimeout(tryOpen, 250);
+    if (Date.now() - start > 15000) {
+      ack('failed', { reason: 'chat-not-in-cache-after-15s' });
+      return;
+    }
+    if (chatsCache && chatsCache[ck]) {
+      openChat(ck);
+      ack('ok');
+    } else {
+      setTimeout(tryOpen, 250);
+    }
   };
   tryOpen();
 });
