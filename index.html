@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.269</title>
+<title>CommonCommunication v1.270</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2762,7 +2762,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.269";
+const APP_VERSION = "v1.270";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -8949,23 +8949,69 @@ function phoneToChatKey(input) {
 addCustomerRowEl.onclick = openAddCustomer;
 addCustomerCancel.onclick = closeAddCustomer;
 addCustomerSubmit.onclick = async () => {
-  const ck = phoneToChatKey(addCustomerPhone.value);
-  if (!ck) {
+  // Inline-normalize so we have BOTH the chat key (for grants /
+  // visibility / Firebase paths, which need `.` `$` `[` `]` `/` `#`
+  // stripped) AND the raw chatId / phone (for the chat-meta stub we
+  // may need to write below). phoneToChatKey only returns the
+  // encoded key, so we duplicate the normalization here.
+  const digits = String(addCustomerPhone.value || "").replace(/\D/g, "");
+  if (!digits || digits.length < 7) {
     addCustomerError.textContent = "Enter a valid phone number (10+ digits).";
     return;
   }
   if (!currentUser) return;
+  let normalized = digits;
+  if (digits.length === 10 && /^[6-9]/.test(digits)) normalized = "91" + digits;
+  const chatId = normalized + "@c.us";
+  const ck = encodeKey(chatId);
   try {
+    // v1.196: 14-day visibility grant for limited trainers. Stays a
+    // no-op (read-only effect) for non-limited trainers since the
+    // chat list never filters their view.
     await set(ref(db, `${ROOT}/userGrants/${currentUser.uid}/${ck}`), {
       grantedAt: Date.now(),
     });
-    closeAddCustomer();
-    // If no chat history exists yet for this key, the row won't appear
-    // until messages start landing. Tell the trainer so they're not
-    // confused by the empty list.
-    if (!chatsCache[ck]) {
-      alert("Added. No existing chat history for that number yet — the chat will appear in your list as soon as a message arrives.");
+    // v1.270: if no chat exists for this number yet, write a meta
+    // stub so the chat actually appears in the trainer's list AND so
+    // the thread view has something to open against. Without this,
+    // the grant alone is a ghost — limited trainers were stuck with
+    // "popup closes, nothing visible to act on" for any brand-new
+    // number that the team had never messaged before. The meta stub
+    // is the minimum the chat-list renderer needs to draw a row;
+    // lastMsgPreview stays empty until the trainer sends or the
+    // customer responds.
+    //
+    // Use `update` (not `set`) so we don't clobber any messages /
+    // tickets / notes that already live under this chat key — there
+    // are edge cases where chatsCache hasn't hydrated yet but the
+    // chat does exist on Firebase. update merges, set would wipe.
+    const existingMeta = chatsCache[ck];
+    if (!existingMeta) {
+      await update(ref(db, `${ROOT}/chats/${ck}/meta`), {
+        chatId,
+        chatType: "user",
+        phone: normalized,
+        lastMsgAt: Date.now(),
+        lastMsgPreview: "",
+        // Audit trail — who started this chat. Useful when a customer
+        // later asks "who originally reached out to me?". Also lets
+        // us de-emphasize empty placeholder chats in the list
+        // (lastMsgPreview="" AND createdByUid set AND no real
+        // messages) if that becomes a UX issue.
+        createdByUid: currentUser.uid,
+        createdByName: currentUser.displayName || currentUser.email || null,
+      });
     }
+    closeAddCustomer();
+    // Drop the trainer straight into the new chat. The composer is
+    // live and the existing /send flow handles unknown numbers —
+    // Periskope will route the outbound to the WhatsApp customer
+    // regardless of whether there was prior history under this
+    // chat_id. As soon as the trainer hits send, the worker writes
+    // the message and patchChatMeta updates lastMsgAt /
+    // lastMsgPreview, so the chat now looks like any other in the
+    // list.
+    openChat(ck);
   } catch (e) {
     addCustomerError.textContent = "Couldn't add: " + (e?.message || e);
   }
