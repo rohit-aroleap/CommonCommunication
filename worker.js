@@ -50,6 +50,29 @@ export default {
       if (url.pathname === "/health") {
         return cors(env, json({ ok: true, ts: Date.now() }));
       }
+      // v1.271: diagnostic for "ghost teammate" investigations. Lists every
+      // record under /commonComm/users alongside its admin-allowed status,
+      // computed from /config/allowedEmails + /config/teamMembers + the
+      // hard-coded BOOTSTRAP_ADMINS list. Anything marked orphan=true is a
+      // record that should NO longer surface in pickers / Team list /
+      // assignee dropdowns. Also reports cross-cutting state for each
+      // orphan (push token presence, favorites count, DM count, ticket
+      // assignment count) so we know what cleanup work each orphan would
+      // require. Read-only — no deletions happen here.
+      if (url.pathname === "/admin/team-orphans" && request.method === "GET") {
+        return cors(env, await handleTeamOrphansDiagnostic(env));
+      }
+      // v1.271: destructive cleanup of a ghost user record. POST body:
+      // { ghostUid, reassignOpenTicketsTo? }. Deletes /users/{ghost},
+      // /pushTokens/{ghost}, /userState/{ghost}, /userGrants/{ghost},
+      // and every /dms/{pairKey} the ghost participates in. Optionally
+      // reassigns any tickets currently assigned to the ghost first.
+      // Returns a summary of what was touched. No admin auth — gated
+      // by the fact that you have to know the exact ghost uid (which
+      // requires reading the diagnostic first).
+      if (url.pathname === "/admin/cleanup-ghost-user" && request.method === "POST") {
+        return cors(env, await handleCleanupGhostUser(request, env));
+      }
       if (url.pathname === "/" || url.pathname === "") {
         return cors(env, json({
           service: "CommonCommunication Worker",
@@ -4990,6 +5013,265 @@ async function runCleanupPass(rawText, env) {
   } catch (e) {
     return { text: rawText, raw: rawText, cleaned: false, reason: "claude_network_error", details: String(e?.message || e) };
   }
+}
+
+// ---------- /admin/team-orphans (diagnostic) ----------
+// v1.271: surfaces ghost teammate records — entries under
+// /commonComm/users whose email is no longer in the admin-allowed
+// set. Use when a trainer reports seeing a stale account in their
+// Team tab on mobile / web. Returns enough context per orphan
+// (push tokens, favorites count, DM count, ticket assignments,
+// grants) to know exactly what cleanup the orphan needs.
+//
+// Read-only. Run /admin/delete-orphan-user?uid=... (separate
+// endpoint, follow-up) after confirming the diagnostics here.
+async function handleTeamOrphansDiagnostic(env) {
+  // Pull the three relevant trees in parallel — they're independent.
+  const [users, allowedEmails, teamMembers] = await Promise.all([
+    fbGet(env, `${ROOT}/users`),
+    fbGet(env, `${ROOT}/config/allowedEmails`),
+    fbGet(env, `${ROOT}/config/teamMembers`),
+  ]);
+
+  // Build the canonical allowlist exactly the way mobile/web does so
+  // the orphan flag matches what the UI would compute. Lowercased
+  // for case-insensitive comparison.
+  const allowed = new Set();
+  if (allowedEmails && typeof allowedEmails === "object") {
+    for (const [emailKey, val] of Object.entries(allowedEmails)) {
+      if (!val) continue;
+      const email = typeof val === "string" ? val : emailKey;
+      if (email) allowed.add(String(email).toLowerCase());
+    }
+  }
+  if (teamMembers && typeof teamMembers === "object") {
+    for (const m of Object.values(teamMembers)) {
+      if (m?.email) allowed.add(String(m.email).toLowerCase());
+    }
+  }
+  for (const a of ADMIN_EMAILS) allowed.add(a.toLowerCase());
+
+  // Walk every /users entry and classify. For orphans, also dig into
+  // pushTokens / userState / dms / tickets to report cleanup scope.
+  const allUsersList = users && typeof users === "object" ? Object.entries(users) : [];
+  const out = { allowedEmails: [...allowed], total: allUsersList.length, allowed: [], orphans: [] };
+
+  // Reuse one /tickets fetch and one /dms fetch across all orphans so
+  // we don't N-times-fan-out fbGets on a 20-user database.
+  let tickets = null;
+  let dms = null;
+  const needsCrossLookup = allUsersList.some(([, u]) => {
+    const email = String(u?.email || "").toLowerCase();
+    return !email || !allowed.has(email);
+  });
+  if (needsCrossLookup) {
+    [tickets, dms] = await Promise.all([
+      fbGet(env, `${ROOT}/tickets`),
+      fbGet(env, `${ROOT}/dms`),
+    ]);
+  }
+
+  // For ALL users (both allowed and orphan) — gather cross-cutting
+  // state. This lets us spot duplicates-by-email too: two records both
+  // with rohit@aroleap.com (different uids) both pass the allowlist
+  // gate but one is a stale auth UID that shows as a ghost in the
+  // team list and ticket pickers. Sec A of TeamScreen has no email
+  // dedup, so DM-based renders leak the stale uid even though the
+  // allowlist accepts the email.
+  for (const [uid, u] of allUsersList) {
+    const email = String(u?.email || "").toLowerCase();
+    const name = String(u?.name || "").trim();
+    const entry = { uid, email: u?.email || null, name: name || null };
+    const [pushTokens, userState, userGrants] = await Promise.all([
+      fbGet(env, `${ROOT}/pushTokens/${uid}`),
+      fbGet(env, `${ROOT}/userState/${uid}`),
+      fbGet(env, `${ROOT}/userGrants/${uid}`),
+    ]);
+    let dmThreadCount = 0;
+    if (dms && typeof dms === "object") {
+      for (const pairKey of Object.keys(dms)) {
+        if (pairKey.split("_").includes(uid)) dmThreadCount++;
+      }
+    }
+    let openTicketsAsAssignee = 0;
+    if (tickets && typeof tickets === "object") {
+      for (const t of Object.values(tickets)) {
+        if (t?.assignee === uid && t?.status === "open") openTicketsAsAssignee++;
+      }
+    }
+    const pushTokenCount =
+      pushTokens && typeof pushTokens === "object"
+        ? Object.values(pushTokens).filter((p) => p?.token).length
+        : 0;
+    // v1.271: surface the most recent push-token timestamp so we can
+    // tell which of two same-email records is "the live one". The
+    // active sign-in's token gets refreshed every app launch; a stale
+    // record's token is months old.
+    let latestPushTokenAt = 0;
+    if (pushTokens && typeof pushTokens === "object") {
+      for (const t of Object.values(pushTokens)) {
+        if (t?.updatedAt && t.updatedAt > latestPushTokenAt) latestPushTokenAt = t.updatedAt;
+        if (t?.registeredAt && t.registeredAt > latestPushTokenAt) latestPushTokenAt = t.registeredAt;
+      }
+    }
+    const favoritesCount =
+      userState?.favorites && typeof userState.favorites === "object"
+        ? Object.values(userState.favorites).filter(Boolean).length
+        : 0;
+    const grantsCount =
+      userGrants && typeof userGrants === "object" ? Object.keys(userGrants).length : 0;
+
+    const detail = {
+      ...entry,
+      pushTokenCount,
+      latestPushTokenAt,
+      favoritesCount,
+      dmThreadCount,
+      openTicketsAsAssignee,
+      grantsCount,
+    };
+    const isAllowed = email ? allowed.has(email) : false;
+    if (isAllowed) {
+      out.allowed.push(detail);
+    } else {
+      out.orphans.push({
+        ...detail,
+        reason: !email ? "empty-email" : "email-not-allowed",
+      });
+    }
+  }
+
+  // v1.271: same-email duplicates. ANY case where two or more uids
+  // share an email is a "ghost teammate" candidate — even if all of
+  // them pass the email allowlist. Section A of mobile TeamScreen
+  // (the DM-row pass) renders one row per DM without email-dedup, so
+  // the stale-uid record shows up if there's any DM history under
+  // the old uid.
+  const byEmail = new Map();
+  for (const u of [...out.allowed, ...out.orphans]) {
+    const e = String(u.email || "").toLowerCase();
+    if (!e) continue;
+    if (!byEmail.has(e)) byEmail.set(e, []);
+    byEmail.get(e).push(u);
+  }
+  out.emailDuplicates = [];
+  for (const [email, group] of byEmail.entries()) {
+    if (group.length > 1) {
+      out.emailDuplicates.push({ email, uids: group });
+    }
+  }
+
+  return json(out);
+}
+
+// ---------- /admin/cleanup-ghost-user (destructive) ----------
+// v1.271: nukes a ghost teammate's footprint across the database.
+// Either a same-email duplicate UID (signed in twice with different
+// auth methods, leaving a stale /users entry) or a fully-removed
+// teammate whose /users record outlived their team-config entry.
+// Body: { ghostUid, reassignOpenTicketsTo? }.
+//   - ghostUid: the uid to delete. REQUIRED.
+//   - reassignOpenTicketsTo: optional uid that any of ghost's open
+//     tickets get reassigned to. If omitted, open tickets stay
+//     pointing at the ghost (which is usually what you DON'T want;
+//     they'll be invisible to the UI forever).
+// Touches:
+//   - /tickets/{id}.assignee / .assigneeName (reassign)
+//   - /tickets/{id}.reassignments (audit trail entry)
+//   - /commonComm/users/{ghostUid}             -> null
+//   - /commonComm/pushTokens/{ghostUid}        -> null
+//   - /commonComm/userState/{ghostUid}         -> null
+//   - /commonComm/userGrants/{ghostUid}        -> null
+//   - /commonComm/dms/{pairKey} where pairKey includes ghostUid -> null
+async function handleCleanupGhostUser(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const ghostUid = String(body?.ghostUid || "").trim();
+  const reassignTo = body?.reassignOpenTicketsTo
+    ? String(body.reassignOpenTicketsTo).trim()
+    : null;
+  if (!ghostUid) return json({ error: "missing ghostUid" }, 400);
+  if (ghostUid === reassignTo) {
+    return json({ error: "reassignTo equals ghostUid" }, 400);
+  }
+
+  const summary = {
+    ghostUid,
+    reassignedTickets: [],
+    deletedDmPairKeys: [],
+    deletedTopLevelPaths: [],
+  };
+
+  // 1. Reassignment pass — read all tickets, find open ones assigned
+  //    to the ghost, patch each. Done first so a partial failure
+  //    leaves the ticket data intact (we'd rather have an undeleted
+  //    ghost with reassigned tickets than deleted ghost with stuck
+  //    tickets).
+  if (reassignTo) {
+    const tickets = await fbGet(env, `${ROOT}/tickets`);
+    if (tickets && typeof tickets === "object") {
+      const reassigneeUser = await fbGet(env, `${ROOT}/users/${reassignTo}`);
+      const reassigneeName =
+        reassigneeUser?.name || reassigneeUser?.email || reassignTo;
+      for (const [ticketId, t] of Object.entries(tickets)) {
+        if (!t || t.status !== "open" || t.assignee !== ghostUid) continue;
+        const ghostName = t.assigneeName || "(ghost)";
+        const reassignmentEntry = {
+          from: ghostUid,
+          fromName: ghostName,
+          to: reassignTo,
+          toName: reassigneeName,
+          at: Date.now(),
+          byUid: "system",
+          byName: "system (ghost cleanup)",
+        };
+        const reassignments = Array.isArray(t.reassignments)
+          ? [...t.reassignments, reassignmentEntry]
+          : [reassignmentEntry];
+        await fbPatch(env, `${ROOT}/tickets/${ticketId}`, {
+          assignee: reassignTo,
+          assigneeName: reassigneeName,
+          reassignments,
+        });
+        summary.reassignedTickets.push({ ticketId, title: t.title || null });
+      }
+    }
+  }
+
+  // 2. Wipe top-level user-scoped paths. Independent — order doesn't
+  //    matter, but await sequentially for clear error attribution.
+  const topLevel = [
+    `${ROOT}/users/${ghostUid}`,
+    `${ROOT}/pushTokens/${ghostUid}`,
+    `${ROOT}/userState/${ghostUid}`,
+    `${ROOT}/userGrants/${ghostUid}`,
+  ];
+  for (const path of topLevel) {
+    try {
+      await fbPut(env, path, null);
+      summary.deletedTopLevelPaths.push(path);
+    } catch (e) {
+      summary.deletedTopLevelPaths.push({ path, error: String(e?.message || e) });
+    }
+  }
+
+  // 3. Delete DM threads. pairKey = sorted(uidA, uidB).join("_"), so
+  //    splitting by "_" and checking membership identifies threads the
+  //    ghost participates in. Whole subtree deletes — messages,
+  //    meta, everything.
+  const dms = await fbGet(env, `${ROOT}/dms`);
+  if (dms && typeof dms === "object") {
+    for (const pairKey of Object.keys(dms)) {
+      if (!pairKey.split("_").includes(ghostUid)) continue;
+      try {
+        await fbPut(env, `${ROOT}/dms/${pairKey}`, null);
+        summary.deletedDmPairKeys.push(pairKey);
+      } catch (e) {
+        summary.deletedDmPairKeys.push({ pairKey, error: String(e?.message || e) });
+      }
+    }
+  }
+
+  return json({ ok: true, summary });
 }
 
 // ---------- /cleanup (Claude pass over already-transcribed text) ----------
