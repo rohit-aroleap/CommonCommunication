@@ -401,6 +401,93 @@ async function handleSend(request, env) {
   const resolvedChatId = chatId || phoneToChatId(phone);
   const resolvedPhone = phone || chatIdToPhone(resolvedChatId);
 
+  // v1.272: convert base64 filedata into an R2-hosted URL. The
+  // ferra-periskope-gateway accepts media ONLY via { url, type } —
+  // it has no base64 upload path. Previously the worker passed
+  // body.media.filedata straight through and the gateway silently
+  // dropped it, so Periskope received an empty payload and rejected
+  // with 422 VALIDATION_ERROR ("at least one of message, media, poll
+  // required") whenever the trainer didn't include caption text.
+  // Symptom: red ✗ failed bubble on every captionless PDF / image
+  // since v1.240. Sends WITH a caption "worked" only in the sense
+  // that the text message reached the customer — the actual
+  // attachment was silently lost.
+  //
+  // Fix: decode the base64 here, upload to R2 under
+  // customer-media/{chatKey}/{msgId}/{filename}, and pass the public
+  // URL (served by the existing /dm-media/<key> handler) to the
+  // gateway. R2 retention (90 days) is shared with DM media — well
+  // past the typical Periskope fetch window, which happens within
+  // seconds of the send.
+  if (body.media && body.media.filedata && !body.media.url) {
+    if (!env.DM_MEDIA) {
+      return json({ error: "media R2 bucket not bound" }, 500);
+    }
+    try {
+      // Base64 → Uint8Array. atob is available in Workers. We strip
+      // any data:mime;base64, prefix defensively even though the
+      // client should send just the payload.
+      let b64 = String(body.media.filedata);
+      const commaIdx = b64.indexOf(",");
+      if (b64.startsWith("data:") && commaIdx > 0) {
+        b64 = b64.slice(commaIdx + 1);
+      }
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      if (bytes.length > DM_MEDIA_MAX_BYTES) {
+        return json(
+          { error: `media too large (>${DM_MEDIA_MAX_BYTES / 1024 / 1024} MB)` },
+          413,
+        );
+      }
+      // Sanitize filename — same scheme as /dm-media/upload. Avoids
+      // path-walking, % encoding round-trip issues, and shell-unsafe
+      // chars in the public URL.
+      const safeName =
+        String(body.media.filename || "file")
+          .normalize("NFKD")
+          .replace(/[^A-Za-z0-9._-]/g, "_")
+          .replace(/_+/g, "_")
+          .slice(0, 200) || "file";
+      // localMsgId is the client's optimistic Firebase RTDB push key
+      // for this message. Use it for path uniqueness so multiple
+      // sends to the same chat don't collide. Fall back to a random
+      // suffix if the client didn't pass one.
+      const msgIdForPath = localMsgId || crypto.randomUUID();
+      const key = `customer-media/${encodeKey(resolvedChatId)}/${msgIdForPath}/${safeName}`;
+      await env.DM_MEDIA.put(key, bytes, {
+        httpMetadata: {
+          contentType: body.media.mimetype || "application/octet-stream",
+          cacheControl: "public, max-age=31536000, immutable",
+        },
+      });
+      // Replace filedata with the public URL on the body.media object
+      // so the existing "hasMedia → forward to gateway" path below
+      // picks it up without further changes. The url points at this
+      // worker's /dm-media/<key> serve handler — Periskope just sees
+      // a normal HTTPS URL and fetches the bytes synchronously.
+      const origin = new URL(request.url).origin;
+      body.media = {
+        type: body.media.type,
+        filename: body.media.filename,
+        mimetype: body.media.mimetype,
+        url: `${origin}/dm-media/${key}`,
+      };
+    } catch (e) {
+      console.error("send-media-upload-failed", {
+        error: String(e?.message || e),
+        chatId: resolvedChatId,
+        fileName: body.media?.filename,
+        mimeType: body.media?.mimetype,
+      });
+      return json(
+        { error: "media upload failed: " + String(e?.message || e) },
+        500,
+      );
+    }
+  }
+
   // v1.239: route through the shared ferra-periskope-gateway instead of
   // hitting Periskope directly. Phase 5 of the gateway consolidation
   // (other Aroleap dashboards migrated in earlier phases). The gateway
