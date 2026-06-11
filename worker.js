@@ -59,6 +59,17 @@ export default {
       // orphan (push token presence, favorites count, DM count, ticket
       // assignment count) so we know what cleanup work each orphan would
       // require. Read-only — no deletions happen here.
+      // v1.273: both /admin/* endpoints require the x-admin-key header to
+      // match the ADMIN_API_KEY worker secret. They were briefly live
+      // unauthenticated during the ghost-cleanup investigation — one leaks
+      // team emails/uids, the other deletes user records. The worker URL
+      // ships in the app bundle, so "nobody knows the URL" is not a gate.
+      if (url.pathname.startsWith("/admin/")) {
+        const adminKey = request.headers.get("x-admin-key") || "";
+        if (!env.ADMIN_API_KEY || adminKey !== env.ADMIN_API_KEY) {
+          return cors(env, json({ error: "unauthorized" }, 401));
+        }
+      }
       if (url.pathname === "/admin/team-orphans" && request.method === "GET") {
         return cors(env, await handleTeamOrphansDiagnostic(env));
       }
@@ -259,7 +270,7 @@ export default {
         return cors(env, await handleCallRing(request, env, ctx));
       }
       if (url.pathname === "/call-status" && request.method === "POST") {
-        return cors(env, await handleCallStatusUpdate(request, env));
+        return cors(env, await handleCallStatusUpdate(request, env, ctx));
       }
       if (url.pathname === "/daily-webhook" && request.method === "POST") {
         return cors(env, await handleDailyWebhook(request, env, ctx));
@@ -305,25 +316,40 @@ export default {
 
 // v1.177: walk R2 in pages, delete objects older than the retention window.
 // Returns count for log visibility (wrangler tail shows it).
+//
+// v1.273: also sweep customer-media/ (the v1.272 customer-attachment
+// uploads). Previously only dms/ was swept, so customer attachments
+// accumulated forever. Retention can be much shorter for customer media
+// — Periskope fetches our R2 URL within seconds of the send and re-hosts
+// on its own CDN; the webhook echo then overwrites the message's media
+// URL with the Periskope one. We keep 7 days as a generous buffer for
+// echo-failure cases where the bubble still points at R2.
+const CUSTOMER_MEDIA_RETENTION_DAYS = 7;
 async function cleanupOldDmMedia(env) {
   if (!env.DM_MEDIA) return 0;
-  const cutoffMs = Date.now() - DM_MEDIA_RETENTION_DAYS * 24 * 60 * 60 * 1000;
-  let cursor = undefined;
+  const sweeps = [
+    { prefix: "dms/", retentionDays: DM_MEDIA_RETENTION_DAYS },
+    { prefix: "customer-media/", retentionDays: CUSTOMER_MEDIA_RETENTION_DAYS },
+  ];
   let deleted = 0;
-  // Cap iterations as a safety belt — even at 1000 objects/page, 50 pages
-  // is 50k files which is way more than this app could ever have.
-  for (let i = 0; i < 50; i++) {
-    const listed = await env.DM_MEDIA.list({ prefix: "dms/", cursor, limit: 1000 });
-    const stale = listed.objects
-      .filter((o) => o.uploaded && o.uploaded.getTime() < cutoffMs)
-      .map((o) => o.key);
-    if (stale.length > 0) {
-      // R2 delete accepts an array.
-      await env.DM_MEDIA.delete(stale);
-      deleted += stale.length;
+  for (const { prefix, retentionDays } of sweeps) {
+    const cutoffMs = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+    let cursor = undefined;
+    // Cap iterations as a safety belt — even at 1000 objects/page, 50 pages
+    // is 50k files which is way more than this app could ever have.
+    for (let i = 0; i < 50; i++) {
+      const listed = await env.DM_MEDIA.list({ prefix, cursor, limit: 1000 });
+      const stale = listed.objects
+        .filter((o) => o.uploaded && o.uploaded.getTime() < cutoffMs)
+        .map((o) => o.key);
+      if (stale.length > 0) {
+        // R2 delete accepts an array.
+        await env.DM_MEDIA.delete(stale);
+        deleted += stale.length;
+      }
+      if (!listed.truncated) break;
+      cursor = listed.cursor;
     }
-    if (!listed.truncated) break;
-    cursor = listed.cursor;
   }
   if (deleted > 0) console.log(`cleanupOldDmMedia: deleted ${deleted} objects`);
   return deleted;
@@ -554,6 +580,11 @@ async function handleSend(request, env) {
   // Report) was Periskope-accepted but gateway-rejected back to us; this
   // log gives us the gateway's exact response shape for next time.
   if (!ok) {
+    // v1.273: also log media-payload shape so we can see whether the
+    // client sent filedata at all. The v1.272 R2 upload only kicks in
+    // when body.media.filedata is truthy — if iOS sent an empty
+    // string (e.g., FileSystem.readAsStringAsync returned "") the
+    // upload silently skips and the gateway then rejects with 422.
     console.error("send-not-ok", {
       gatewayHttpStatus: periskopeRes.status,
       gatewayResponse: periskopeJson,
@@ -561,6 +592,13 @@ async function handleSend(request, env) {
       hasMedia: !!body.media,
       mediaType: body.media?.type || body.media?.mimetype || null,
       mediaFileName: body.media?.filename || null,
+      hasFiledata: !!body.media?.filedata,
+      filedataLength:
+        typeof body.media?.filedata === "string"
+          ? body.media.filedata.length
+          : 0,
+      hasUrl: !!body.media?.url,
+      mediaKeys: body.media ? Object.keys(body.media) : [],
     });
   }
 
@@ -593,14 +631,19 @@ async function handleSend(request, env) {
     periskopeTrackBy: periskopeJson?.track_by || null,
     periskopeResp: periskopeJson || null,
   };
-  // Optimistic media metadata: filename/mime is known immediately even though
-  // the Periskope-hosted URL only arrives via the from_me=true webhook echo.
-  // The webhook will fill in media.url via the dedup-update path.
+  // Optimistic media metadata. v1.273: since v1.272 we upload base64 to
+  // R2 BEFORE the gateway call, so body.media.url is already set here —
+  // write it into the record so the sender's bubble renders the actual
+  // image/document immediately instead of a "📎 filename" placeholder.
+  // The from_me=true webhook echo still overwrites media with the
+  // Periskope-hosted URL a few seconds later (longer-lived than our R2
+  // copy, which the retention cron sweeps).
   if (body.media && (body.media.filename || body.media.mimetype)) {
     msgRecord.media = {
       fileName: body.media.filename || null,
       mimeType: body.media.mimetype || null,
     };
+    if (body.media.url) msgRecord.media.url = body.media.url;
     msgRecord.messageType = body.media.type || "media";
   }
   if (mentions.length > 0) {
@@ -3773,7 +3816,12 @@ async function sendCallDataPush(env, uid, data) {
 }
 
 // Recipient accepts / declines, or either side ends the call.
-async function handleCallStatusUpdate(request, env) {
+// v1.273: ctx param added — the v1.268 cancel-call push used ctx.waitUntil
+// but ctx was never threaded through, so every decline / missed /
+// cancel-before-accept threw ReferenceError AFTER the status patch but
+// BEFORE the cancel push. Net effect: recipient's phone kept ringing the
+// full 60s timeout even though the caller had hung up.
+async function handleCallStatusUpdate(request, env, ctx) {
   const body = await request.json().catch(() => ({}));
   const callId = String(body?.callId || "");
   const newStatus = String(body?.status || "");
