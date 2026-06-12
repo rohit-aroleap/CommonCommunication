@@ -30,6 +30,15 @@ service = "ferra-periskope-gateway"
 binding = "SELF"
 service = "common-communication"
 
+# v1.276: shared AI gateway. All Claude calls route through
+# ferra-ai-gateway for per-dashboard cost attribution, one-key rotation,
+# and rate limiting — same consolidation pattern as PERISKOPE_GATEWAY.
+# Service binding for the same 1042 reason as above. Auth is the
+# AI_GATEWAY_KEY secret (gk_cc_... key, x-gateway-key header).
+[[services]]
+binding = "AI_GATEWAY"
+service = "ferra-ai-gateway"
+
 # v1.176: R2 bucket for internal-DM attachments. Firebase Storage requires
 # the Blaze plan, so we keep that off and store DM media in R2 instead
 # (10 GB free forever, no egress fees). The bucket must exist on the CF

@@ -21,6 +21,29 @@ const ADMIN_EMAILS = new Set([
   "rohit@aroleap.com",
 ]);
 
+// v1.276: all Claude calls route through ferra-ai-gateway (per-dashboard
+// cost attribution + single key rotation + rate limiting) — the same
+// consolidation pattern as the Periskope gateway. Service binding, not
+// public URL (Cloudflare error 1042 blocks same-account worker-to-worker
+// over *.workers.dev; lesson learned in v1.240). `feature` tags the
+// callsite in the gateway's usage log. Body is the standard Anthropic
+// /v1/messages body; the gateway returns Anthropic's response verbatim,
+// so downstream parsing (.content, .usage) is unchanged.
+// CLAUDE_API_KEY stays set as the rollback path until a week of clean
+// gateway logs — see the migration doc in ferra-ai-gateway/prompts/.
+async function callClaude(env, feature, anthropicBody) {
+  const res = await env.AI_GATEWAY.fetch(new Request("https://internal/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-gateway-key": env.AI_GATEWAY_KEY,
+      "x-feature": feature,
+    },
+    body: JSON.stringify(anthropicBody),
+  }));
+  return res; // standard Anthropic response (status + JSON body)
+}
+
 // v1.177: R2 budget guards. These constants gate every DM upload so a
 // runaway bug or compromised account can't burn through the R2 free tier.
 // Tune freely — the per-user limit should comfortably cover real use
@@ -1531,19 +1554,11 @@ async function classifyTriage(env, body) {
 
   let claudeJson;
   try {
-    const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": env.CLAUDE_API_KEY,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 60,
-        system: TRIAGE_SYSTEM_PROMPT,
-        messages: [{ role: "user", content: trimmed }],
-      }),
+    const claudeRes = await callClaude(env, "triage", {
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 60,
+      system: TRIAGE_SYSTEM_PROMPT,
+      messages: [{ role: "user", content: trimmed }],
     });
     if (!claudeRes.ok) return null;
     claudeJson = await safeJson(claudeRes);
@@ -3108,18 +3123,10 @@ Duration: ${meeting.durationSec ? Math.round(meeting.durationSec / 60) + " minut
 Transcript:
 ${meeting.transcript}`;
 
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "x-api-key": env.CLAUDE_API_KEY,
-          "anthropic-version": "2023-06-01",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 1500,
-          messages: [{ role: "user", content: prompt }],
-        }),
+      const res = await callClaude(env, "meeting-summarize", {
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 1500,
+        messages: [{ role: "user", content: prompt }],
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -4458,19 +4465,11 @@ Use simple markdown bullets. Stay under 180 words. Never invent facts not presen
 
   const userPrompt = `${isGroup ? "Group chat" : "Customer"}: ${customerLabel}\nMessages shown: last ${recent.length} of ${all.length}${saCount ? ` · ${saCount} SA transcript${saCount === 1 ? "" : "s"}` : ""}${notesCount ? ` · ${notesCount} internal note${notesCount === 1 ? "" : "s"}` : ""}\n\n${saBlock}${notesBlock}Conversation (oldest first):\n\n${lines.join("\n")}`;
 
-  const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": env.CLAUDE_API_KEY,
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 1024,
-      system: systemPrompt,
-      messages: [{ role: "user", content: userPrompt }],
-    }),
+  const claudeRes = await callClaude(env, "summarize", {
+    model: "claude-haiku-4-5-20251001",
+    max_tokens: 1024,
+    system: systemPrompt,
+    messages: [{ role: "user", content: userPrompt }],
   });
   const claudeJson = await safeJson(claudeRes);
   if (!claudeRes.ok) {
@@ -4653,19 +4652,11 @@ ${lines.join("\n")}`;
   }
   turns.push({ role: "user", content: question });
 
-  const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": env.CLAUDE_API_KEY,
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 1024,
-      system: systemPrompt,
-      messages: turns,
-    }),
+  const claudeRes = await callClaude(env, "ai-query", {
+    model: "claude-haiku-4-5-20251001",
+    max_tokens: 1024,
+    system: systemPrompt,
+    messages: turns,
   });
   const claudeJson = await safeJson(claudeRes);
   if (!claudeRes.ok) {
@@ -4837,19 +4828,11 @@ async function handleAiInbox(request, env) {
   }
 
   // 4) Call Claude (Haiku — cheap, fast enough for this).
-  const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": env.CLAUDE_API_KEY,
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 2000,
-      system: systemPrompt,
-      messages: [{ role: "user", content: userMessage }],
-    }),
+  const claudeRes = await callClaude(env, "ai-inbox", {
+    model: "claude-haiku-4-5-20251001",
+    max_tokens: 2000,
+    system: systemPrompt,
+    messages: [{ role: "user", content: userMessage }],
   });
   const claudeJson = await safeJson(claudeRes);
   if (!claudeRes.ok) {
@@ -5041,19 +5024,11 @@ Rules:
 
   const userPrompt = `Customer: ${customerName}\nChat type: ${isGroup ? "group" : "1-on-1"}\n\nRecent conversation (oldest first):\n\n${lines.join("\n")}\n\nDraft the next reply the agent should send.`;
 
-  const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": env.CLAUDE_API_KEY,
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 400,
-      system: systemPrompt,
-      messages: [{ role: "user", content: userPrompt }],
-    }),
+  const claudeRes = await callClaude(env, "suggest-reply", {
+    model: "claude-haiku-4-5-20251001",
+    max_tokens: 400,
+    system: systemPrompt,
+    messages: [{ role: "user", content: userPrompt }],
   });
   const claudeJson = await safeJson(claudeRes);
   if (!claudeRes.ok) {
@@ -5142,19 +5117,11 @@ async function runCleanupPass(rawText, env) {
     return { text: rawText, raw: rawText, cleaned: false, reason: "claude_not_configured" };
   }
   try {
-    const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": env.CLAUDE_API_KEY,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 800,
-        system: VOICE_NOTE_CLEANUP_PROMPT,
-        messages: [{ role: "user", content: rawText }],
-      }),
+    const claudeRes = await callClaude(env, "cleanup", {
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 800,
+      system: VOICE_NOTE_CLEANUP_PROMPT,
+      messages: [{ role: "user", content: rawText }],
     });
     const claudeJson = await safeJson(claudeRes);
     if (!claudeRes.ok) {
