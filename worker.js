@@ -272,10 +272,19 @@ export default {
       // (90sLab/workout-calendar) — shared source of truth so both
       // dashboards always agree.
       if (url.pathname === "/cohort-list" && request.method === "GET") {
-        return cors(env, await handleCohortList(env));
+        return cors(env, await handleCohortList(env, ctx));
       }
       if (url.pathname === "/cohort-add" && request.method === "POST") {
         return cors(env, await handleCohortAdd(request, env, ctx));
+      }
+      // v1.275: force a full member-list reconcile from Periskope. Also
+      // fires organically from /cohort-list when data is >6h old; this
+      // endpoint exists for manual refresh + external cron services
+      // (the CF account is at its 5-cron limit, so cron-job.org or
+      // similar can POST here nightly for guaranteed freshness).
+      if (url.pathname === "/cohort-reconcile" && request.method === "POST") {
+        const summary = await reconcileCohortsFromPeriskope(env);
+        return cors(env, json(summary));
       }
       if (url.pathname === "/call-ring" && request.method === "POST") {
         return cors(env, await handleCallRing(request, env, ctx));
@@ -5184,12 +5193,30 @@ function cohortPhoneKey(phone) {
 }
 
 // GET — full registry for pickers + the "not in any cohort" badge.
-// Response: { ok, cohorts: [{ code, chatId, members: [{phone,name}] }],
-//             assignedPhoneKeys: ["9876543210", ...] }
-async function handleCohortList(env) {
-  const [toChat, members] = await Promise.all([
+// Response: { ok, cohorts: [{ code, chatId, members: [{phone,name,
+//             status,at}] }], assignedPhoneKeys: [...], lastSyncedAt }
+//
+// v1.275: member entries carry a membership status:
+//   "added"   — confirmed present in the WhatsApp group's member list
+//   "invited" — add was attempted but WhatsApp downgraded it to an
+//               invitation (customer's "who can add me to groups"
+//               privacy setting); they're NOT in the group until they
+//               tap Join. Invited entries still count as "assigned"
+//               (blocks adding them to a second group) until the
+//               reconcile expires them after 7 days without joining.
+// Older entries written before v1.275 have no status — treat as
+// "added" (they came from AA's Periskope syncs, which are confirmed).
+//
+// Freshness: if the last Periskope reconcile is older than 6h, kick
+// one in the background (ctx.waitUntil) — callers get the current
+// data immediately and the next load sees fresh truth. Manual /
+// external-cron refresh via POST /cohort-reconcile.
+const COHORT_RECONCILE_STALE_MS = 6 * 60 * 60 * 1000;
+async function handleCohortList(env, ctx) {
+  const [toChat, members, lastSyncedAt] = await Promise.all([
     fbGet(env, `${COHORT_FB_ROOT}/cohortToChat`),
     fbGet(env, `${COHORT_FB_ROOT}/cohortMembers`),
+    fbGet(env, `${COHORT_FB_ROOT}/lastPeriskopeSyncAt`),
   ]);
   const cohorts = [];
   const assigned = new Set();
@@ -5209,18 +5236,146 @@ async function handleCohortList(env) {
         members: list.map((m) => ({
           phone: m.phone || "",
           name: m.name || "",
+          status: m.status || "added",
+          at: m.at || null,
         })),
       });
     }
   }
   cohorts.sort((a, b) => a.code.localeCompare(b.code));
-  return json({ ok: true, cohorts, assignedPhoneKeys: [...assigned] });
+
+  const syncAge = Date.now() - (typeof lastSyncedAt === "number" ? lastSyncedAt : 0);
+  if (ctx && syncAge > COHORT_RECONCILE_STALE_MS) {
+    ctx.waitUntil(
+      reconcileCohortsFromPeriskope(env).catch((e) =>
+        console.warn("[cohort-reconcile] background run failed:", e),
+      ),
+    );
+  }
+
+  return json({
+    ok: true,
+    cohorts,
+    assignedPhoneKeys: [...assigned],
+    lastSyncedAt: typeof lastSyncedAt === "number" ? lastSyncedAt : null,
+  });
+}
+
+// v1.275: pull ground-truth member lists from Periskope for every cohort
+// group and rewrite the registry. Resolves the two drift sources the
+// event-driven registry can't see:
+//   - people added/removed directly in WhatsApp (or via AA without a
+//     registry write)
+//   - "invited" entries: flips to "added" once the person actually
+//     joined; expires the entry entirely after 7 days un-joined so the
+//     customer resurfaces as "no group" for follow-up.
+// Names: keeps the registry's existing name when present (usually the
+// Ferra name, nicer than WhatsApp contact_name), else falls back to
+// Periskope's contact_name.
+// Subrequest budget: 2 reads + N group-infos + 3 writes ≈ 42 for the
+// current 37 cohorts — under the 50/invocation Workers limit. If
+// cohorts ever exceed ~44, this needs batching.
+const COHORT_INVITE_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
+async function reconcileCohortsFromPeriskope(env) {
+  const [toChat, oldMembers] = await Promise.all([
+    fbGet(env, `${COHORT_FB_ROOT}/cohortToChat`),
+    fbGet(env, `${COHORT_FB_ROOT}/cohortMembers`),
+  ]);
+  if (!toChat || typeof toChat !== "object") {
+    return { ok: false, error: "no cohortToChat registry" };
+  }
+  const now = Date.now();
+  const newMembers = {};
+  const stats = { cohortsSynced: 0, cohortsFailed: 0, joined: 0, left: 0, expiredInvites: 0, keptInvites: 0 };
+
+  for (const [code, chatId] of Object.entries(toChat)) {
+    if (!chatId) continue;
+    let periMembers = null;
+    try {
+      const res = await env.PERISKOPE_GATEWAY.fetch(
+        new Request(
+          `https://gateway/group/info?chatId=${encodeURIComponent(chatId)}&dashboard=commoncomm`,
+          { method: "GET" },
+        ),
+      );
+      const j = await safeJson(res);
+      if (res.ok && j && typeof j.members === "object") {
+        periMembers = j.members;
+      }
+    } catch (e) {
+      /* fall through — keep old data for this cohort */
+    }
+    if (!periMembers) {
+      stats.cohortsFailed++;
+      continue; // keep the existing record for cohorts we couldn't fetch
+    }
+
+    const oldList = Array.isArray(oldMembers?.[code])
+      ? oldMembers[code].filter(Boolean)
+      : [];
+    const oldByKey = new Map(oldList.map((m) => [cohortPhoneKey(m.phone), m]));
+
+    const list = [];
+    const inGroupKeys = new Set();
+    for (const [memberId, m] of Object.entries(periMembers)) {
+      const phone = String(memberId).replace(/@c\.us$/i, "").replace(/\D/g, "");
+      const key = cohortPhoneKey(phone);
+      if (!key) continue;
+      inGroupKeys.add(key);
+      const old = oldByKey.get(key);
+      if (old && old.status === "invited") stats.joined++;
+      list.push({
+        phone,
+        name: old?.name || m?.contact_name || "",
+        status: "added",
+        at: old?.at || now,
+      });
+    }
+    // Carry forward un-joined invites (not yet expired). Confirmed-old
+    // entries missing from the group = left → dropped (counted).
+    for (const m of oldList) {
+      const key = cohortPhoneKey(m.phone);
+      if (inGroupKeys.has(key)) continue;
+      if (m.status === "invited") {
+        if (now - (m.at || 0) < COHORT_INVITE_EXPIRY_MS) {
+          list.push(m);
+          stats.keptInvites++;
+        } else {
+          stats.expiredInvites++;
+        }
+      } else {
+        stats.left++;
+      }
+    }
+    newMembers[code] = list;
+    stats.cohortsSynced++;
+  }
+
+  // Merge — like AA's refresh, only overwrite cohorts we successfully
+  // fetched; failures keep their previous record.
+  const merged = { ...(oldMembers || {}), ...newMembers };
+  await fbPut(env, `${COHORT_FB_ROOT}/cohortMembers`, merged);
+  await fbPut(env, `${COHORT_FB_ROOT}/lastPeriskopeSyncAt`, now);
+  await fbPush(env, `${ROOT}/cohortSyncLog`, { at: now, ...stats }).catch(() => {});
+  console.log("[cohort-reconcile]", JSON.stringify(stats));
+  return { ok: true, ...stats, lastSyncedAt: now };
 }
 
 // POST { cohortCode, members: [{phone, name}], byUid, byName }
 // Adds every listed phone to the cohort's WhatsApp group via the gateway,
-// then appends them to AA's cohortMembers record (skipping phones already
-// present). Audit-logged to commonComm/cohortAddLog.
+// then records them in AA's cohortMembers registry. Audit-logged to
+// commonComm/cohortAddLog.
+//
+// v1.275 hardening:
+//   1. CROSS-COHORT GUARD (server-side): phones already in ANY cohort —
+//      added or invited — are skipped and reported back, regardless of
+//      how stale the caller's cache was. Two trainers can't double-add.
+//   2. VERIFY-AFTER-ADD: WhatsApp silently downgrades a group-add to an
+//      invitation when the target's privacy setting is "my contacts" —
+//      they're not actually in the group until they tap Join. We fetch
+//      the group's member list right after the add: present → "added",
+//      absent → "invited". The UI renders the two states differently
+//      and the reconcile job later flips/expires invites.
 async function handleCohortAdd(request, env, ctx) {
   const body = await request.json().catch(() => ({}));
   const cohortCode = String(body?.cohortCode || "").trim();
@@ -5236,10 +5391,42 @@ async function handleCohortAdd(request, env, ctx) {
     .filter((m) => cohortPhoneKey(m.phone).length === 10);
   if (!cleaned.length) return json({ error: "no valid members" }, 400);
 
-  const toChat = await fbGet(env, `${COHORT_FB_ROOT}/cohortToChat`);
+  // Read the FULL registry (not just the target cohort) for the
+  // cross-cohort guard.
+  const [toChat, allMembers] = await Promise.all([
+    fbGet(env, `${COHORT_FB_ROOT}/cohortToChat`),
+    fbGet(env, `${COHORT_FB_ROOT}/cohortMembers`),
+  ]);
   const chatId = toChat?.[cohortCode];
   if (!chatId) {
     return json({ error: `unknown cohort: ${cohortCode}` }, 404);
+  }
+
+  // Cross-cohort guard: map every assigned phone key → its cohort+status.
+  const assignedWhere = new Map();
+  for (const [code, list] of Object.entries(allMembers || {})) {
+    if (!Array.isArray(list)) continue;
+    for (const m of list) {
+      if (!m) continue;
+      const k = cohortPhoneKey(m.phone);
+      if (k && !assignedWhere.has(k)) {
+        assignedWhere.set(k, { cohort: code, status: m.status || "added" });
+      }
+    }
+  }
+  const toAdd = [];
+  const skipped = [];
+  for (const m of cleaned) {
+    const k = cohortPhoneKey(m.phone);
+    const where = assignedWhere.get(k);
+    if (where) {
+      skipped.push({ ...m, inCohort: where.cohort, status: where.status });
+    } else {
+      toAdd.push(m);
+    }
+  }
+  if (!toAdd.length) {
+    return json({ ok: true, cohortCode, chatId, added: [], invited: [], skipped });
   }
 
   // WhatsApp group add via the gateway (service binding — same path the
@@ -5250,7 +5437,7 @@ async function handleCohortAdd(request, env, ctx) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         chatId,
-        phones: cleaned.map((m) => m.phone),
+        phones: toAdd.map((m) => m.phone),
         dashboard: "commoncomm",
       }),
     }),
@@ -5272,35 +5459,63 @@ async function handleCohortAdd(request, env, ctx) {
     );
   }
 
-  // Append to AA's member registry, skipping anyone already in this
-  // cohort. Read-modify-write — races are unlikely (adds are rare,
-  // human-paced) and a dup entry is cosmetic, not breaking.
-  const existing = await fbGet(env, `${COHORT_FB_ROOT}/cohortMembers/${cohortCode}`);
-  const list = Array.isArray(existing) ? existing.filter(Boolean) : [];
-  const have = new Set(list.map((m) => cohortPhoneKey(m.phone)));
+  // Verify against the group's actual member list. If the fetch fails we
+  // conservatively mark everyone "invited" — the reconcile will promote
+  // them to "added" once it can see them in the group.
+  const verifiedKeys = new Set();
+  try {
+    const infoRes = await env.PERISKOPE_GATEWAY.fetch(
+      new Request(
+        `https://gateway/group/info?chatId=${encodeURIComponent(chatId)}&dashboard=commoncomm`,
+        { method: "GET" },
+      ),
+    );
+    const infoJson = await safeJson(infoRes);
+    if (infoRes.ok && infoJson && typeof infoJson.members === "object") {
+      for (const memberId of Object.keys(infoJson.members)) {
+        const k = cohortPhoneKey(memberId.replace(/@c\.us$/i, ""));
+        if (k) verifiedKeys.add(k);
+      }
+    }
+  } catch {
+    /* verify unavailable — treat as invited; reconcile self-heals */
+  }
+
+  const now = Date.now();
+  const list = Array.isArray(allMembers?.[cohortCode])
+    ? allMembers[cohortCode].filter(Boolean)
+    : [];
   const added = [];
-  for (const m of cleaned) {
+  const invited = [];
+  for (const m of toAdd) {
     const k = cohortPhoneKey(m.phone);
-    if (have.has(k)) continue;
-    have.add(k);
-    list.push({ phone: m.phone, name: m.name });
-    added.push(m);
+    const isIn = verifiedKeys.has(k);
+    list.push({
+      phone: m.phone,
+      name: m.name,
+      status: isIn ? "added" : "invited",
+      at: now,
+      by: byName || byUid || null,
+    });
+    (isIn ? added : invited).push(m);
   }
   await fbPut(env, `${COHORT_FB_ROOT}/cohortMembers/${cohortCode}`, list);
 
-  // Audit trail — who added whom, from where.
+  // Audit trail — who added whom, from where, with outcome.
   ctx.waitUntil(
     fbPush(env, `${ROOT}/cohortAddLog`, {
       cohortCode,
       chatId,
-      members: cleaned,
+      added,
+      invited,
+      skipped,
       byUid,
       byName,
-      at: Date.now(),
+      at: now,
     }).then(() => {}).catch(() => {}),
   );
 
-  return json({ ok: true, cohortCode, chatId, added, total: list.length });
+  return json({ ok: true, cohortCode, chatId, added, invited, skipped });
 }
 
 // ---------- /admin/team-orphans (diagnostic) ----------

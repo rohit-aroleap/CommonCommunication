@@ -1074,7 +1074,32 @@ function DailyGroupSection({
             setBusy(false);
             if (!res.ok) {
               Alert.alert("Couldn't add to group", res.error || "Unknown error");
+              return;
             }
+            // v1.275: per-member outcome. "invited" means WhatsApp sent
+            // them an invitation instead of adding directly (their
+            // privacy setting) — they must tap Join in WhatsApp. Make
+            // that visible so the trainer can tell the customer to
+            // check their WhatsApp.
+            const label = (m: CohortMember) =>
+              m.name || formatPhoneDisplay(m.phone);
+            const parts: string[] = [];
+            if (res.added?.length) {
+              parts.push(`✓ Added: ${res.added.map(label).join(", ")}`);
+            }
+            if (res.invited?.length) {
+              parts.push(
+                `⏳ Invitation sent (they must tap Join in WhatsApp): ${res.invited.map(label).join(", ")}`,
+              );
+            }
+            if (res.skipped?.length) {
+              parts.push(
+                `Skipped (already in a group): ${res.skipped
+                  .map((m) => `${label(m)} → ${m.inCohort || "?"}`)
+                  .join(", ")}`,
+              );
+            }
+            Alert.alert(`${selected.code} updated`, parts.join("\n\n"));
           },
         },
       ],
@@ -1087,7 +1112,17 @@ function DailyGroupSection({
       {!loaded ? (
         <ActivityIndicator size="small" style={{ marginTop: 8 }} />
       ) : currentCohort ? (
-        <Text style={styles.cohortInChip}>✓ In daily group {currentCohort}</Text>
+        currentCohort.status === "invited" ? (
+          <Text style={styles.cohortInvitedChip}>
+            ⏳ Invited to {currentCohort.code} — hasn't joined yet. Ask them
+            to open WhatsApp and tap Join. The invite expires after 7 days,
+            after which they can be re-added.
+          </Text>
+        ) : (
+          <Text style={styles.cohortInChip}>
+            ✓ In daily group {currentCohort.code}
+          </Text>
+        )
       ) : (
         <>
           <View style={styles.cohortRow}>
@@ -2222,6 +2257,13 @@ function makeStyles(colors: Colors) {
     fontSize: 14,
     color: "#16a34a",
     fontWeight: "600",
+  },
+  // v1.275: invited-but-not-joined state — amber, explains the pending
+  // WhatsApp invitation.
+  cohortInvitedChip: {
+    fontSize: 13,
+    color: "#b45309",
+    lineHeight: 19,
   },
   cohortRow: {
     flexDirection: "row",

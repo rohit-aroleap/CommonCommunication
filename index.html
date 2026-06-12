@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.274</title>
+<title>CommonCommunication v1.275</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2762,7 +2762,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.274";
+const APP_VERSION = "v1.275";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -8195,6 +8195,9 @@ async function fetchCohortRegistry(force) {
     cohortRegistryCache = {
       cohorts: Array.isArray(j.cohorts) ? j.cohorts : [],
       assignedKeys: new Set(Array.isArray(j.assignedPhoneKeys) ? j.assignedPhoneKeys : []),
+      // v1.275: when the worker last reconciled member lists from
+      // Periskope. Shown in the panel so trainers know data freshness.
+      lastSyncedAt: typeof j.lastSyncedAt === "number" ? j.lastSyncedAt : null,
     };
     cohortRegistryFetchedAt = Date.now();
     // Chat-list "no group" pills depend on this set — refresh the list
@@ -8213,6 +8216,20 @@ function phoneInAnyCohort(phone) {
   const key = cohortKeyOfPhone(phone);
   if (key && cohortRegistryCache?.assignedKeys?.has(key)) return true;
   return !!phoneToDailyGroupIdx.get(normalizePhone(phone));
+}
+// v1.275: registry entry lookup — distinguishes confirmed members from
+// pending invites. Returns { code, status, at } or null.
+function cohortEntryForPhone(phone) {
+  const key = cohortKeyOfPhone(phone);
+  if (!key || !cohortRegistryCache) return null;
+  for (const c of cohortRegistryCache.cohorts) {
+    for (const m of c.members || []) {
+      if (cohortKeyOfPhone(m.phone) === key) {
+        return { code: c.code, status: m.status === "invited" ? "invited" : "added", at: m.at || null };
+      }
+    }
+  }
+  return null;
 }
 // Active-member count for the picker labels — "active" = subscription
 // status ACTIVE per the global phoneToStatus index.
@@ -8235,6 +8252,24 @@ async function renderDailyGroupAddPanel(phone) {
   const panelNow = document.getElementById("dailyGroupAddPanel");
   if (!panelNow) return;
   if (!reg || !reg.cohorts.length) { panelNow.innerHTML = ""; return; }
+  // v1.275: pending invite — surface it instead of silently hiding the
+  // panel. The trainer needs to know the customer hasn't actually
+  // joined yet (WhatsApp downgraded the add to an invitation because
+  // of the customer's privacy settings).
+  const regEntry = cohortEntryForPhone(phone);
+  if (regEntry && regEntry.status === "invited") {
+    const ageDays = regEntry.at ? Math.floor((Date.now() - regEntry.at) / 86400000) : null;
+    panelNow.innerHTML = `
+      <div class="info-section">
+        <h4>📅 Daily WhatsApp group</h4>
+        <div style="font-size:12px; color:#b45309; line-height:1.5;">
+          ⏳ Invited to <b>${escapeHtml(regEntry.code)}</b>${ageDays != null ? ` ${ageDays}d ago` : ""} — hasn't joined yet.
+          Ask them to open WhatsApp and tap <b>Join</b>. The invite expires after
+          7 days, after which they show as "no group" again and can be re-added.
+        </div>
+      </div>`;
+    return;
+  }
   if (phoneInAnyCohort(phone)) { panelNow.innerHTML = ""; return; }
 
   // Build the add list: this customer + subscription co-members not
@@ -8265,9 +8300,14 @@ async function renderDailyGroupAddPanel(phone) {
     .map((c, i) => `<option value="${escapeHtml(c.code)}" ${i === 0 ? "selected" : ""}>${escapeHtml(c.code)} · ${cohortActiveCountWeb(c)} active</option>`)
     .join("");
   const namesLabel = addList.map((m) => m.name || m.phone).join(", ");
+  // v1.275: freshness hint — when the worker last reconciled member
+  // lists from Periskope ground truth.
+  const syncedLabel = reg.lastSyncedAt
+    ? `synced ${Math.max(0, Math.round((Date.now() - reg.lastSyncedAt) / 3600000))}h ago`
+    : "never synced from Periskope yet";
   panelNow.innerHTML = `
     <div class="info-section">
-      <h4>📅 Daily WhatsApp group</h4>
+      <h4>📅 Daily WhatsApp group <span style="font-weight:400; font-size:10px; color:var(--muted);">· ${escapeHtml(syncedLabel)}</span></h4>
       <div style="display:flex; gap:6px; align-items:center;">
         <select id="dailyGroupSelect" style="flex:1; padding:6px 8px; border:1px solid var(--border); border-radius:6px; background:var(--panel); color:var(--text); font-size:13px;">${options}</select>
         <button class="btn btn-primary" id="dailyGroupAddBtn" style="font-size:12px; padding:6px 12px;">＋ Add${addList.length > 1 ? " " + addList.length : ""}</button>
@@ -8302,10 +8342,19 @@ async function renderDailyGroupAddPanel(phone) {
         return;
       }
       await fetchCohortRegistry(true);
-      statusEl.textContent = `✓ Added to ${code}`;
-      // Re-render the drawer so the panel collapses into the "in group"
-      // pill state.
-      setTimeout(() => { if (infoDrawer.classList.contains("open")) renderInfoDrawer(); }, 1200);
+      // v1.275: per-member outcome — "invited" means WhatsApp sent an
+      // invitation instead of adding directly (their privacy setting);
+      // the customer must tap Join. Make that explicit.
+      const lbl = (m) => m.name || m.phone;
+      const bits = [];
+      if (j.added?.length) bits.push(`✓ Added: ${j.added.map(lbl).join(", ")}`);
+      if (j.invited?.length) bits.push(`⏳ Invite sent (must tap Join in WhatsApp): ${j.invited.map(lbl).join(", ")}`);
+      if (j.skipped?.length) bits.push(`Skipped (already in a group): ${j.skipped.map((m) => `${lbl(m)} → ${m.inCohort || "?"}`).join(", ")}`);
+      statusEl.textContent = bits.join(" · ") || `✓ ${code} updated`;
+      // Re-render the drawer after a longer pause so the trainer can
+      // read the outcome, then the panel collapses into its steady
+      // state (in-group = hidden, invited = amber notice).
+      setTimeout(() => { if (infoDrawer.classList.contains("open")) renderInfoDrawer(); }, 4000);
     } catch (e) {
       statusEl.textContent = "Failed: " + (e?.message || e);
       btn.disabled = false;

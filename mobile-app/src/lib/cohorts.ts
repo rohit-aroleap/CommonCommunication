@@ -11,6 +11,14 @@ import { WORKER_URL } from "@/config";
 export interface CohortMember {
   phone: string;
   name: string;
+  // v1.275: membership status. "added" = confirmed in the WhatsApp
+  // group's member list; "invited" = WhatsApp downgraded the add to an
+  // invitation (target's privacy setting) — they're not in the group
+  // until they tap Join. The worker's reconcile flips invited → added
+  // when they join, or expires the entry after 7 days. Entries written
+  // before v1.275 have no status — treat as "added".
+  status?: "added" | "invited";
+  at?: number | null;
 }
 
 export interface Cohort {
@@ -51,12 +59,24 @@ export async function fetchCohortList(): Promise<CohortList | null> {
   }
 }
 
+export interface CohortAddResult {
+  ok: boolean;
+  error?: string;
+  // v1.275: per-member outcome from the worker. added = confirmed in
+  // the group; invited = WhatsApp sent them an invitation instead
+  // (pending until they tap Join); skipped = already in some cohort
+  // (cross-cohort guard), with which one.
+  added?: CohortMember[];
+  invited?: CohortMember[];
+  skipped?: Array<CohortMember & { inCohort?: string; status?: string }>;
+}
+
 export async function cohortAdd(body: {
   cohortCode: string;
   members: CohortMember[];
   byUid: string;
   byName: string;
-}): Promise<{ ok: boolean; error?: string }> {
+}): Promise<CohortAddResult> {
   try {
     const res = await fetch(`${WORKER_URL}/cohort-add`, {
       method: "POST",
@@ -70,23 +90,35 @@ export async function cohortAdd(body: {
         error: j?.detail || j?.error || `HTTP ${res.status}`,
       };
     }
-    return { ok: true };
+    return {
+      ok: true,
+      added: Array.isArray(j.added) ? j.added : [],
+      invited: Array.isArray(j.invited) ? j.invited : [],
+      skipped: Array.isArray(j.skipped) ? j.skipped : [],
+    };
   } catch (e) {
     return { ok: false, error: String((e as Error)?.message || e) };
   }
 }
 
 // Which cohort (if any) is this phone already in? Returns the cohort
-// code or null. Linear scan — cohort count is small (dozens).
+// code + membership status, or null. Linear scan — cohort count is
+// small (dozens).
 export function findCohortForPhone(
   cohorts: Cohort[],
   phone: string,
-): string | null {
+): { code: string; status: "added" | "invited"; at: number | null } | null {
   const key = cohortPhoneKey(phone);
   if (!key) return null;
   for (const c of cohorts) {
     for (const m of c.members) {
-      if (cohortPhoneKey(m.phone) === key) return c.code;
+      if (cohortPhoneKey(m.phone) === key) {
+        return {
+          code: c.code,
+          status: m.status === "invited" ? "invited" : "added",
+          at: m.at ?? null,
+        };
+      }
     }
   }
   return null;
