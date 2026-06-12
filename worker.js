@@ -266,6 +266,17 @@ export default {
       if (url.pathname === "/call-create-room" && request.method === "POST") {
         return cors(env, await handleCallCreateRoom(request, env));
       }
+      // v1.274: daily-cohort WhatsApp group management (mirrors the
+      // Achievement-analysis dashboard's add-to-cohort flow, but reachable
+      // from the trainer's phone). Cohort registry lives in AA's subtree
+      // (90sLab/workout-calendar) — shared source of truth so both
+      // dashboards always agree.
+      if (url.pathname === "/cohort-list" && request.method === "GET") {
+        return cors(env, await handleCohortList(env));
+      }
+      if (url.pathname === "/cohort-add" && request.method === "POST") {
+        return cors(env, await handleCohortAdd(request, env, ctx));
+      }
       if (url.pathname === "/call-ring" && request.method === "POST") {
         return cors(env, await handleCallRing(request, env, ctx));
       }
@@ -5148,6 +5159,148 @@ async function runCleanupPass(rawText, env) {
   } catch (e) {
     return { text: rawText, raw: rawText, cleaned: false, reason: "claude_network_error", details: String(e?.message || e) };
   }
+}
+
+// ---------- /cohort-list + /cohort-add (daily WhatsApp groups) ----------
+// v1.274: lets trainers add customers to the daily-workout cohort groups
+// from CommonComm (phone or web) instead of only via the Achievement-
+// analysis desktop dashboard. The cohort registry is AA's existing
+// Firebase subtree:
+//   90sLab/workout-calendar/cohortToChat   — code (C038) → group chat_id
+//   90sLab/workout-calendar/cohortMembers  — code → [{ phone, name }]
+// We read AND write that subtree (not a copy) so AA and CommonComm can
+// never drift. The actual WhatsApp group add goes through the gateway's
+// existing /group/add, same as AA — the gateway's Periskope account must
+// be an admin of the target group (already true for all cohort groups).
+
+const COHORT_FB_ROOT = "90sLab/workout-calendar";
+
+// Last-10-digits key — same convention AA uses for phone matching, so a
+// number stored as "+91 98765 43210" and one stored as "919876543210"
+// collapse onto the same key.
+function cohortPhoneKey(phone) {
+  const digits = String(phone || "").replace(/\D/g, "");
+  return digits.slice(-10);
+}
+
+// GET — full registry for pickers + the "not in any cohort" badge.
+// Response: { ok, cohorts: [{ code, chatId, members: [{phone,name}] }],
+//             assignedPhoneKeys: ["9876543210", ...] }
+async function handleCohortList(env) {
+  const [toChat, members] = await Promise.all([
+    fbGet(env, `${COHORT_FB_ROOT}/cohortToChat`),
+    fbGet(env, `${COHORT_FB_ROOT}/cohortMembers`),
+  ]);
+  const cohorts = [];
+  const assigned = new Set();
+  if (toChat && typeof toChat === "object") {
+    for (const [code, chatId] of Object.entries(toChat)) {
+      if (!chatId) continue;
+      const list = Array.isArray(members?.[code])
+        ? members[code].filter(Boolean)
+        : [];
+      for (const m of list) {
+        const k = cohortPhoneKey(m.phone);
+        if (k) assigned.add(k);
+      }
+      cohorts.push({
+        code,
+        chatId,
+        members: list.map((m) => ({
+          phone: m.phone || "",
+          name: m.name || "",
+        })),
+      });
+    }
+  }
+  cohorts.sort((a, b) => a.code.localeCompare(b.code));
+  return json({ ok: true, cohorts, assignedPhoneKeys: [...assigned] });
+}
+
+// POST { cohortCode, members: [{phone, name}], byUid, byName }
+// Adds every listed phone to the cohort's WhatsApp group via the gateway,
+// then appends them to AA's cohortMembers record (skipping phones already
+// present). Audit-logged to commonComm/cohortAddLog.
+async function handleCohortAdd(request, env, ctx) {
+  const body = await request.json().catch(() => ({}));
+  const cohortCode = String(body?.cohortCode || "").trim();
+  const reqMembers = Array.isArray(body?.members) ? body.members : [];
+  const byUid = String(body?.byUid || "");
+  const byName = String(body?.byName || "");
+  if (!cohortCode) return json({ error: "missing cohortCode" }, 400);
+  const cleaned = reqMembers
+    .map((m) => ({
+      phone: String(m?.phone || "").trim(),
+      name: String(m?.name || "").trim(),
+    }))
+    .filter((m) => cohortPhoneKey(m.phone).length === 10);
+  if (!cleaned.length) return json({ error: "no valid members" }, 400);
+
+  const toChat = await fbGet(env, `${COHORT_FB_ROOT}/cohortToChat`);
+  const chatId = toChat?.[cohortCode];
+  if (!chatId) {
+    return json({ error: `unknown cohort: ${cohortCode}` }, 404);
+  }
+
+  // WhatsApp group add via the gateway (service binding — same path the
+  // AA dashboard uses, so permissions/behavior are identical).
+  const gwRes = await env.PERISKOPE_GATEWAY.fetch(
+    new Request("https://gateway/group/add", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chatId,
+        phones: cleaned.map((m) => m.phone),
+        dashboard: "commoncomm",
+      }),
+    }),
+  );
+  const gwJson = await safeJson(gwRes);
+  if (!gwRes.ok) {
+    console.error("cohort-add-failed", {
+      cohortCode,
+      chatId,
+      gatewayHttpStatus: gwRes.status,
+      gatewayResponse: gwJson,
+    });
+    return json(
+      {
+        error: "group add failed",
+        detail: gwJson?.error || gwJson?.detail || `gateway ${gwRes.status}`,
+      },
+      502,
+    );
+  }
+
+  // Append to AA's member registry, skipping anyone already in this
+  // cohort. Read-modify-write — races are unlikely (adds are rare,
+  // human-paced) and a dup entry is cosmetic, not breaking.
+  const existing = await fbGet(env, `${COHORT_FB_ROOT}/cohortMembers/${cohortCode}`);
+  const list = Array.isArray(existing) ? existing.filter(Boolean) : [];
+  const have = new Set(list.map((m) => cohortPhoneKey(m.phone)));
+  const added = [];
+  for (const m of cleaned) {
+    const k = cohortPhoneKey(m.phone);
+    if (have.has(k)) continue;
+    have.add(k);
+    list.push({ phone: m.phone, name: m.name });
+    added.push(m);
+  }
+  await fbPut(env, `${COHORT_FB_ROOT}/cohortMembers/${cohortCode}`, list);
+
+  // Audit trail — who added whom, from where.
+  ctx.waitUntil(
+    fbPush(env, `${ROOT}/cohortAddLog`, {
+      cohortCode,
+      chatId,
+      members: cleaned,
+      byUid,
+      byName,
+      at: Date.now(),
+    }).then(() => {}).catch(() => {}),
+  );
+
+  return json({ ok: true, cohortCode, chatId, added, total: list.length });
 }
 
 // ---------- /admin/team-orphans (diagnostic) ----------

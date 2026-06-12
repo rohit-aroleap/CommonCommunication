@@ -15,7 +15,19 @@
 // expo-notifications' default foreground/tap handling — no special
 // background path needed.
 
-import * as TaskManager from "expo-task-manager";
+// v1.274 OTA-safety: expo-task-manager is a NATIVE module added in the
+// v1.268 build — pre-v1.268 binaries don't have it, and this file runs
+// at module load (imported from index.ts). Lazy require so an OTA
+// bundle doesn't crash older binaries at startup; on those binaries the
+// background ring simply stays unavailable (their pre-v1.268 behavior).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let TaskManager: any = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  TaskManager = require("expo-task-manager");
+} catch {
+  /* pre-v1.268 binary */
+}
 import * as Notifications from "expo-notifications";
 import { displayIncomingCall, dismissIncomingCall } from "./incomingCall";
 
@@ -25,7 +37,7 @@ import { displayIncomingCall, dismissIncomingCall } from "./incomingCall";
 // expo-notifications, not one we made up.
 const BACKGROUND_NOTIFICATION_TASK = "EXPO_BACKGROUND_NOTIFICATION_TASK";
 
-TaskManager.defineTask(
+TaskManager?.defineTask?.(
   BACKGROUND_NOTIFICATION_TASK,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async ({ data, error }: { data: any; error: unknown }) => {
@@ -89,6 +101,9 @@ TaskManager.defineTask(
 let registered = false;
 export async function registerBackgroundNotificationTaskAsync(): Promise<void> {
   if (registered) return;
+  // v1.274: skip on pre-v1.268 binaries — the task was never defined
+  // (TaskManager absent), so registering it would just error.
+  if (!TaskManager) return;
   try {
     await Notifications.registerTaskAsync(BACKGROUND_NOTIFICATION_TASK);
     registered = true;

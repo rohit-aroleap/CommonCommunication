@@ -10,6 +10,7 @@ import { useAppData, isDailyGroup } from "@/data/AppDataContext";
 import { useAuth } from "@/auth/AuthContext";
 import { resolveDisplayName } from "@/lib/displayName";
 import { ChatRowItem } from "@/components/ChatRow";
+import { cohortPhoneKey, useCohorts } from "@/lib/cohorts";
 import { FilterBar } from "@/components/FilterBar";
 import { AddCustomerModal } from "@/components/AddCustomerModal";
 import { DAILY_SENTINEL } from "@/types";
@@ -61,6 +62,9 @@ export function ChatsScreen() {
   const [stageFilter, setStageFilter] = useState("");
   const [search, setSearch] = useState("");
   const [favoritesOnly, setFavoritesOnly] = useState(false);
+  // v1.274: daily-cohort registry — powers the "no group" pill on rows.
+  const { assignedPhoneKeys: cohortAssignedKeys, loaded: cohortsLoaded } =
+    useCohorts();
   // v1.196: limited-trainer "Add customer" modal state.
   const [addCustomerOpen, setAddCustomerOpen] = useState(false);
   const styles = useStyles(makeStyles);
@@ -388,6 +392,15 @@ export function ChatsScreen() {
           const stage = tag ? FERRA_TAG_STAGE[tag] ?? null : null;
           const status =
             ferraIndex.phoneToStatus[normalizeFerraPhone(r.phone)] ?? null;
+          // v1.274: "no group" pill — ACTIVE Ferra customer with no
+          // daily-cohort membership yet. Only meaningful once the
+          // cohort registry has loaded; before that, show nothing
+          // rather than flashing the pill on everyone.
+          const noCohort =
+            cohortsLoaded &&
+            r.chatType !== "group" &&
+            status === "ACTIVE" &&
+            !cohortAssignedKeys.has(cohortPhoneKey(r.phone));
           const openTickets = Object.values(tickets).filter(
             (t) =>
               t &&
@@ -417,6 +430,7 @@ export function ChatsScreen() {
               unread={unread}
               isFavorite={isFavorite}
               suggestPin={suggestPin}
+              noCohort={noCohort}
               onPress={() =>
                 navigation.navigate("Thread", {
                   chatKey: r.chatKey,

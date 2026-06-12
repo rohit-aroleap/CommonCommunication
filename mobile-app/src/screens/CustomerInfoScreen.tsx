@@ -54,6 +54,20 @@ import {
   type SaQueueItem,
 } from "@/lib/saTranscriptionQueue";
 import { FERRA_TAG_STAGE } from "@/config";
+// v1.274: daily-workout cohort groups — add this customer (plus their
+// subscription co-members) to a cohort WhatsApp group from the phone.
+import {
+  cohortActiveCount,
+  cohortAdd,
+  cohortPhoneKey,
+  findCohortForPhone,
+  pickDefaultCohort,
+  refreshCohorts,
+  useCohorts,
+  type Cohort,
+  type CohortMember,
+} from "@/lib/cohorts";
+import type { FerraIndex } from "@/lib/ferra";
 import type { FerraSubscription, Ticket } from "@/types";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "./types";
@@ -498,6 +512,20 @@ export function CustomerInfoScreen({ route, navigation }: Props) {
         </View>
       )}
 
+      {/* v1.274: daily-workout WhatsApp group. Shows the cohort this
+          customer is already in, or a picker + Add button. Adding pulls
+          in everyone on the same subscription too (owner + members)
+          so families land in the same group. Mirrors the Achievement-
+          analysis dashboard's cohort manager, sharing its registry. */}
+      {!isGroup && (
+        <DailyGroupSection
+          phone={phone}
+          customerName={displayName}
+          mySubs={mySubs}
+          ferraIndex={ferraIndex}
+        />
+      )}
+
       {!isGroup && audioMod && (
         <View style={styles.section}>
           <View style={styles.notesHeader}>
@@ -931,6 +959,211 @@ function Chip({ label, accent }: { label: string; accent?: boolean }) {
 // is on. Shows the plan tier, holder vs member badge, current step,
 // and a tappable list of OTHER members. Mirrors the web v1.242 layout
 // in feature parity if not pixel-perfect.
+// v1.274: "Daily WhatsApp group" panel. Three states:
+//   1. Loading registry        → spinner row
+//   2. Customer in a cohort    → static chip ("📅 In daily group C034")
+//   3. Not in any cohort       → cohort picker (default = fewest ACTIVE
+//      members, same heuristic as the AA dashboard) + Add button.
+// Add pulls in subscription co-members: the popup lists exactly who
+// will be added (self + co-members not already in a cohort), and the
+// worker adds them all to the group in one gateway call.
+function DailyGroupSection({
+  phone,
+  customerName,
+  mySubs,
+  ferraIndex,
+}: {
+  phone: string;
+  customerName: string;
+  mySubs: FerraSubscription[];
+  ferraIndex: FerraIndex;
+}) {
+  const styles = useStyles(makeStyles);
+  const { user } = useAuth();
+  const { cohorts, assignedPhoneKeys, loaded } = useCohorts();
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [selectedCode, setSelectedCode] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  // ACTIVE check by last-10 phone key — drives the "· N active" labels
+  // and the default-cohort pick. phoneToStatus is keyed by canonical
+  // 12-digit phone, so re-key through the index entries once.
+  const activeKeySet = useMemo(() => {
+    const out = new Set<string>();
+    for (const [p, status] of Object.entries(ferraIndex.phoneToStatus)) {
+      if (status === "ACTIVE") out.add(cohortPhoneKey(p));
+    }
+    return out;
+  }, [ferraIndex]);
+  const isActiveKey = (k: string) => activeKeySet.has(k);
+
+  const currentCohort = useMemo(
+    () => findCohortForPhone(cohorts, phone),
+    [cohorts, phone],
+  );
+
+  // Everyone to add: this customer + subscription co-members, deduped,
+  // minus anyone already in a cohort.
+  const addList = useMemo<CohortMember[]>(() => {
+    const seen = new Set<string>();
+    const out: CohortMember[] = [];
+    const push = (p: string, n: string) => {
+      const k = cohortPhoneKey(p);
+      if (!k || seen.has(k) || assignedPhoneKeys.has(k)) return;
+      seen.add(k);
+      out.push({ phone: p, name: n });
+    };
+    push(phone, customerName);
+    for (const sub of mySubs) {
+      if (sub.customerPhone) push(sub.customerPhone, sub.customerName || "");
+      const phones = sub.memberPhones || [];
+      const names = sub.memberNames || [];
+      for (let i = 0; i < phones.length; i++) {
+        push(phones[i], names[i] || "");
+      }
+    }
+    return out;
+  }, [phone, customerName, mySubs, assignedPhoneKeys]);
+
+  const selected: Cohort | null = useMemo(() => {
+    if (selectedCode) {
+      return cohorts.find((c) => c.code === selectedCode) || null;
+    }
+    return pickDefaultCohort(cohorts, isActiveKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCode, cohorts, activeKeySet]);
+
+  const sortedCohorts = useMemo(
+    () =>
+      [...cohorts].sort(
+        (a, b) =>
+          cohortActiveCount(a, isActiveKey) - cohortActiveCount(b, isActiveKey),
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [cohorts, activeKeySet],
+  );
+
+  async function handleAdd() {
+    if (!selected || !user || busy) return;
+    if (!addList.length) {
+      Alert.alert(
+        "Already in a group",
+        "Everyone on this subscription is already in a daily group.",
+      );
+      return;
+    }
+    const names = addList
+      .map((m) => m.name || formatPhoneDisplay(m.phone))
+      .join(", ");
+    Alert.alert(
+      `Add to ${selected.code}?`,
+      `Adding ${names} to the ${selected.code} daily WhatsApp group.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Add",
+          onPress: async () => {
+            setBusy(true);
+            const res = await cohortAdd({
+              cohortCode: selected.code,
+              members: addList,
+              byUid: user.uid,
+              byName: user.displayName || user.email || "",
+            });
+            await refreshCohorts();
+            setBusy(false);
+            if (!res.ok) {
+              Alert.alert("Couldn't add to group", res.error || "Unknown error");
+            }
+          },
+        },
+      ],
+    );
+  }
+
+  return (
+    <View style={styles.section}>
+      <Text style={styles.sectionTitle}>📅 DAILY WHATSAPP GROUP</Text>
+      {!loaded ? (
+        <ActivityIndicator size="small" style={{ marginTop: 8 }} />
+      ) : currentCohort ? (
+        <Text style={styles.cohortInChip}>✓ In daily group {currentCohort}</Text>
+      ) : (
+        <>
+          <View style={styles.cohortRow}>
+            <TouchableOpacity
+              style={styles.cohortPickerBtn}
+              onPress={() => setPickerOpen(true)}
+              disabled={busy}
+            >
+              <Text style={styles.cohortPickerTxt}>
+                {selected
+                  ? `${selected.code} · ${cohortActiveCount(selected, isActiveKey)} active`
+                  : "No groups found"}{" "}
+                ▾
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.cohortAddBtn, busy && { opacity: 0.5 }]}
+              onPress={handleAdd}
+              disabled={busy || !selected}
+            >
+              {busy ? (
+                <ActivityIndicator size="small" color="white" />
+              ) : (
+                <Text style={styles.cohortAddBtnTxt}>
+                  ＋ Add {addList.length > 1 ? addList.length : ""}
+                </Text>
+              )}
+            </TouchableOpacity>
+          </View>
+          {addList.length > 1 && (
+            <Text style={styles.cohortHint}>
+              Includes subscription members:{" "}
+              {addList
+                .map((m) => m.name || formatPhoneDisplay(m.phone))
+                .join(", ")}
+            </Text>
+          )}
+          <Modal
+            visible={pickerOpen}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setPickerOpen(false)}
+          >
+            <TouchableOpacity
+              style={styles.cohortModalBack}
+              activeOpacity={1}
+              onPress={() => setPickerOpen(false)}
+            >
+              <View style={styles.cohortModalCard}>
+                <Text style={styles.cohortModalTitle}>Pick a daily group</Text>
+                <ScrollView style={{ maxHeight: 360 }}>
+                  {sortedCohorts.map((c) => (
+                    <TouchableOpacity
+                      key={c.code}
+                      style={styles.cohortModalRow}
+                      onPress={() => {
+                        setSelectedCode(c.code);
+                        setPickerOpen(false);
+                      }}
+                    >
+                      <Text style={styles.cohortModalRowTxt}>
+                        {c.code} · {cohortActiveCount(c, isActiveKey)} active ·{" "}
+                        {c.members.length} total
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+            </TouchableOpacity>
+          </Modal>
+        </>
+      )}
+    </View>
+  );
+}
+
 function SubSiblingCard({
   sub,
   currentPhone,
@@ -1984,6 +2217,65 @@ function makeStyles(colors: Colors) {
     color: colors.muted,
     marginBottom: space.sm,
   },
+  // v1.274: Daily WhatsApp group panel.
+  cohortInChip: {
+    fontSize: 14,
+    color: "#16a34a",
+    fontWeight: "600",
+  },
+  cohortRow: {
+    flexDirection: "row",
+    gap: 8,
+    alignItems: "center",
+  },
+  cohortPickerBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.bg,
+  },
+  cohortPickerTxt: { fontSize: 14, color: colors.text },
+  cohortAddBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    backgroundColor: "#7c3aed",
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: 84,
+  },
+  cohortAddBtnTxt: { color: "white", fontSize: 14, fontWeight: "600" },
+  cohortHint: {
+    fontSize: 12,
+    color: colors.muted,
+    marginTop: 6,
+  },
+  cohortModalBack: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    justifyContent: "center",
+    padding: 24,
+  },
+  cohortModalCard: {
+    backgroundColor: colors.panel,
+    borderRadius: 12,
+    padding: space.md,
+  },
+  cohortModalTitle: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: colors.text,
+    marginBottom: space.sm,
+  },
+  cohortModalRow: {
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  cohortModalRowTxt: { fontSize: 14, color: colors.text },
   name: { fontSize: 18, fontWeight: "600", color: colors.text },
   subline: {
     fontSize: 13,

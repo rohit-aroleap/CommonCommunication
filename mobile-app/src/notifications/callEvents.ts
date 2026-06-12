@@ -19,10 +19,22 @@
 //      navigator is ready, then it consumes (doesn't re-fire on
 //      subsequent foregrounds).
 
-import notifee, {
-  EventType,
-  type Event,
-} from "@notifee/react-native";
+// v1.274 OTA-safety: lazy require — see incomingCall.ts for the full
+// rationale. Static import would crash pre-v1.268 binaries at startup.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let notifeeMod: any = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  notifeeMod = require("@notifee/react-native");
+} catch {
+  /* pre-v1.268 binary */
+}
+const notifee = notifeeMod?.default ?? null;
+// Numeric fallbacks match Notifee's published enum values — only used
+// when the module is absent, in which case no events fire anyway.
+const EventType = notifeeMod?.EventType ?? { PRESS: 1, ACTION_PRESS: 2 };
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Event = any;
 import { dismissIncomingCall } from "./incomingCall";
 import { updateCallStatus } from "@/lib/calls";
 
@@ -102,22 +114,26 @@ async function handleEvent(
 // navigator mounts; background is set up at module load (similar to
 // the Expo task) so it's ready before the React tree exists.
 export function registerForegroundCallEventListener(): () => void {
-  return notifee.onForegroundEvent((event) => {
+  if (!notifee) return () => {}; // pre-v1.268 binary — nothing to listen to
+  return notifee.onForegroundEvent((event: Event) => {
     void handleEvent(event, true);
   });
 }
 
 // Background event handler. Notifee REQUIRES this to be set at module
 // scope (not inside a component) so it survives the app being killed.
-notifee.onBackgroundEvent(async (event) => {
-  await handleEvent(event, false);
-});
+if (notifee) {
+  notifee.onBackgroundEvent(async (event: Event) => {
+    await handleEvent(event, false);
+  });
+}
 
 // Probe for a notification that LAUNCHED the app from cold-start. Call
 // once after the navigator is ready. Consumes the result.
 export async function consumeInitialCallNotification(): Promise<{
   callId: string;
 } | null> {
+  if (!notifee) return null; // pre-v1.268 binary
   try {
     const initial = await notifee.getInitialNotification();
     if (!initial) return null;

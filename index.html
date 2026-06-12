@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.273</title>
+<title>CommonCommunication v1.274</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2762,7 +2762,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.273";
+const APP_VERSION = "v1.274";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -5083,6 +5083,10 @@ function listenChats() {
     // never had its members fetched. Idempotent — bails immediately if
     // already running or if there's nothing to do.
     backfillDailyGroupMembers().catch(e => console.warn("[daily-group-backfill]", e));
+    // v1.274: cohort registry powers the "no group" pills + the drawer's
+    // add panel. Cached 5 min internally, so calling on every chats
+    // snapshot is effectively one fetch per session + one per add.
+    fetchCohortRegistry(false).catch(() => {});
     renderChatList(rows);
     updateTabTitle();
     processNotificationsFromSnapshot(chatsCache);
@@ -5897,6 +5901,13 @@ function renderInfoDrawer() {
          that case so non-Ferra chats stay clean. -->
     ${renderSubscriptionSiblingsPanel(phone)}
 
+    <!-- v1.274: daily-workout cohort add panel. Filled asynchronously by
+         renderDailyGroupAddPanel — needs the cohort registry from the
+         worker (/cohort-list), which proxies AA's cohortToChat +
+         cohortMembers. Shows a picker + Add button when this customer
+         (and their subscription co-members) aren't in a group yet. -->
+    <div id="dailyGroupAddPanel"></div>
+
     ${last7DaysHtml}
 
     ${adKv.length ? `
@@ -5953,6 +5964,9 @@ function renderInfoDrawer() {
   // members on this subscription" opens that person's chat (or offers
   // to start a new one if no thread exists yet).
   wireSubscriptionSiblingsActions();
+  // v1.274: fill the daily-group add panel (async — fetches the cohort
+  // registry from the worker on first use, cached 5 min).
+  void renderDailyGroupAddPanel(phone);
 }
 
 // v1.243: SA Sessions panel. Listens to /chats/{chatKey}/saSessions for
@@ -8155,6 +8169,150 @@ function rebuildPhoneToDailyGroup() {
   phoneToDailyGroupIdx = idx;
 }
 
+// ── v1.274: daily-cohort registry client (add-to-group flow) ─────────
+// Mirrors the Achievement-analysis dashboard's cohort manager: registry
+// lives in AA's Firebase subtree (90sLab/workout-calendar), proxied via
+// the worker's /cohort-list + /cohort-add so this page needs no extra
+// Firebase rules. Distinct from phoneToDailyGroupIdx above (which is
+// derived from Periskope group memberPhones) — the registry is what AA
+// writes on every add, so the two stay roughly in sync; the panel
+// treats "in EITHER index" as already-in-a-group to avoid double-adds.
+let cohortRegistryCache = null;   // { cohorts: [{code, chatId, members}], assignedKeys: Set }
+let cohortRegistryFetchedAt = 0;
+function cohortKeyOfPhone(phone) {
+  return String(phone || "").replace(/\D/g, "").slice(-10);
+}
+async function fetchCohortRegistry(force) {
+  if (!WORKER_URL) return null;
+  if (!force && cohortRegistryCache && Date.now() - cohortRegistryFetchedAt < 5 * 60_000) {
+    return cohortRegistryCache;
+  }
+  try {
+    const res = await fetch(`${WORKER_URL}/cohort-list`);
+    if (!res.ok) return cohortRegistryCache;
+    const j = await res.json();
+    if (!j?.ok) return cohortRegistryCache;
+    cohortRegistryCache = {
+      cohorts: Array.isArray(j.cohorts) ? j.cohorts : [],
+      assignedKeys: new Set(Array.isArray(j.assignedPhoneKeys) ? j.assignedPhoneKeys : []),
+    };
+    cohortRegistryFetchedAt = Date.now();
+    // Chat-list "no group" pills depend on this set — refresh the list
+    // so they appear/disappear as soon as the registry lands.
+    if (typeof lastChatRows !== "undefined" && lastChatRows.length) {
+      renderChatList(lastChatRows);
+    }
+    return cohortRegistryCache;
+  } catch {
+    return cohortRegistryCache;
+  }
+}
+// Is this phone in a cohort according to EITHER source (AA registry or
+// Periskope-derived group membership)?
+function phoneInAnyCohort(phone) {
+  const key = cohortKeyOfPhone(phone);
+  if (key && cohortRegistryCache?.assignedKeys?.has(key)) return true;
+  return !!phoneToDailyGroupIdx.get(normalizePhone(phone));
+}
+// Active-member count for the picker labels — "active" = subscription
+// status ACTIVE per the global phoneToStatus index.
+function cohortActiveCountWeb(cohort) {
+  let n = 0;
+  for (const m of cohort.members || []) {
+    const np = normalizePhone(m.phone);
+    if (np && phoneToStatus?.[np] === "ACTIVE") n++;
+  }
+  return n;
+}
+// Renders the picker + Add button into #dailyGroupAddPanel (info drawer).
+// No-ops when the customer is already in a group (the drawer's existing
+// daily-group pill covers that state).
+async function renderDailyGroupAddPanel(phone) {
+  const panel = document.getElementById("dailyGroupAddPanel");
+  if (!panel || !phone) return;
+  const reg = await fetchCohortRegistry(false);
+  // Drawer may have re-rendered for a different chat while we awaited.
+  const panelNow = document.getElementById("dailyGroupAddPanel");
+  if (!panelNow) return;
+  if (!reg || !reg.cohorts.length) { panelNow.innerHTML = ""; return; }
+  if (phoneInAnyCohort(phone)) { panelNow.innerHTML = ""; return; }
+
+  // Build the add list: this customer + subscription co-members not
+  // already in a group. Names from the same resolution chain the rest
+  // of the dashboard uses.
+  const seen = new Set();
+  const addList = [];
+  const pushMember = (p, n) => {
+    const key = cohortKeyOfPhone(p);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    if (phoneInAnyCohort(p)) return;
+    addList.push({ phone: p, name: n || "" });
+  };
+  pushMember(phone, resolveDisplayName(phone, null, {}));
+  for (const sub of subsByPhoneIdx.get(normalizePhone(phone)) || []) {
+    if (sub.customerPhone) pushMember(sub.customerPhone, sub.customerName || "");
+    const phones = sub.memberPhones || [];
+    const names = sub.memberNames || [];
+    for (let i = 0; i < phones.length; i++) pushMember(phones[i], names[i] || "");
+  }
+  if (!addList.length) { panelNow.innerHTML = ""; return; }
+
+  // Sort cohorts by active count asc — least-full first, and default
+  // the select to it (same heuristic AA uses).
+  const sorted = [...reg.cohorts].sort((a, b) => cohortActiveCountWeb(a) - cohortActiveCountWeb(b));
+  const options = sorted
+    .map((c, i) => `<option value="${escapeHtml(c.code)}" ${i === 0 ? "selected" : ""}>${escapeHtml(c.code)} · ${cohortActiveCountWeb(c)} active</option>`)
+    .join("");
+  const namesLabel = addList.map((m) => m.name || m.phone).join(", ");
+  panelNow.innerHTML = `
+    <div class="info-section">
+      <h4>📅 Daily WhatsApp group</h4>
+      <div style="display:flex; gap:6px; align-items:center;">
+        <select id="dailyGroupSelect" style="flex:1; padding:6px 8px; border:1px solid var(--border); border-radius:6px; background:var(--panel); color:var(--text); font-size:13px;">${options}</select>
+        <button class="btn btn-primary" id="dailyGroupAddBtn" style="font-size:12px; padding:6px 12px;">＋ Add${addList.length > 1 ? " " + addList.length : ""}</button>
+      </div>
+      ${addList.length > 1 ? `<div style="font-size:11px; color:var(--muted); margin-top:5px;">Includes subscription members: ${escapeHtml(namesLabel)}</div>` : ""}
+      <div id="dailyGroupAddStatus" style="font-size:11px; color:var(--muted); margin-top:5px;"></div>
+    </div>`;
+  const btn = document.getElementById("dailyGroupAddBtn");
+  const sel = document.getElementById("dailyGroupSelect");
+  const statusEl = document.getElementById("dailyGroupAddStatus");
+  btn.onclick = async () => {
+    const code = sel.value;
+    if (!code) return;
+    if (!confirm(`Add ${namesLabel} to the ${code} daily WhatsApp group?`)) return;
+    btn.disabled = true;
+    statusEl.textContent = "Adding…";
+    try {
+      const res = await fetch(`${WORKER_URL}/cohort-add`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          cohortCode: code,
+          members: addList,
+          byUid: currentUser?.uid || "",
+          byName: currentUser?.displayName || currentUser?.email || "",
+        }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || !j?.ok) {
+        statusEl.textContent = "Failed: " + (j?.detail || j?.error || `HTTP ${res.status}`);
+        btn.disabled = false;
+        return;
+      }
+      await fetchCohortRegistry(true);
+      statusEl.textContent = `✓ Added to ${code}`;
+      // Re-render the drawer so the panel collapses into the "in group"
+      // pill state.
+      setTimeout(() => { if (infoDrawer.classList.contains("open")) renderInfoDrawer(); }, 1200);
+    } catch (e) {
+      statusEl.textContent = "Failed: " + (e?.message || e);
+      btn.disabled = false;
+    }
+  };
+}
+
 // v1.244: backfill driver. Walks chatsCache for daily groups missing
 // memberPhones and fires /fetch-chat-info one at a time (1.5s gap) so
 // we don't hammer Periskope on first load. Re-entrant-safe via the
@@ -8722,11 +8880,27 @@ function renderFerraPills(phone) {
   // pill so the row doesn't carry two pills when one of them is
   // duplicative.
   const tag = getSubscriptionTag(phone);     // full tag string or null
-  if (!tag) return "";
-  const stage = FERRA_TAG_STAGE[tag] || "setup";
-  const short = FERRA_TAG_SHORT[tag] || tag;
-  const pill = `<span class="pill-sm stage-${stage}" title="${escapeHtml(tag)}">${escapeHtml(short)}</span>`;
-  return `<div class="pills">${pill}</div>`;
+  // v1.274: "no group" pill — ACTIVE customer not in any daily-workout
+  // cohort. Only rendered once the cohort registry has loaded (avoids
+  // flashing the pill on everyone during the first seconds of a page
+  // load). Spot-the-gap aid: trainers see who still needs adding while
+  // scrolling the chat list instead of opening each profile.
+  let noGroupPill = "";
+  if (
+    cohortRegistryCache &&
+    phoneToStatus?.[normalizeFerraPhone(phone)] === "ACTIVE" &&
+    !phoneInAnyCohort(phone)
+  ) {
+    noGroupPill = `<span class="pill-sm" style="background:#ede9fe; color:#7c3aed;" title="Active customer, not in any daily WhatsApp group yet — add them from the customer info panel">no group</span>`;
+  }
+  if (!tag && !noGroupPill) return "";
+  let pill = "";
+  if (tag) {
+    const stage = FERRA_TAG_STAGE[tag] || "setup";
+    const short = FERRA_TAG_SHORT[tag] || tag;
+    pill = `<span class="pill-sm stage-${stage}" title="${escapeHtml(tag)}">${escapeHtml(short)}</span>`;
+  }
+  return `<div class="pills">${pill}${noGroupPill}</div>`;
 }
 
 // v1.204: deep-link reader. Polls until /chats data has populated, then

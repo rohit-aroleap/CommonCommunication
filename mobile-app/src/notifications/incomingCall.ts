@@ -21,13 +21,26 @@
 // we don't have to thread channel-creation into app cold start; channel
 // creation is idempotent.
 
-import notifee, {
-  AndroidCategory,
-  AndroidImportance,
-  AndroidVisibility,
-  EventType,
-  type Event,
-} from "@notifee/react-native";
+// v1.274 OTA-safety: @notifee/react-native is a NATIVE module added in
+// the v1.268 build. Phones still on older binaries (iOS TestFlight
+// build 14, Android v1.264 APK) don't have the native side — a static
+// import here would crash the whole app at OTA-update launch, because
+// index.ts imports this file (transitively) at startup. Lazy require +
+// null guards turn "no native module" into "background ring silently
+// unavailable", which is exactly the pre-v1.268 behavior those binaries
+// had anyway. Same pattern CallScreen uses for the Daily.co SDK.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let notifeeMod: any = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  notifeeMod = require("@notifee/react-native");
+} catch {
+  /* pre-v1.268 binary — no Notifee; call ring degrades to foreground-only */
+}
+const notifee = notifeeMod?.default ?? null;
+const AndroidCategory = notifeeMod?.AndroidCategory ?? { CALL: "call" };
+const AndroidImportance = notifeeMod?.AndroidImportance ?? { HIGH: 4 };
+const AndroidVisibility = notifeeMod?.AndroidVisibility ?? { PUBLIC: 1 };
 
 const CALL_CHANNEL_ID = "incoming-calls";
 
@@ -41,6 +54,7 @@ function callNotifId(callId: string): string {
 // Lazy channel setup. Safe to call many times — Notifee no-ops if the
 // channel already exists with these settings.
 async function ensureCallChannel(): Promise<string> {
+  if (!notifee) throw new Error("notifee unavailable in this binary");
   return notifee.createChannel({
     id: CALL_CHANNEL_ID,
     name: "Incoming calls",
@@ -67,6 +81,7 @@ export interface IncomingCallPayload {
 // data-only push arrival, OR from the foreground listener as a fallback
 // when the data message arrives while the app is open.
 export async function displayIncomingCall(p: IncomingCallPayload): Promise<void> {
+  if (!notifee) return; // pre-v1.268 binary — no native ring possible
   const channelId = await ensureCallChannel();
 
   await notifee.displayNotification({
@@ -143,10 +158,10 @@ export async function displayIncomingCall(p: IncomingCallPayload): Promise<void>
 //   - The call ended (either side).
 //   - The 60s ring timeout elapses without a response.
 export async function dismissIncomingCall(callId: string): Promise<void> {
-  await notifee.cancelNotification(callNotifId(callId));
+  if (!notifee) return;
+  try {
+    await notifee.cancelNotification(callNotifId(callId));
+  } catch {
+    /* cancel is best-effort — notification may already be gone */
+  }
 }
-
-// Re-export Notifee's event types so callers don't have to import from
-// the library directly — keeps the surface area in one place.
-export { EventType };
-export type { Event };

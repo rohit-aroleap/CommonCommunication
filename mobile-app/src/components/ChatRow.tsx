@@ -24,6 +24,10 @@ interface Props {
   unread: boolean;
   isFavorite: boolean;
   suggestPin: boolean;
+  // v1.274: ACTIVE Ferra customer who isn't in any daily-workout cohort
+  // group yet. Renders a small "no group" pill so trainers can spot
+  // them while scrolling instead of opening each profile.
+  noCohort?: boolean;
   onPress: () => void;
   onToggleFavorite: () => void;
 }
@@ -38,6 +42,7 @@ export function ChatRowItem({
   unread,
   isFavorite,
   suggestPin,
+  noCohort,
   onPress,
   onToggleFavorite,
 }: Props) {
@@ -121,6 +126,11 @@ export function ChatRowItem({
                 addition. */}
             {stage && stage !== "active" && (
               <StagePill stage={stage} colors={colors} styles={styles} />
+            )}
+            {noCohort && (
+              <View style={styles.noCohortPill}>
+                <Text style={styles.noCohortTxt}>no group</Text>
+              </View>
             )}
             <StarButton
               isFavorite={isFavorite}
@@ -305,6 +315,18 @@ function makeStyles(colors: Colors) {
       paddingVertical: 1,
       borderRadius: 8,
       marginLeft: 6,
+    },
+    // v1.274: "no group" pill — ACTIVE customer not in any daily cohort.
+    noCohortPill: {
+      backgroundColor: "#ede9fe",
+      paddingHorizontal: 6,
+      paddingVertical: 1,
+      borderRadius: 8,
+    },
+    noCohortTxt: {
+      color: "#7c3aed",
+      fontSize: 9,
+      fontWeight: "700",
     },
     newBadgeTxt: {
       color: "#92400e",
