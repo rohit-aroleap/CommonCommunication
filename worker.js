@@ -96,6 +96,13 @@ export default {
       if (url.pathname === "/admin/team-orphans" && request.method === "GET") {
         return cors(env, await handleTeamOrphansDiagnostic(env));
       }
+      // v1.278: Firebase download-footprint diagnostic. Reports exact or
+      // sampled byte sizes of every node CommonComm reads, split by
+      // "loaded on every page open" vs "lazy / per-chat", so we can see
+      // where the download budget actually goes. Read-only, admin-gated.
+      if (url.pathname === "/admin/path-sizes" && request.method === "GET") {
+        return cors(env, await handlePathSizes(env));
+      }
       // v1.271: destructive cleanup of a ghost user record. POST body:
       // { ghostUid, reassignOpenTicketsTo? }. Deletes /users/{ghost},
       // /pushTokens/{ghost}, /userState/{ghost}, /userGrants/{ghost},
@@ -5483,6 +5490,74 @@ async function handleCohortAdd(request, env, ctx) {
   );
 
   return json({ ok: true, cohortCode, chatId, added, invited, skipped });
+}
+
+// ---------- /admin/path-sizes (download-footprint diagnostic) ----------
+// v1.278: measures how much each Firebase node weighs, so we can reason
+// about download cost precisely instead of guessing. For "container"
+// paths (maps of records) it counts keys via a shallow read (cheap —
+// keys only, no values), then fetches a few sample records to estimate
+// bytes/record and projects the total. For small singleton nodes it
+// fetches fully and measures exact bytes. JSON.stringify length ≈ the
+// wire bytes Firebase bills for (UTF-8, minor framing aside).
+async function fbGetShallow(env, path) {
+  const r = await fetch(`${env.FIREBASE_DB_URL}/${path}.json?shallow=true&auth=${env.FIREBASE_DB_SECRET}`);
+  return safeJson(r);
+}
+async function measureContainer(env, path, sampleN = 5) {
+  const shallow = await fbGetShallow(env, path);
+  const keys = shallow && typeof shallow === "object" ? Object.keys(shallow) : [];
+  const count = keys.length;
+  if (!count) return { path, count: 0, sampledBytesPerRecord: 0, estTotalBytes: 0 };
+  // Sample the first sampleN records at full depth.
+  let sampledBytes = 0;
+  let sampled = 0;
+  for (const k of keys.slice(0, sampleN)) {
+    const rec = await fbGet(env, `${path}/${k}`);
+    if (rec != null) {
+      sampledBytes += JSON.stringify(rec).length;
+      sampled++;
+    }
+  }
+  const perRecord = sampled ? Math.round(sampledBytes / sampled) : 0;
+  return {
+    path,
+    count,
+    sampledBytesPerRecord: perRecord,
+    estTotalBytes: perRecord * count,
+  };
+}
+async function measureExact(env, path) {
+  const v = await fbGet(env, path);
+  return { path, exactBytes: v == null ? 0 : JSON.stringify(v).length };
+}
+async function handlePathSizes(env) {
+  // Containers (maps of $id -> record): count + sampled size.
+  // Sample counts kept low — the Worker has a 50-subrequest/invocation
+  // cap, and each sample is one fetch. 6 containers + 6 exacts + the
+  // shallow reads must stay under 50.
+  const containers = await Promise.all([
+    measureContainer(env, `${ROOT}/chats`, 4),            // FULL subtree (msgs+notes+SA)
+    measureContainer(env, `${ROOT}/chatsIndex`, 6),       // lean meta mirror
+    measureContainer(env, `${ROOT}/dms`, 3),
+    measureContainer(env, "ferraHabitData/v1/userMonthlySummaries", 4),
+    measureContainer(env, "ferraHabitData/v1/userHabitHistory", 4),
+    measureContainer(env, "ferraHabitData/v1/users", 4),
+  ]);
+  // Smaller singletons: exact size.
+  const exacts = await Promise.all([
+    measureExact(env, `${ROOT}/tickets`),
+    measureExact(env, `${ROOT}/contacts`),
+    measureExact(env, `${ROOT}/users`),
+    measureExact(env, `${ROOT}/config/teamMembers`),
+    measureExact(env, "ferraHabitData/v1/cancelledUsers"),
+    measureExact(env, "ferraSubscriptions/v1"),
+  ]);
+  const fmt = (b) => (b >= 1048576 ? (b / 1048576).toFixed(2) + " MB" : (b / 1024).toFixed(1) + " KB");
+  const byPath = {};
+  for (const c of containers) byPath[c.path] = { ...c, human: fmt(c.estTotalBytes) };
+  for (const e of exacts) byPath[e.path] = { ...e, human: fmt(e.exactBytes) };
+  return json({ ok: true, measuredAt: Date.now(), byPath });
 }
 
 // ---------- /admin/team-orphans (diagnostic) ----------
