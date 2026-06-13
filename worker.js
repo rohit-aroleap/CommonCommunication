@@ -183,6 +183,13 @@ export default {
       if (url.pathname === "/backfill-chats-index" && request.method === "POST") {
         return cors(env, await handleBackfillChatsIndex(request, env));
       }
+      // v1.279: one-shot mirror of /dms/{pk}/meta -> /dmsIndex/{pk}. The
+      // web + mobile DM list now subscribes to the lean /dmsIndex instead
+      // of the full /dms subtree (which carries every message of every
+      // thread). Idempotent; ~32 threads so no chunking needed.
+      if (url.pathname === "/backfill-dms-index" && request.method === "POST") {
+        return cors(env, await handleBackfillDmsIndex(env));
+      }
       if (url.pathname === "/edit-message" && request.method === "POST") {
         return cors(env, await handleEditMessage(request, env));
       }
@@ -1727,6 +1734,31 @@ async function handleBackfillChatsIndex(request, env) {
     done,
     written,
   });
+}
+
+// ---------- /backfill-dms-index (one-shot migration) ----------
+// v1.279: mirror every /dms/{pk}/meta into /dmsIndex/{pk} so the web +
+// mobile DM list can subscribe to the lean index instead of the full
+// /dms subtree (which drags every message of every thread). Idempotent —
+// always writes the current meta (DM threads are few, ~32, so a full
+// overwrite each run is cheap and avoids stale-index drift).
+async function handleBackfillDmsIndex(env) {
+  const dms = await fbGet(env, `${ROOT}/dms`);
+  if (!dms || typeof dms !== "object") {
+    return json({ ok: true, threads: 0, written: 0 });
+  }
+  const updates = {};
+  let written = 0;
+  for (const [pairKey, pair] of Object.entries(dms)) {
+    const meta = pair?.meta;
+    if (!meta || typeof meta !== "object") continue;
+    for (const [field, value] of Object.entries(meta)) {
+      updates[`${ROOT}/dmsIndex/${pairKey}/${field}`] = value;
+    }
+    written++;
+  }
+  if (Object.keys(updates).length > 0) await fbPatchRoot(env, updates);
+  return json({ ok: true, threads: Object.keys(dms).length, written });
 }
 
 // ---------- /backfill-resolution-notes (one-shot migration) ----------

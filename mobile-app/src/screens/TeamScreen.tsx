@@ -38,6 +38,7 @@ import {
 import { useAuth } from "@/auth/AuthContext";
 // v1.264: 1:1 audio call helpers — used by the 📞 button on each row.
 import { createCallRoom, ringCall, updateCallStatus } from "@/lib/calls";
+import { patchDmMeta } from "@/lib/dmMeta";
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "@/screens/types";
@@ -198,7 +199,7 @@ export function TeamScreen() {
     const metaPath = `${ROOT}/dms/${pairKey}/meta`;
     const snap = await get(ref(db, metaPath));
     if (!snap.exists()) {
-      await update(ref(db, metaPath), {
+      await patchDmMeta(pairKey, {
         participants: { [user.uid]: true, [otherUid]: true },
         createdAt: Date.now(),
         lastMsgAt: 0,

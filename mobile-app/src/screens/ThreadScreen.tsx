@@ -57,6 +57,7 @@ import {
 } from "@/data/AppDataContext";
 import { useAuth } from "@/auth/AuthContext";
 import { resolveDisplayName } from "@/lib/displayName";
+import { patchDmMeta } from "@/lib/dmMeta";
 import { dayLabel } from "@/lib/format";
 import { chatKeyToChatId, encodeKey } from "@/lib/encodeKey";
 import {
@@ -632,7 +633,7 @@ export function ThreadScreen({ route, navigation }: Props) {
       };
     }
     await set(msgRef, record);
-    await update(ref(db, `${ROOT}/dms/${pairKey}/meta`), {
+    await patchDmMeta(pairKey, {
       participants: { [user.uid]: true, [otherUid]: true },
       lastMsgAt: ts,
       lastMsgPreview: text.slice(0, 120),
@@ -1013,7 +1014,7 @@ export function ThreadScreen({ route, navigation }: Props) {
         await update(ref(db, msgPath), patch);
         // If this WAS the latest DM message, refresh the meta preview.
         if (dmRow?.lastMsgAt === editFor.message.ts) {
-          await update(ref(db, `${ROOT}/dms/${pairKey}/meta`), {
+          await patchDmMeta(pairKey, {
             lastMsgPreview: trimmed.slice(0, 120),
           });
         }
@@ -1115,7 +1116,7 @@ export function ThreadScreen({ route, navigation }: Props) {
             originalDirection: src.direction,
           },
         });
-        await update(ref(db, `${ROOT}/dms/${targetPairKey}/meta`), {
+        await patchDmMeta(targetPairKey, {
           participants: { [user.uid]: true, [toUid]: true },
           lastMsgAt: ts,
           lastMsgPreview: `↪️ ${srcText.slice(0, 100)}`,
@@ -1172,7 +1173,7 @@ export function ThreadScreen({ route, navigation }: Props) {
                   // latest message — so the Team list doesn't keep
                   // showing the deleted text as the preview.
                   if (dmRow?.lastMsgAt === m.ts) {
-                    await update(ref(db, `${ROOT}/dms/${pairKey}/meta`), {
+                    await patchDmMeta(pairKey, {
                       lastMsgPreview: "🚫 Message deleted",
                     });
                   }
@@ -1561,7 +1562,7 @@ export function ThreadScreen({ route, navigation }: Props) {
           : media.type === "audio"
           ? "🎤"
           : "📎";
-      await update(ref(db, `${ROOT}/dms/${pairKey}/meta`), {
+      await patchDmMeta(pairKey, {
         participants: { [user.uid]: true, [otherUid]: true },
         lastMsgAt: ts,
         lastMsgPreview: caption || `${previewIcon} ${media.filename}`,

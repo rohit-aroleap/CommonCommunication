@@ -55,7 +55,9 @@ import type {
 // months of customer activity for a busy trainer; bump if anyone reports
 // missing rows.
 const CHATS_LIMIT = 200;
-const DMS_LIMIT = 100;
+// v1.279: DMS_LIMIT removed — the DM list now reads the lean /dmsIndex
+// mirror in full (tiny) instead of a limitToLast query over the heavy
+// /dms subtree.
 
 interface AppDataValue {
   chatRows: ChatRow[];
@@ -342,11 +344,6 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
 
     const attachTier2 = () => {
       if (cancelled) return;
-      const dmsQuery = query(
-        ref(db, `${ROOT}/dms`),
-        orderByChild("meta/lastMsgAt"),
-        limitToLast(DMS_LIMIT),
-      );
       unsubs.push(
         onValue(ref(db, `${ROOT}/users`), (s) => {
           const v = (s.val() || {}) as Record<string, TeamUser>;
@@ -361,11 +358,22 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
           cacheSet(uid, "teamMembers", v);
         }),
       );
+      // v1.279: subscribe to the lean /dmsIndex mirror instead of the
+      // full /dms subtree (which dragged every message of every thread,
+      // ~9 KB/record, for up to DMS_LIMIT threads). /dmsIndex stores meta
+      // fields FLAT under /dmsIndex/{pk}/*; wrap each back into { meta }
+      // so dmsByKey keeps the { meta } shape the dmRows builder expects.
+      // The index is tiny (~32 threads × ~150 B) so we read it whole — no
+      // limitToLast / orderByChild (which would need an .indexOn rule).
       unsubs.push(
-        onValue(dmsQuery, (s) => {
-          const v = (s.val() || {}) as Record<string, { meta?: DmMeta }>;
-          setDmsByKey(v);
-          cacheSet(uid, "dmsByKey", v);
+        onValue(ref(db, `${ROOT}/dmsIndex`), (s) => {
+          const raw = (s.val() || {}) as Record<string, DmMeta>;
+          const wrapped: Record<string, { meta?: DmMeta }> = {};
+          for (const [pk, fields] of Object.entries(raw)) {
+            wrapped[pk] = { meta: fields || {} };
+          }
+          setDmsByKey(wrapped);
+          cacheSet(uid, "dmsByKey", wrapped);
         }),
       );
       unsubs.push(

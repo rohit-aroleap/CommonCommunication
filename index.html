@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.278</title>
+<title>CommonCommunication v1.279</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2762,7 +2762,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.278";
+const APP_VERSION = "v1.279";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -4849,6 +4849,22 @@ function pairKeyFromChatKey(chatKey) {
 function chatKeyFromPairKey(pairKey) {
   return "dm:" + pairKey;
 }
+// v1.279: dual-write DM meta to /dms/{pk}/meta/* AND /dmsIndex/{pk}/*.
+// listenDms now subscribes to the lean /dmsIndex mirror instead of the
+// full /dms subtree (which carries every message of every DM thread —
+// ~9 KB/record, same antipattern /chats had before v1.277). Every DM
+// meta write must go through here so the index stays current. Mirrors
+// the chatsIndex pattern (patchChatMeta). Fields are written flat under
+// /dmsIndex/{pk}/* — no `meta` wrapper — so the listener reads each
+// value as the meta object directly.
+function patchDmMeta(pairKey, fields) {
+  const updates = {};
+  for (const [k, v] of Object.entries(fields)) {
+    updates[`${ROOT}/dms/${pairKey}/meta/${k}`] = v;
+    updates[`${ROOT}/dmsIndex/${pairKey}/${k}`] = v;
+  }
+  return update(ref(db), updates);
+}
 // v1.243: the local normalizePhone definition that USED to live here
 // (just `String(p || "").replace(/\D/g, "")`) has been removed —
 // callsites now resolve to the shared canonical normalizePhone inlined
@@ -4857,11 +4873,25 @@ function chatKeyFromPairKey(pairKey) {
 // did not, fixing a latent bug where a 10-digit teammate phone wouldn't
 // match the 12-digit canonical key the team-matching logic expects.
 
-// Live listener on /dms/. RTDB rules make sure we only get back DMs the
-// current user participates in, so no client-side filtering needed.
+// Live listener on /dmsIndex. v1.279: was /dms (the full subtree —
+// every message of every DM thread, ~9 KB/record, only `meta` consumed).
+// /dmsIndex is the lean meta-only mirror that patchDmMeta dual-writes;
+// each value is the meta object directly (flat — no `meta` wrapper).
+// DM messages still load per-thread via listenDmMessages on open.
+// NOTE: /dmsIndex has NO RTDB participant-scoping rule, so unlike /dms it
+// returns every team DM's meta — we filter to my own threads in
+// rebuildDmRows (which already checks meta.participants[me]).
 function listenDms() {
-  onValue(ref(db, `${ROOT}/dms`), (snap) => {
-    dmsCache = snap.val() || {};
+  onValue(ref(db, `${ROOT}/dmsIndex`), (snap) => {
+    // dmsIndex stores meta fields FLAT under /dmsIndex/{pk}/*. Wrap each
+    // back into { meta } so dmsCache keeps the same shape the rest of the
+    // code expects (rebuildDmRows + edit/delete preview checks all read
+    // dmsCache[pk].meta).
+    const raw = snap.val() || {};
+    dmsCache = {};
+    for (const [pk, fields] of Object.entries(raw)) {
+      dmsCache[pk] = { meta: fields || {} };
+    }
     rebuildDmRows();
     // The team-view sidebar reads from dmRows; the unread counter on the
     // 👥 Team button also updates whenever a new DM lands.
@@ -8825,7 +8855,7 @@ async function ensureDmExists(otherUid) {
   const metaPath = `${ROOT}/dms/${pairKey}/meta`;
   const snap = await get(ref(db, metaPath));
   if (snap.exists()) return;
-  await update(ref(db, metaPath), {
+  await patchDmMeta(pairKey, {
     participants: {
       [currentUser.uid]: true,
       [otherUid]: true,
@@ -10583,7 +10613,7 @@ async function executeForward(toUid, toName) {
         originalDirection: _forwardMessage.direction || "in",
       },
     });
-    await update(ref(db, `${ROOT}/dms/${targetPairKey}/meta`), {
+    await patchDmMeta(targetPairKey, {
       participants: { [currentUser.uid]: true, [toUid]: true },
       lastMsgAt: ts,
       lastMsgPreview: `↪️ ${srcText.slice(0, 100)}`,
@@ -10642,7 +10672,7 @@ async function handleEdit(message) {
     const pairKey = pairKeyFromChatKey(currentChatId);
     const pair = dmsCache[pairKey];
     if (pair?.meta?.lastMsgAt === message.ts) {
-      await update(ref(db, `${ROOT}/dms/${pairKey}/meta`), {
+      await patchDmMeta(pairKey, {
         lastMsgPreview: trimmed.slice(0, 120),
       });
     }
@@ -10683,7 +10713,7 @@ async function handleDelete(message) {
     await update(ref(db, `${ROOT}/dms/${pairKey}/messages/${message.id}`), tombstone);
     const pair = dmsCache[pairKey];
     if (pair?.meta?.lastMsgAt === message.ts) {
-      await update(ref(db, `${ROOT}/dms/${pairKey}/meta`), {
+      await patchDmMeta(pairKey, {
         lastMsgPreview: "🚫 message deleted",
       });
     }
@@ -12149,7 +12179,7 @@ async function doSendDmMedia(media) {
   const previewIcon = media.type === "image" ? "📷"
                     : media.type === "video" ? "🎥"
                     : media.type === "audio" ? "🎤" : "📎";
-  await update(ref(db, `${ROOT}/dms/${pairKey}/meta`), {
+  await patchDmMeta(pairKey, {
     participants: { [currentUser.uid]: true, [otherUid]: true },
     lastMsgAt: ts,
     lastMsgPreview: caption || `${previewIcon} ${media.filename}`,
@@ -12361,7 +12391,7 @@ async function doSendDm(text) {
   };
   if (replySnapshot) dmRec.replyTo = replySnapshot;
   await set(msgRef, dmRec);
-  await update(ref(db, `${ROOT}/dms/${pairKey}/meta`), {
+  await patchDmMeta(pairKey, {
     participants: {
       [currentUser.uid]: true,
       [otherUid]: true,
