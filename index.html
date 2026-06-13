@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.280</title>
+<title>CommonCommunication v1.281</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -98,6 +98,17 @@
     align-self: center;
     width: 100%;
     max-width: 900px;
+  }
+  /* v1.281 — embed mode: when the customer-info drawer is OPEN, overlay it on
+     top of the thread (WhatsApp-style) instead of pushing it inline. Host
+     embeds use narrower panes than the full app, where an inline 380px drawer
+     squeezed the chat and clipped its own content. As an absolute overlay it
+     always renders at its designed width; the chat keeps full width beneath. */
+  html.embed-mode .thread-content { position: relative; }
+  html.embed-mode .info-drawer.open {
+    position: absolute; top: 0; right: 0; bottom: 0;
+    width: min(380px, 92%); max-width: none;
+    z-index: 30; box-shadow: -4px 0 18px rgba(0,0,0,.14);
   }
 
   .main {
@@ -2775,7 +2786,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.280";
+const APP_VERSION = "v1.281";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
