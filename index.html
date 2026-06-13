@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.276</title>
+<title>CommonCommunication v1.277</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2762,7 +2762,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.276";
+const APP_VERSION = "v1.277";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -3965,8 +3965,9 @@ function rebuildSubsByPhone() {
 let habitMeta = null;             // ferraHabitData/v1/_meta
 let habitUsers = null;            // ferraHabitData/v1/users
 let habitCancelledUsers = null;   // ferraHabitData/v1/cancelledUsers
-let habitMonthlySummaries = null; // ferraHabitData/v1/userMonthlySummaries
-let habitHistory = null;          // ferraHabitData/v1/userHabitHistory
+// v1.277: userMonthlySummaries / userHabitHistory are no longer loaded
+// globally — see habitMonthlyByUid / habitHistoryByUid (per-uid lazy
+// caches) declared near the Ferra listeners.
 let phoneToUidIdx = {};           // active users phone → uid (O(1) lookup)
 let cancelledPhones = new Set();  // cancelled users' normalized phones
 let phoneToStatus = {};           // normalized phone → subscriptionStatus (e.g. "ACTIVE", "PAUSED")
@@ -4178,14 +4179,47 @@ function listenFerraData() {
     updateThreadHeader();
     syncAllFerraCustomersToChats(); // cancelled customers should also appear in chats
   });
-  onValue(ref(db, "ferraHabitData/v1/userMonthlySummaries"), (snap) => {
-    habitMonthlySummaries = snap.val();
-    if (infoDrawer.classList.contains("open")) renderInfoDrawer();
-  });
-  onValue(ref(db, "ferraHabitData/v1/userHabitHistory"), (snap) => {
-    habitHistory = snap.val();
-    if (infoDrawer.classList.contains("open")) renderInfoDrawer();
-  });
+  // v1.277: userMonthlySummaries + userHabitHistory are NO LONGER loaded
+  // globally. They hold per-user, per-DAY workout activity for every
+  // customer — by far the heaviest nodes in ferraHabitData — but they
+  // feed only the 7-day grid inside ONE open customer-info drawer at a
+  // time. Subscribing globally re-downloaded all of it on every page
+  // load. Now lazy-fetched per-uid via ensureHabitDataForUid() when a
+  // drawer opens (see renderInfoDrawer). Saves the bulk of the Ferra
+  // habit download.
+}
+
+// v1.277: per-uid lazy habit caches (replacing the global subscriptions
+// above). Keyed by Ferra uid. A uid present in the cache (even mapped to
+// null) means "already fetched" — getDailyActivity/getDailyScore read
+// from here, and ensureHabitDataForUid skips a re-fetch.
+let habitMonthlyByUid = {};
+let habitHistoryByUid = {};
+const _habitFetchInflight = new Set();
+async function ensureHabitDataForUid(uid) {
+  if (!uid) return;
+  if (Object.prototype.hasOwnProperty.call(habitMonthlyByUid, uid)) return;
+  if (_habitFetchInflight.has(uid)) return;
+  _habitFetchInflight.add(uid);
+  try {
+    const [mSnap, hSnap] = await Promise.all([
+      get(ref(db, `ferraHabitData/v1/userMonthlySummaries/${uid}`)),
+      get(ref(db, `ferraHabitData/v1/userHabitHistory/${uid}`)),
+    ]);
+    habitMonthlyByUid[uid] = mSnap.val() || null;
+    habitHistoryByUid[uid] = hSnap.val() || null;
+  } catch (e) {
+    // Permission or network hiccup — cache null so we don't hammer it;
+    // the 7-day grid just renders empty.
+    habitMonthlyByUid[uid] = null;
+    habitHistoryByUid[uid] = null;
+  } finally {
+    _habitFetchInflight.delete(uid);
+  }
+  // Re-render the drawer so the 7-day grid fills in. The cache is now
+  // populated, so this second render is synchronous and does NOT kick
+  // another fetch (no loop).
+  if (infoDrawer.classList.contains("open")) renderInfoDrawer();
 }
 
 function rebuildCancelledIdx() {
@@ -4309,9 +4343,11 @@ function getFerraDisplayName(phone) {
 }
 
 // userMonthlySummaries[uid] is a LIST of month objects, each with dailyActivity dict
+// v1.277: reads the per-uid lazy cache (habitMonthlyByUid) instead of a
+// global map — populated by ensureHabitDataForUid when the drawer opens.
 function getDailyActivity(uid, dateStr) {
-  if (!habitMonthlySummaries || !uid) return null;
-  const months = habitMonthlySummaries[uid];
+  if (!uid) return null;
+  const months = habitMonthlyByUid[uid];
   if (!months) return null;
   const list = Array.isArray(months) ? months : Object.values(months);
   for (const m of list) {
@@ -4322,9 +4358,10 @@ function getDailyActivity(uid, dateStr) {
 
 // userHabitHistory[uid] is a LIST of month objects with FLAT keys like
 // "dailyScores_2026-04-11" (underscore — Firebase forbids dot in keys)
+// v1.277: reads the per-uid lazy cache (habitHistoryByUid).
 function getDailyScore(uid, dateStr) {
-  if (!habitHistory || !uid) return null;
-  const months = habitHistory[uid];
+  if (!uid) return null;
+  const months = habitHistoryByUid[uid];
   if (!months) return null;
   const list = Array.isArray(months) ? months : Object.values(months);
   const safeKey = `dailyScores_${dateStr}`;
@@ -4585,8 +4622,8 @@ window._ferra = {
   get meta()         { return habitMeta; },
   get users()        { return habitUsers; },
   get cancelled()    { return habitCancelledUsers; },
-  get monthly()      { return habitMonthlySummaries; },
-  get history()      { return habitHistory; },
+  get monthly()      { return habitMonthlyByUid; },  // v1.277: per-uid lazy cache
+  get history()      { return habitHistoryByUid; },  // v1.277: per-uid lazy cache
   get phoneIdx()     { return phoneToUidIdx; },
   get cancelledSet() { return cancelledPhones; },
   normalizePhone: normalizeFerraPhone,
@@ -5030,13 +5067,26 @@ function processNotificationsFromSnapshot(chats) {
 }
 
 function listenChats() {
-  const chatsRef = ref(db, `${ROOT}/chats`);
+  // v1.277: subscribe to the meta-only mirror /chatsIndex instead of the
+  // full /chats subtree. /chats carries EVERY message, note, reaction and
+  // SA session of all ~900 chats; subscribing to it re-downloaded tens of
+  // MB on every page load and was the dominant reason the shared
+  // motherofdashboard Firebase blew past its 10 GB/month free tier (28.7
+  // GB in 12 days). This listener only ever consumed `meta` — messages
+  // load separately via the paginated per-chat listener (listenMessages),
+  // notes via listenNotes, SA sessions via their own listener. /chatsIndex
+  // is the lean meta-only mirror the worker + updateChatMeta dual-write to;
+  // the phone app has used it as its chat-list source for many versions.
+  // Each value IS the meta object directly — NO `.meta` wrapper like the
+  // old /chats payload had. A one-shot /backfill-chats-index run before
+  // this cutover confirmed the index covers all 902 chats.
+  const chatsRef = ref(db, `${ROOT}/chatsIndex`);
   onValue(chatsRef, (snap) => {
     const all = snap.val() || {};
     chatsCache = {};
     const rows = [];
     for (const [chatKey, val] of Object.entries(all)) {
-      const rawMeta = val.meta || {};
+      const rawMeta = val || {};
       // Canonicalize at the source: chatId is always authoritative, and the
       // displayable phone always derives from it. Some legacy rows have
       // meta.phone overwritten to our org phone (from old webhook bug v<1.035);
@@ -5679,6 +5729,13 @@ function renderInfoDrawer() {
   //   user (habit) → customerDetail (subscriptions) → meta (chat) → phone.
   const user = findFerraUserByPhone(phone);
   const uid = user?.uid || user?.userId || null;
+  // v1.277: lazy-load this customer's habit data (monthly summaries +
+  // habit history) for the 7-day grid. Fire-and-forget — the first
+  // render shows the grid empty, then ensureHabitDataForUid re-renders
+  // the drawer once the per-uid fetch lands (~200ms). Cached, so it
+  // only fetches once per customer per session and the re-render is a
+  // synchronous no-fetch pass.
+  if (uid) ensureHabitDataForUid(uid);
   // Customer details from ferraSubscriptions/v1/customerDetails. Moved above
   // the pills block so subscription-side fallbacks can use it.
   const customerDetail = sharedSubs?.customerDetails?.[normalizeFerraPhone(phone)] || null;
@@ -9228,7 +9285,7 @@ addCustomerSubmit.onclick = async () => {
     // chat does exist on Firebase. update merges, set would wipe.
     const existingMeta = chatsCache[ck];
     if (!existingMeta) {
-      await update(ref(db, `${ROOT}/chats/${ck}/meta`), {
+      const stub = {
         chatId,
         chatType: "user",
         phone: normalized,
@@ -9241,7 +9298,17 @@ addCustomerSubmit.onclick = async () => {
         // messages) if that becomes a UX issue.
         createdByUid: currentUser.uid,
         createdByName: currentUser.displayName || currentUser.email || null,
-      });
+      };
+      // v1.277: dual-write to /chats/{k}/meta AND /chatsIndex/{k}. The
+      // chat list now subscribes to /chatsIndex, so a meta-only write
+      // would leave this new chat invisible on the web until the worker
+      // later mirrored it. Multi-path update keeps both in sync atomically.
+      const stubUpdates = {};
+      for (const [k, v] of Object.entries(stub)) {
+        stubUpdates[`${ROOT}/chats/${ck}/meta/${k}`] = v;
+        stubUpdates[`${ROOT}/chatsIndex/${ck}/${k}`] = v;
+      }
+      await update(ref(db), stubUpdates);
     }
     closeAddCustomer();
     // Drop the trainer straight into the new chat. The composer is
