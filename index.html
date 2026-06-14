@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.285</title>
+<title>CommonCommunication v1.286</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2764,14 +2764,14 @@
 
 <!-- ============== Firebase + App ============== -->
 <script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
   getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut,
   signInWithEmailAndPassword,
-} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   getDatabase, ref, onValue, push, set, update, get, remove, child, query, orderByChild, limitToLast,
-} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
 // ====== CONFIG ======
 const firebaseConfig = {
@@ -2786,7 +2786,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.285";
+const APP_VERSION = "v1.286";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -3307,9 +3307,20 @@ if (emailLoginForm) {
 logoutBtn.onclick = () => signOut(auth);
 
 onAuthStateChanged(auth, async (user) => {
+  // v1.286 — diagnostic: log every auth state transition + the embed
+  // context. Lets us see in DevTools (when CommonComm is mounted as an
+  // iframe inside another app, e.g. AA Outreach) whether the iframe's
+  // Firebase init is silently signing the user out and cascading via
+  // shared-IndexedDB into the host app.
+  try {
+    const embedded = (function(){ try { return window.top !== window.self; } catch(_) { return true; } })();
+    console.log('[CC-AUTH]', new Date().toISOString(), 'state →', user ? ('user=' + (user.email || '(no email)')) : 'NULL', 'embedded=' + embedded);
+  } catch (_) {}
   if (user) {
     const allowed = await isUserAllowed(user.email);
+    try { console.log('[CC-AUTH] isUserAllowed', user.email, '→', allowed); } catch (_) {}
     if (!allowed) {
+      try { console.warn('[CC-AUTH] signing out — not in allowlist:', user.email); } catch (_) {}
       showUnauthorized(user.email);
       try { await signOut(auth); } catch {}
       return;
