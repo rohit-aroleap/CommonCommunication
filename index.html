@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.281</title>
+<title>CommonCommunication v1.285</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2786,7 +2786,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.282";
+const APP_VERSION = "v1.285";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -8529,6 +8529,13 @@ async function backfillDailyGroupMembers() {
   }
 }
 let currentStatusFilter = "All";
+// v1.285 — hoisted from ~L8902. renderFilterPills() runs at module init
+// (around L8766) and calls updateFiltersBtnIndicator, which reads
+// currentTagFilter. With the original declaration further down, the read
+// hit a TDZ ReferenceError that, in embedded iframe mode, cascaded into a
+// shared-Firebase IndexedDB-poll race that signed the host page out. Same
+// fix shape as the v1.243 currentStageBucketFilter hoist.
+let currentTagFilter = "All";
 
 // Optional small subtitle under specific pills to hint what they mean
 const PILL_HINTS = {
@@ -8899,11 +8906,9 @@ const TAG_FILTERS = [
   "All Steps Complete", "All Done",
   "Uninstallation Pending", "Pickup Pending", "Received in Warehouse",
 ];
-let currentTagFilter = "All";
-// v1.243: currentStageBucketFilter declaration was moved ~150 lines
-// up (right before the rail-stage click handlers / updateRailStage-
-// ActiveStates() call) to avoid a TDZ ReferenceError that broke the
-// chat list render — see comment at the new declaration site.
+// v1.285: currentTagFilter declaration hoisted to top of the filter-state
+// block (near currentStatusFilter) for the same TDZ reason as v1.243's
+// currentStageBucketFilter hoist. See the new declaration site.
 
 function renderTagPills(counts) {
   // Render as a single <select> so the 15 tag options don't eat ~4 rows of
@@ -8991,9 +8996,13 @@ window.addEventListener('message', (ev) => {
   if (ev.data.type !== 'open-chat') return;
   const ck = ev.data.chatKey;
   if (!ck || typeof ck !== 'string') return;
-  // Defensive: chatKey is always <digits>@c_us in our schema. Reject
-  // anything else so a stray postMessage can't drive us to a bogus key.
-  if (!/^\d+@c_us$/.test(ck)) return;
+  // Defensive: chatKey is always <digits>@c_us OR <digits>@g_us in our
+  // schema. Reject anything else so a stray postMessage can't drive us
+  // to a bogus key. v1.283 widened from c_us only to also accept g_us
+  // so host apps (AA Outreach) can open cohort group chats via the
+  // same protocol — group handling already exists in openChat's
+  // isGroup branch.
+  if (!/^\d+@(c|g)_us$/.test(ck)) return;
   // v1.269 — ack-based open. Try chatsCache first; if missing, poll
   // up to 15s; post a status back to the parent in either case so the
   // host can hide its loading overlay (success) or surface an error
@@ -9015,7 +9024,32 @@ window.addEventListener('message', (ev) => {
     }
     if (chatsCache && chatsCache[ck]) {
       openChat(ck);
-      ack('ok');
+      // v1.283 — optional initialText pre-fill. openChat() is synchronous
+      // and never touches composerInput, so writing right after returns
+      // is safe. We preserve any draft the operator already typed in
+      // this chat (don't clobber unsent work) and ack with
+      // initialTextApplied so the host can warn the user if their AI-
+      // composed text was rejected because of an existing draft.
+      let initialTextApplied = false;
+      const initialText = ev.data.initialText;
+      // v1.284: host can pass overwriteComposer:true to bypass the draft-
+      // preserve check. AA's Outreach 'AI rewrite' uses this on re-post so
+      // the previous AI fill (which isn't really an operator draft) gets
+      // replaced. The first open from a card click still uses the default
+      // path so genuine in-progress drafts are protected.
+      const overwriteComposer = ev.data.overwriteComposer === true;
+      if (initialText && typeof initialText === 'string' && composerInput) {
+        if (!composerInput.value.trim() || overwriteComposer) {
+          composerInput.value = initialText;
+          composerInput.style.height = 'auto';
+          composerInput.style.height = Math.min(composerInput.scrollHeight, 160) + 'px';
+          try { composerInput.focus(); } catch (_) {}
+          try { composerInput.setSelectionRange(initialText.length, initialText.length); } catch (_) {}
+          composerInput.dispatchEvent(new Event('input', { bubbles: true }));
+          initialTextApplied = true;
+        }
+      }
+      ack('ok', { initialTextApplied });
     } else {
       setTimeout(tryOpen, 250);
     }
