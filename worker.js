@@ -4753,8 +4753,8 @@ async function handleAiInbox(request, env) {
     return json({ error: "freeform mode requires a question" }, 400);
   }
 
-  // 1) Read /chats and pick the top N by lastMsgAt within the window.
-  const chatsBlob = await fbGet(env, `${ROOT}/chats`);
+  // 1) Read /chats (cached) and pick the top N by lastMsgAt within the window.
+  const chatsBlob = await getChatsCached(env);
   if (!chatsBlob || typeof chatsBlob !== "object") {
     return json({ answer: "No chats yet.", chats: [], scope: { chatCount: 0 } });
   }
@@ -5885,7 +5885,7 @@ async function handleSearchMessages(request, env) {
   const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit")) || 50));
   if (q.length < 2) return json({ error: "query must be at least 2 chars" }, 400);
 
-  const chats = await fbGet(env, `${ROOT}/chats`);
+  const chats = await getChatsCached(env);
   if (!chats || typeof chats !== "object") return json({ results: [] });
 
   const hits = [];
@@ -6294,6 +6294,23 @@ async function fbPatch(env, path, value) {
 async function fbGet(env, path) {
   const r = await fetch(fbUrl(env, path));
   return safeJson(r);
+}
+// Short-TTL cache of the full /chats node (~14 MB). /search-messages (fired
+// on a debounced keystroke) and /ai-inbox both scan the whole node; without
+// this, one search session re-downloaded 14 MB several times. A 45s warm-
+// isolate cache collapses a burst of searches + back-to-back ai-inbox calls
+// into a single 14 MB read. (Worker isolates are reused between requests, so
+// this persists across calls while warm; cold starts just re-fetch — fine.)
+let _chatsCache = null;
+let _chatsCacheAt = 0;
+const CHATS_CACHE_TTL_MS = 45000;
+async function getChatsCached(env) {
+  const now = Date.now();
+  if (_chatsCache && (now - _chatsCacheAt) < CHATS_CACHE_TTL_MS) return _chatsCache;
+  const chats = await fbGet(env, `${ROOT}/chats`);
+  _chatsCache = chats;
+  _chatsCacheAt = now;
+  return chats;
 }
 // Multi-path PATCH at the root of the database. Body keys are deep paths relative to root.
 // One HTTP request → many writes atomically. Critical for fitting under the Worker subrequest limit.

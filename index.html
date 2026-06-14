@@ -2786,7 +2786,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.281";
+const APP_VERSION = "v1.282";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -8103,7 +8103,7 @@ searchInput.oninput = () => {
     hideInlineMsgSearch();
     return;
   }
-  _inlineMsgSearchTimer = setTimeout(runMsgSearch, 250);
+  _inlineMsgSearchTimer = setTimeout(runMsgSearch, 500);  // was 250 — fewer in-flight searches; worker caches /chats 45s so egress is bounded regardless
 };
 // Escape clears the search (and the inline results) — matches the old
 // modal's Escape behaviour.
