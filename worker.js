@@ -103,6 +103,13 @@ export default {
       if (url.pathname === "/admin/path-sizes" && request.method === "GET") {
         return cors(env, await handlePathSizes(env));
       }
+      // v1.288: seed/merge the Exotel allowlist (commonComm/config/
+      // exotelAgents). No dashboard UI yet — this admin-gated endpoint is
+      // how trainers get enabled. Body: { agents: [{email, phone,
+      // exotelEmail?}] }. Merges (doesn't wipe other entries).
+      if (url.pathname === "/admin/set-exotel-agents" && request.method === "POST") {
+        return cors(env, await handleSetExotelAgents(request, env));
+      }
       // v1.271: destructive cleanup of a ghost user record. POST body:
       // { ghostUid, reassignOpenTicketsTo? }. Deletes /users/{ghost},
       // /pushTokens/{ghost}, /userState/{ghost}, /userGrants/{ghost},
@@ -5637,6 +5644,34 @@ async function handleCohortAdd(request, env, ctx) {
   );
 
   return json({ ok: true, cohortCode, chatId, added, invited, skipped });
+}
+
+// ---------- /admin/set-exotel-agents (seed the call allowlist) ----------
+// v1.288: writes commonComm/config/exotelAgents. Keyed by emailKey of the
+// trainer's CommonComm SIGN-IN email (same encoding the /exotel-call
+// allowlist check + web emailKey use). Merges into the existing map so
+// adding one trainer doesn't drop the rest. Body:
+//   { agents: [ { email, phone, exotelEmail? }, ... ] }
+async function handleSetExotelAgents(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const agents = Array.isArray(body?.agents) ? body.agents : [];
+  if (!agents.length) return json({ error: "no agents" }, 400);
+  const updates = {};
+  const written = [];
+  for (const a of agents) {
+    const email = String(a?.email || "").trim().toLowerCase();
+    const phone = String(a?.phone || "").trim();
+    if (!email || !phone) continue;
+    const key = email.replace(/[.#$\[\]\/]/g, "_");
+    updates[`${ROOT}/config/exotelAgents/${key}/phone`] = phone;
+    if (a.exotelEmail) {
+      updates[`${ROOT}/config/exotelAgents/${key}/exotelEmail`] = String(a.exotelEmail);
+    }
+    written.push({ email, key, phone });
+  }
+  if (!written.length) return json({ error: "no valid agents" }, 400);
+  await fbPatchRoot(env, updates);
+  return json({ ok: true, written });
 }
 
 // ---------- /admin/path-sizes (download-footprint diagnostic) ----------
