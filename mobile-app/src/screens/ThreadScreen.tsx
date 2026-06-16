@@ -68,6 +68,7 @@ import {
   editMessage,
   deleteMessage,
   reactToMessage,
+  exotelCall,
 } from "@/lib/worker";
 import { makeVoiceNoteRecordingOptions } from "@/lib/voiceRecording";
 import { prewarmTranscription } from "@/lib/prewarm";
@@ -467,6 +468,58 @@ export function ThreadScreen({ route, navigation }: Props) {
     { name: string; text: string; saving: boolean } | null
   >(null);
 
+  // v1.280: Exotel click-to-call. Subscribe to the exotelAgents allowlist
+  // and enable the 📞 header button only for trainers whose email is in
+  // it (the worker re-validates server-side). Tiny config node.
+  const [exotelEnabled, setExotelEnabled] = useState(false);
+  useEffect(() => {
+    const email = (user?.email || "").toLowerCase();
+    if (!email || isDm || isGroup) {
+      setExotelEnabled(false);
+      return;
+    }
+    const key = email.replace(/[.#$[\]/]/g, "_");
+    const unsub = onValue(ref(db, `${ROOT}/config/exotelAgents/${key}`), (snap) => {
+      setExotelEnabled(!!snap.val()?.phone);
+    });
+    return () => unsub();
+  }, [user, isDm, isGroup]);
+
+  const handleExotelCall = useCallback(async () => {
+    if (!user || isDm) return;
+    const phone = meta.phone || chatId.split("@")[0];
+    if (!phone) {
+      Alert.alert("No number", "This customer has no phone number on file.");
+      return;
+    }
+    Alert.alert(
+      `Call ${headerName}?`,
+      "Your phone will ring first — pick up, and Exotel connects you to the customer. They'll see the Ferra number, not yours.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Call",
+          onPress: async () => {
+            const res = await exotelCall({
+              customerPhone: phone,
+              byUid: user.uid,
+              byEmail: user.email || "",
+              byName: user.displayName || user.email || "",
+            });
+            if (!res.ok) {
+              Alert.alert("Couldn't start the call", res.error || "Unknown error");
+            } else {
+              Alert.alert(
+                "Calling…",
+                `Your phone (${res.ringing}) will ring in a moment. Pick up to connect to ${headerName}.`,
+              );
+            }
+          },
+        },
+      ],
+    );
+  }, [user, isDm, meta.phone, chatId, headerName]);
+
   useLayoutEffect(() => {
     navigation.setOptions({
       headerTitle: headerName,
@@ -478,6 +531,17 @@ export function ThreadScreen({ route, navigation }: Props) {
         ? undefined
         : () => (
             <View style={styles.headerRightWrap}>
+              {/* v1.280: Exotel call — customer chats only, allowlisted
+                  trainers only. Rings the trainer's own phone first. */}
+              {!isGroup && exotelEnabled && (
+                <TouchableOpacity
+                  accessibilityLabel="Call customer"
+                  onPress={handleExotelCall}
+                  style={styles.headerBtn}
+                >
+                  <Text style={styles.headerBtnTxt}>📞</Text>
+                </TouchableOpacity>
+              )}
               {!isGroup && (
                 <TouchableOpacity
                   accessibilityLabel="Customer details"
@@ -503,7 +567,7 @@ export function ThreadScreen({ route, navigation }: Props) {
             </View>
           ),
     });
-  }, [navigation, headerName, isDm, chatKey, isGroup]);
+  }, [navigation, headerName, isDm, chatKey, isGroup, exotelEnabled, handleExotelCall]);
 
   // Live messages listener (last 300). DM messages live at /dms/{pairKey}
   // and use fromUid instead of a direction field — we translate at the

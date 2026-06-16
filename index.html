@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.287</title>
+<title>CommonCommunication v1.288</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2298,6 +2298,7 @@
           <div class="info">
             <div style="display:flex; align-items:center; gap:4px;">
               <span class="name" id="threadName">—</span>
+              <button id="exotelCallBtn" class="icon-btn" style="width:32px; height:32px; font-size:16px; display:none;" title="Call this customer (your phone will ring first)">📞</button>
               <button id="editNameBtn" class="icon-btn" style="width:32px; height:32px; font-size:16px;" title="Edit / add manual name">✏️</button>
               <button id="chatBackfillBtn" class="icon-btn" style="width:32px; height:32px; font-size:16px;" title="Backfill this chat's history from Periskope">📥</button>
               <button id="summarizeBtn" class="icon-btn" style="width:32px; height:32px; font-size:16px;" title="AI summary of this chat">🧠</button>
@@ -2795,7 +2796,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.287";
+const APP_VERSION = "v1.288";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -3061,6 +3062,7 @@ const infoDrawer = $("infoDrawer");
 const infoToggleBtn = $("infoToggleBtn");
 const infoBody = $("infoBody");
 const editNameBtn = $("editNameBtn");
+const exotelCallBtn = $("exotelCallBtn");
 const privateToggleBtn = $("privateToggleBtn");
 const chatBackfillBtn = $("chatBackfillBtn");
 const summarizeBtn = $("summarizeBtn");
@@ -3370,6 +3372,7 @@ onAuthStateChanged(auth, async (user) => {
     listenMySendActivity();
     listenMyGrants();
     listenTemplates();
+    listenExotelAgents();
     // v1.204: deep-link reader. If the URL has ?chat=<chatKey>, open
     // that chat once /chats data lands. Used by the AI Inbox "open in
     // new tab" flow — clicking a row in the modal launches a new tab
@@ -9292,10 +9295,16 @@ function updateThreadHeader() {
     threadAvatar.textContent = avatarInitial(name);
     threadAvatar.style.background = "#3b82f6";
     privateToggleBtn.style.display = "none";
+    if (exotelCallBtn) exotelCallBtn.style.display = "none"; // no Exotel on DMs
     return;
   }
   const meta = chatsCache[currentChatId] || {};
   const isGroup = meta.chatType === "group" || String(meta.chatId || "").endsWith("@g.us");
+  // v1.280: Exotel Call button — only for 1:1 customer chats, and only
+  // for trainers in the exotelAgents allowlist.
+  if (exotelCallBtn) {
+    exotelCallBtn.style.display = (!isGroup && myExotelEnabled()) ? "" : "none";
+  }
   const explicit = meta.contactName || meta.displayName;
   const name = resolveDisplayName(meta.phone, explicit, { chatType: isGroup ? "group" : "user", groupName: meta.groupName });
   const lockPrefix = meta.private ? "🔒 " : "";
@@ -9322,6 +9331,46 @@ function updateThreadHeader() {
 
 // AI summary: ask Claude (via worker) to summarize the current chat.
 let _lastSummaryChatId = null;
+// v1.280: Exotel click-to-call. Triggers the worker, which rings the
+// trainer's own phone then bridges to the customer. No in-page audio —
+// the call happens on the trainer's actual phone line.
+let _exotelCallBusy = false;
+if (exotelCallBtn) exotelCallBtn.onclick = async () => {
+  if (_exotelCallBusy || !currentChatId || isDmKey(currentChatId)) return;
+  const meta = chatsCache[currentChatId] || {};
+  const customerPhone = meta.phone || "";
+  if (!customerPhone) { alert("No phone number for this customer."); return; }
+  const name = resolveDisplayName(meta.phone, meta.contactName || meta.displayName, { chatType: "user" });
+  if (!confirm(`Call ${name}?\n\nYour phone will ring first — pick up, and Exotel connects you to the customer. They'll see the Ferra number, not yours.`)) return;
+  _exotelCallBusy = true;
+  exotelCallBtn.style.opacity = "0.5";
+  try {
+    const res = await fetch(`${WORKER_URL}/exotel-call`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        customerPhone,
+        byUid: currentUser?.uid || "",
+        byEmail: currentUser?.email || "",
+        byName: currentUser?.displayName || currentUser?.email || "",
+      }),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || !j?.ok) {
+      const msg = j?.error === "exotel_not_configured" ? "Calling isn't set up yet (Exotel keys missing)."
+        : j?.error === "not_authorized" ? "Your account isn't enabled for calling. Ask an admin to add your Exotel callback number."
+        : (j?.detail ? JSON.stringify(j.detail) : j?.error || `HTTP ${res.status}`);
+      alert("Couldn't start the call: " + msg);
+      return;
+    }
+    alert(`Calling… your phone (${j.ringing}) will ring in a moment. Pick up to connect to ${name}.`);
+  } catch (e) {
+    alert("Couldn't start the call: " + (e?.message || e));
+  } finally {
+    _exotelCallBusy = false;
+    exotelCallBtn.style.opacity = "1";
+  }
+};
 summarizeBtn.onclick = () => runSummarize(false);
 summaryRegen.onclick = () => runSummarize(true);
 summaryClose.onclick = () => summaryModal.classList.remove("visible");
@@ -11086,6 +11135,23 @@ function listenTemplates() {
     templatesCache = snap.val() || {};
     if (templatesModal.classList.contains("visible")) renderTemplatesList();
   });
+}
+
+// v1.280: Exotel click-to-call allowlist. commonComm/config/exotelAgents
+// is keyed by emailKey(trainerEmail) → { phone, exotelEmail? }. Only
+// trainers present here see the 📞 Call button (the worker re-validates
+// server-side). Tiny node; cheap to subscribe.
+let exotelAgentsCache = {};
+function listenExotelAgents() {
+  onValue(ref(db, `${ROOT}/config/exotelAgents`), (snap) => {
+    exotelAgentsCache = snap.val() || {};
+    updateThreadHeader();
+  });
+}
+function myExotelEnabled() {
+  const email = (currentUser?.email || "").toLowerCase();
+  if (!email) return false;
+  return !!exotelAgentsCache[emailKey(email)];
 }
 
 // v1.243: template media state — populated when an admin attaches a

@@ -52,6 +52,40 @@ export async function sendMessage(body: SendBody): Promise<Response> {
   });
 }
 
+// v1.280: Exotel click-to-call. The worker rings the trainer's own phone
+// (looked up server-side from the exotelAgents allowlist) then bridges to
+// the customer. No in-app audio — the call lands on the trainer's real
+// phone line, so this is just a fire-and-forget trigger.
+export async function exotelCall(body: {
+  customerPhone: string;
+  byUid: string;
+  byEmail: string;
+  byName: string;
+}): Promise<{ ok: boolean; error?: string; ringing?: string }> {
+  try {
+    const res = await fetch(`${WORKER_URL}/exotel-call`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || !j?.ok) {
+      const reason =
+        j?.error === "exotel_not_configured"
+          ? "Calling isn't set up yet."
+          : j?.error === "not_authorized"
+            ? "Your account isn't enabled for calling."
+            : j?.detail
+              ? JSON.stringify(j.detail)
+              : j?.error || `HTTP ${res.status}`;
+      return { ok: false, error: reason };
+    }
+    return { ok: true, ringing: j.ringing };
+  } catch (e) {
+    return { ok: false, error: String((e as Error)?.message || e) };
+  }
+}
+
 // v1.151: edit a previously-sent WhatsApp message. The worker calls
 // Periskope's edit endpoint then patches Firebase with the new text +
 // editedAt marker. Returns the worker's JSON response so the caller can

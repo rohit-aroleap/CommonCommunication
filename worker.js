@@ -314,6 +314,15 @@ export default {
       if (url.pathname === "/cohort-add" && request.method === "POST") {
         return cors(env, await handleCohortAdd(request, env, ctx));
       }
+      // v1.280: Exotel click-to-call. Trainer taps Call on a customer chat;
+      // Exotel rings the trainer's own phone first, then bridges to the
+      // customer (who sees the Ferra virtual CallerId). Allowlist + the
+      // trainer's callback number live in commonComm/config/exotelAgents,
+      // checked server-side here — the client is never trusted for the
+      // From number. Guarded: 503 until the 5 EXOTEL_* secrets are set.
+      if (url.pathname === "/exotel-call" && request.method === "POST") {
+        return cors(env, await handleExotelCall(request, env, ctx));
+      }
       // v1.275: force a full member-list reconcile from Periskope. Also
       // fires organically from /cohort-list when data is >6h old; this
       // endpoint exists for manual refresh + external cron services
@@ -5174,6 +5183,112 @@ async function runCleanupPass(rawText, env) {
   } catch (e) {
     return { text: rawText, raw: rawText, cleaned: false, reason: "claude_network_error", details: String(e?.message || e) };
   }
+}
+
+// ---------- /exotel-call (click-to-call a customer over PSTN) ----------
+// v1.280: bridges a trainer to a customer over the phone network via
+// Exotel's Connect API. Exotel calls `From` (the trainer's own mobile)
+// first; when they answer it dials `To` (the customer) and connects the
+// two legs. The customer sees `CallerId` (the Ferra ExoPhone), never the
+// trainer's personal number. No WebRTC / native code — just an HTTPS
+// call that triggers two real phone calls, so web and mobile share this
+// one path identically.
+//
+// Allowlist + per-trainer callback number live at
+// commonComm/config/exotelAgents/{emailKey} = { phone, exotelEmail? }.
+// Only trainers present there can call, and the From number ALWAYS comes
+// from this server-side config — the client supplies only its identity
+// (byEmail) and the customer number, never its own From.
+function toE164(raw) {
+  let d = String(raw || "").replace(/\D/g, "");
+  if (!d) return null;
+  if (d.length === 10) d = "91" + d; // bare Indian mobile -> add country code
+  if (d.length < 11 || d.length > 15) return null;
+  return "+" + d;
+}
+async function handleExotelCall(request, env, ctx) {
+  const body = await request.json().catch(() => ({}));
+  const customerPhoneRaw = String(body?.customerPhone || "").trim();
+  const byEmail = String(body?.byEmail || "").trim().toLowerCase();
+  const byUid = String(body?.byUid || "");
+  const byName = String(body?.byName || "");
+  if (!customerPhoneRaw) return json({ error: "missing customerPhone" }, 400);
+  if (!byEmail) return json({ error: "missing byEmail" }, 400);
+
+  // All five secrets must be present, else the feature is "not configured".
+  const apiKey = env.EXOTEL_API_KEY;
+  const apiToken = env.EXOTEL_API_TOKEN;
+  const sid = env.EXOTEL_SID;
+  const callerId = env.EXOTEL_CALLER_ID;
+  const apiHost = env.EXOTEL_API_HOST;
+  if (!apiKey || !apiToken || !sid || !callerId || !apiHost) {
+    return json({ error: "exotel_not_configured" }, 503);
+  }
+
+  // Server-authoritative allowlist + From number.
+  const agents = await fbGet(env, `${ROOT}/config/exotelAgents`);
+  const key = byEmail.replace(/[.#$\[\]\/]/g, "_");
+  const agent = agents && typeof agents === "object" ? agents[key] : null;
+  if (!agent || !agent.phone) {
+    return json(
+      { error: "not_authorized", detail: "no Exotel callback number for this trainer" },
+      403,
+    );
+  }
+  const fromPhone = toE164(agent.phone);
+  const toPhone = toE164(customerPhoneRaw);
+  if (!fromPhone) return json({ error: "bad agent phone in config" }, 500);
+  if (!toPhone) return json({ error: "bad customerPhone" }, 400);
+
+  // Exotel Connect (connect two numbers). Basic auth = key:token.
+  const params = new URLSearchParams();
+  params.set("From", fromPhone);
+  params.set("To", toPhone);
+  params.set("CallerId", callerId);
+  params.set("CallType", "trans"); // transactional (not promotional)
+  // v1: no Record / StatusCallback — keep it a plain connect.
+
+  const auth = btoa(`${apiKey}:${apiToken}`);
+  const exoUrl = `https://${apiHost}/v1/Accounts/${sid}/Calls/connect.json`;
+  let exoRes, exoJson;
+  try {
+    exoRes = await fetch(exoUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${auth}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: params.toString(),
+    });
+    exoJson = await safeJson(exoRes);
+  } catch (e) {
+    return json({ error: "exotel_unreachable", detail: String(e?.message || e) }, 502);
+  }
+  if (!exoRes.ok) {
+    console.error("exotel-call-failed", {
+      httpStatus: exoRes.status,
+      response: exoJson,
+      byEmail,
+      from: fromPhone,
+    });
+    return json({ error: "exotel_failed", status: exoRes.status, detail: exoJson }, 502);
+  }
+
+  const callSid = exoJson?.Call?.Sid || exoJson?.Call?.sid || null;
+  // Fire-and-forget call-history log (no per-chat write in v1 — just an
+  // audit trail at commonComm/exotelCallLog).
+  ctx.waitUntil(
+    fbPush(env, `${ROOT}/exotelCallLog`, {
+      customerPhone: toPhone,
+      agentPhone: fromPhone,
+      byUid,
+      byName,
+      byEmail,
+      callSid,
+      at: Date.now(),
+    }).then(() => {}).catch(() => {}),
+  );
+  return json({ ok: true, callSid, ringing: fromPhone });
 }
 
 // ---------- /cohort-list + /cohort-add (daily WhatsApp groups) ----------
