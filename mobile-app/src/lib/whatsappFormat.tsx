@@ -389,10 +389,17 @@ function renderSpan(s: Span, idx: number, colors: Colors): React.ReactNode {
         </Text>
       );
     case "link":
+      // v1.290: links INHERIT the bubble's body text color (no explicit
+      // color) + underline + semibold. Previously they used colors.green,
+      // but in the dark theme colors.green (#3b82f6) is the SAME color as
+      // the outbound bubble background (bubbleOut #3b82f6) — so links on
+      // outbound messages rendered invisibly (blue-on-blue). Inheriting
+      // the body color guarantees contrast on every bubble side in both
+      // themes; underline + weight keep it recognizable as a link.
       return (
         <Text
           key={idx}
-          style={{ color: colors.green, textDecorationLine: "underline" }}
+          style={{ textDecorationLine: "underline", fontWeight: "600" }}
           onPress={() => Linking.openURL(s.url).catch(() => {})}
         >
           {s.text}
