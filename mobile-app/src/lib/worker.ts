@@ -41,6 +41,11 @@ export interface SendBody {
     text: string;
     isFromMe?: boolean;
     senderName?: string | null;
+    // v1.295: cross-chat reply ("Reply privately to customer" from a
+    // group). When set, the worker stores it on the new message's
+    // replyTo snapshot and skips quoting the parent to Periskope (can't
+    // quote across chats), so the bubble can deep-link back to the group.
+    sourceChatKey?: string;
   };
 }
 

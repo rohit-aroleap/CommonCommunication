@@ -143,6 +143,7 @@ export function ThreadScreen({ route, navigation }: Props) {
     contacts,
     sharedCustomerDetails,
     subsByPhone,
+    teamPhones,
     markChatSeen,
     bumpSendActivity,
     templates,
@@ -364,6 +365,13 @@ export function ThreadScreen({ route, navigation }: Props) {
   // quoted-message bar above the text input while this is set. Cleared
   // on send, on dismiss-tap, or on chat change (via the effect below).
   const [replyTarget, setReplyTarget] = useState<Message | null>(null);
+  // v1.295: when the reply target is a CROSS-CHAT reply ("Reply privately
+  // to customer" from a group), this holds the originating group's chatKey.
+  // The next send carries it as replyTo.sourceChatKey so the worker links
+  // the quoted card back to the group. Null for normal same-chat replies.
+  const [replySourceChatKey, setReplySourceChatKey] = useState<string | null>(
+    null,
+  );
   // v1.225: pending template-media. Set when the slash picker picks a
   // template carrying a file; the next `send` ships text + media URL
   // together. Cleared on send (success or failure) and explicit dismiss
@@ -376,7 +384,27 @@ export function ThreadScreen({ route, navigation }: Props) {
     // Chat changed — drop any pending reply target so it doesn't leak
     // into the next chat's send.
     setReplyTarget(null);
+    setReplySourceChatKey(null);
   }, [chatKey]);
+  // v1.295: consume a "Reply privately to customer" handoff. When this
+  // thread was opened from a group's action sheet, route.params carries
+  // the group message to quote; set it as the reply target + remember the
+  // source group, then clear the param so it doesn't re-fire on re-render.
+  const replyPrivatelyTo = route.params?.replyPrivatelyTo;
+  useEffect(() => {
+    if (!replyPrivatelyTo) return;
+    setReplyTarget({
+      id: replyPrivatelyTo.msgKey,
+      text: replyPrivatelyTo.text,
+      ts: Date.now(),
+      direction: "in",
+      sentByName: replyPrivatelyTo.senderName,
+      senderPhone: replyPrivatelyTo.senderPhone || undefined,
+      periskopeMsgId: replyPrivatelyTo.periskopeMsgId,
+    } as Message);
+    setReplySourceChatKey(replyPrivatelyTo.sourceChatKey);
+    navigation.setParams({ replyPrivatelyTo: undefined });
+  }, [replyPrivatelyTo, navigation]);
   // v1.154: when the trainer picks "Forward to teammate" from the
   // action sheet, we hold the source message here. Tapping a teammate
   // in the picker writes a DM under their pairKey, then clears the
@@ -487,6 +515,71 @@ export function ThreadScreen({ route, navigation }: Props) {
     });
     return () => unsub();
   }, [user, isDm, isGroup]);
+
+  // v1.295: "Reply privately to customer" — from a GROUP message, open a
+  // 1:1 thread with the member who sent it and quote their group message.
+  // Mirrors the web flow: skip teammate numbers, create the 1:1 chat-meta
+  // stub if it doesn't exist (dual-written to chatsIndex), then push the
+  // Thread with a replyPrivatelyTo handoff. The next send there carries
+  // sourceChatKey back to this group.
+  const handleReplyPrivately = useCallback(
+    async (m: Message) => {
+      const digits = String(m.senderPhone || "").replace(/\D/g, "");
+      if (!digits) {
+        Alert.alert("Can't reply privately", "No phone number on this message.");
+        return;
+      }
+      if (teamPhones && teamPhones.has(digits)) {
+        Alert.alert(
+          "That's a teammate",
+          "This message was sent by a teammate — use the Team tab to DM them, not the customer 1:1 flow.",
+        );
+        return;
+      }
+      const targetChatId = `${digits}@c.us`;
+      const targetChatKey = targetChatId.replace(/[.#$[\]/]/g, "_");
+      // Create the 1:1 chat-meta stub if there's no thread yet (dual-write
+      // to chatsIndex so it appears in the list). Skip if it exists.
+      if (!chatMetaByKey[targetChatKey] && user) {
+        const guessedName = m.sentByName || null;
+        const stub = {
+          chatId: targetChatId,
+          chatType: "user",
+          phone: digits,
+          contactName: guessedName,
+          displayName: guessedName,
+          lastMsgAt: Date.now(),
+          lastMsgPreview: "(private reply started)",
+          lastMsgDirection: "out",
+        };
+        const updates: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(stub)) {
+          updates[`${ROOT}/chats/${targetChatKey}/meta/${k}`] = v;
+          updates[`${ROOT}/chatsIndex/${targetChatKey}/${k}`] = v;
+        }
+        try {
+          await update(ref(db), updates);
+        } catch (e) {
+          Alert.alert("Couldn't open private chat", String((e as Error)?.message || e));
+          return;
+        }
+      }
+      setMessageMenuFor(null);
+      navigation.push("Thread", {
+        chatKey: targetChatKey,
+        initialTitle: m.sentByName || `+${digits}`,
+        replyPrivatelyTo: {
+          msgKey: m.id,
+          text: (m.text || m.media?.caption || "").slice(0, 500),
+          senderName: m.sentByName || null,
+          senderPhone: digits,
+          periskopeMsgId: m.periskopeMsgId || null,
+          sourceChatKey: chatKey,
+        },
+      });
+    },
+    [teamPhones, chatMetaByKey, user, navigation, chatKey],
+  );
 
   const handleExotelCall = useCallback(async () => {
     if (!user || isDm) return;
@@ -816,6 +909,7 @@ export function ThreadScreen({ route, navigation }: Props) {
     setComposer("");
     setMentions(new Map());
     setReplyTarget(null);
+    setReplySourceChatKey(null);
     setPendingTemplateMedia(null);
     try {
       const res = await sendMessage({
@@ -834,6 +928,11 @@ export function ThreadScreen({ route, navigation }: Props) {
                 text: (replySnapshot.text || replySnapshot.media?.caption || "").slice(0, 500),
                 isFromMe: replySnapshot.direction === "out",
                 senderName: replySnapshot.sentByName || null,
+                // v1.295: cross-chat reply context (Reply privately to
+                // customer from a group).
+                ...(replySourceChatKey
+                  ? { sourceChatKey: replySourceChatKey }
+                  : {}),
               },
             }
           : {}),
@@ -867,6 +966,7 @@ export function ThreadScreen({ route, navigation }: Props) {
     phone,
     mentions,
     replyTarget,
+    replySourceChatKey,
     pendingTemplateMedia,
   ]);
 
@@ -2082,9 +2182,11 @@ export function ThreadScreen({ route, navigation }: Props) {
             <View style={styles.replyBarAccent} />
             <View style={styles.replyBarBody}>
               <Text style={styles.replyBarLabel}>
-                {replyTarget.direction === "out"
-                  ? "Replying to yourself"
-                  : `Replying to ${replyTarget.sentByName || replyTarget.senderPhone || "customer"}`}
+                {replySourceChatKey
+                  ? `Private reply to ${replyTarget.sentByName || replyTarget.senderPhone || "customer"}`
+                  : replyTarget.direction === "out"
+                    ? "Replying to yourself"
+                    : `Replying to ${replyTarget.sentByName || replyTarget.senderPhone || "customer"}`}
               </Text>
               <Text style={styles.replyBarTxt} numberOfLines={1}>
                 {replyTarget.text || replyTarget.media?.caption || "(media)"}
@@ -2311,6 +2413,24 @@ export function ThreadScreen({ route, navigation }: Props) {
               <Text style={styles.actionSheetIcon}>↩️</Text>
               <Text style={styles.actionSheetTxt}>Reply</Text>
             </TouchableOpacity>
+            {/* v1.295: Reply privately to customer — only for an inbound
+                message in a GROUP (peel off a 1:1 reply to that member). */}
+            {!isDm &&
+              isGroup &&
+              messageMenuFor?.direction === "in" &&
+              !!messageMenuFor?.senderPhone && (
+                <TouchableOpacity
+                  style={styles.actionSheetRow}
+                  onPress={() =>
+                    messageMenuFor && handleReplyPrivately(messageMenuFor)
+                  }
+                >
+                  <Text style={styles.actionSheetIcon}>💬</Text>
+                  <Text style={styles.actionSheetTxt}>
+                    Reply privately to customer
+                  </Text>
+                </TouchableOpacity>
+              )}
             {/* v1.154 + v1.169: Forward works from both customer threads
                 (forward customer message to a teammate's DM) and from
                 DM threads (forward this DM line to a different

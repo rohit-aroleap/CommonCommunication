@@ -16,7 +16,24 @@ export type RootStackParamList = {
   // to it with a brief highlight.
   // v1.292: textOnly forces a daily-workout group's thread to hide media
   // (set when opened from the everyday inbox rather than the Daily tab).
-  Thread: { chatKey: string; initialTitle?: string; anchorMsgKey?: string; textOnly?: boolean };
+  Thread: {
+    chatKey: string;
+    initialTitle?: string;
+    anchorMsgKey?: string;
+    textOnly?: boolean;
+    // v1.295: "Reply privately to customer" — open the member's 1:1
+    // thread with a pending cross-chat reply quoting their group message.
+    // The thread consumes this on mount, sets it as the reply target, and
+    // the next send carries sourceChatKey back to the originating group.
+    replyPrivatelyTo?: {
+      msgKey: string;
+      text: string;
+      senderName: string | null;
+      senderPhone: string | null;
+      periskopeMsgId: string | null;
+      sourceChatKey: string;
+    };
+  };
   CustomerInfo: { chatKey: string };
   Settings: undefined;
   // v1.264: 1:1 audio call route. callId is the Daily.co room name /
