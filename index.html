@@ -12532,6 +12532,7 @@ async function doSendDmMedia(media) {
   }
 }
 
+let _sendInFlight = false;  // re-entrancy guard for doSend (see below)
 async function doSend() {
   const text = composerInput.value.trim();
   // v1.243: a template can be media-only (no caption) — when the queued
@@ -12541,6 +12542,18 @@ async function doSend() {
   if (!currentChatId || !currentUser) return;
   if (isDmKey(currentChatId)) return doSendDm(text);
   if (!WORKER_URL) { alert("Worker URL not configured — set WORKER_URL at top of index.html."); return; }
+
+  // v1.283: re-entrancy guard. The composer is only cleared AFTER two
+  // network awaits (optimistic set + updateChatMeta) below — on a laggy
+  // or dropped connection, taps/Enter during that window each ran doSend
+  // again with the same text, sending the message multiple times (which
+  // then had to be deleted by hand). Block concurrent sends and disable
+  // the button; reset in finally so a failed send never wedges the
+  // composer.
+  if (_sendInFlight) return;
+  _sendInFlight = true;
+  if (sendBtn) sendBtn.disabled = true;
+  try {
 
   const meta = chatsCache[currentChatId] || {};
   const chatId = meta.chatId || currentChatId;
@@ -12647,6 +12660,10 @@ async function doSend() {
     // worker patches status->sent itself; nothing else needed on success
   } catch (e) {
     await update(msgRef, { status: "failed", error: String(e) });
+  }
+  } finally {
+    _sendInFlight = false;
+    if (sendBtn) sendBtn.disabled = false;
   }
 }
 
