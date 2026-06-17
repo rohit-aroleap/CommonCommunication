@@ -143,6 +143,11 @@ export interface Message {
     name: string | null;
     phones: Array<{ display: string; digits: string }>;
   }> | null;
+  // v1.294: shared location pin (Periskope message_type="location").
+  // Worker stores { lat, lng }; the bubble reads the base64 map thumbnail
+  // from raw.location.jpegThumbnail. Older location messages (pre-v1.294)
+  // have no `location` field — the bubble falls back to parsing raw.
+  location?: { lat: number; lng: number } | null;
   // v1.265: raw Periskope payload kept for fallback parsing of old
   // vCard messages. The worker has stored this for a while; we just
   // didn't have a type for it.

@@ -87,7 +87,20 @@ export function MessageBubble({
     return null;
   }, [m.contacts, m.raw?.vcards]);
   const hasContacts = !!(contacts && contacts.length);
-  if (!isDeleted && !hasText && !hasMedia && !hasContacts) {
+  // v1.294: location pins. Prefer the worker-parsed m.location; fall back
+  // to raw.location for messages received before v1.294. The thumbnail
+  // always comes from raw (we never duplicated the base64 blob onto the
+  // clean record).
+  const location = useMemo(() => {
+    const loc = m.location;
+    const raw = m.raw?.location;
+    const lat = loc?.lat ?? raw?.latitude ?? raw?.degreesLatitude;
+    const lng = loc?.lng ?? raw?.longitude ?? raw?.degreesLongitude;
+    if (lat == null || lng == null) return null;
+    return { lat, lng, thumbnail: raw?.jpegThumbnail as string | undefined };
+  }, [m.location, m.raw?.location]);
+  const hasLocation = !!location;
+  if (!isDeleted && !hasText && !hasMedia && !hasContacts && !hasLocation) {
     return null;
   }
 
@@ -204,6 +217,11 @@ export function MessageBubble({
                 ))}
               </View>
             ) : null}
+            {/* v1.294: shared location pin — map thumbnail (if any) over a
+                "📍 Location" label; tap opens Google Maps at the coords. */}
+            {hasLocation && location ? (
+              <LocationCard location={location} />
+            ) : null}
             {hasText && !hasContacts ? (
               <FormattedText text={m.text!} baseStyle={styles.text} />
             ) : null}
@@ -221,6 +239,37 @@ export function MessageBubble({
           (right for outbound, left for inbound). */}
       <ReactionsPill reactions={m.reactions} out={out} />
     </View>
+  );
+}
+
+// v1.294: shared-location card. Shows the map thumbnail (base64 JPEG from
+// Periskope, if present) with a "📍 Location" label; tapping opens Google
+// Maps at the pin's coordinates.
+function LocationCard({
+  location,
+}: {
+  location: { lat: number; lng: number; thumbnail?: string };
+}) {
+  const styles = useStyles(makeStyles);
+  const mapsUrl = `https://www.google.com/maps?q=${location.lat},${location.lng}`;
+  return (
+    <TouchableOpacity
+      style={styles.locationCard}
+      onPress={() => Linking.openURL(mapsUrl).catch(() => {})}
+      accessibilityLabel="Open shared location in Google Maps"
+    >
+      {location.thumbnail ? (
+        <Image
+          source={{ uri: `data:image/jpeg;base64,${location.thumbnail}` }}
+          style={styles.locationThumb}
+          resizeMode="cover"
+        />
+      ) : null}
+      <View style={styles.locationRow}>
+        <Text style={styles.locationIcon}>📍</Text>
+        <Text style={styles.locationTxt}>Location · tap to open in Maps</Text>
+      </View>
+    </TouchableOpacity>
   );
 }
 
@@ -564,6 +613,28 @@ function makeStyles(colors: Colors) {
     contactsBlock: {
       marginTop: 2,
     },
+    // v1.294: shared-location card.
+    locationCard: {
+      borderRadius: 8,
+      overflow: "hidden",
+      backgroundColor: "rgba(0,0,0,0.04)",
+      marginBottom: 4,
+      minWidth: 200,
+    },
+    locationThumb: {
+      width: "100%",
+      height: 120,
+      backgroundColor: "rgba(0,0,0,0.08)",
+    },
+    locationRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      paddingVertical: 8,
+      paddingHorizontal: 10,
+    },
+    locationIcon: { fontSize: 15 },
+    locationTxt: { fontSize: 13, color: colors.green, fontWeight: "600" },
     contactCard: {
       backgroundColor: "rgba(0,0,0,0.04)",
       borderRadius: 8,

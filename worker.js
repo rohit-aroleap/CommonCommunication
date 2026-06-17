@@ -1293,6 +1293,8 @@ async function handleWebhook(request, env) {
   // form the bubble can render. Periskope sends message_type="vcard" with
   // body="N contacts" and a vcards: [...] array of vCard 3.0 strings.
   const contacts = parseVcards(msg?.vcards);
+  // v1.294: location pins (message_type="location").
+  const location = extractLocation(msg);
   const record = {
     direction: isFromMe ? "out" : "in",
     text: media?.caption || text,
@@ -1304,6 +1306,7 @@ async function handleWebhook(request, env) {
   };
   if (media) record.media = media;
   if (contacts) record.contacts = contacts;
+  if (location) record.location = location;
 
   const pushed = await fbPush(env, `${ROOT}/chats/${encodeKey(chatId)}/messages`, record);
   if (periskopeMsgId && pushed?.name) {
@@ -2299,16 +2302,34 @@ function parseVcards(arr) {
   return out.length > 0 ? out : null;
 }
 
+// v1.294: pull a location pin out of a Periskope message. Periskope sends
+// message_type="location" with a nested `location` object holding
+// latitude/longitude (plus degreesLatitude/degreesLongitude duplicates
+// and a base64 jpegThumbnail). No address/url field — coords only. We
+// store just { lat, lng } on the record; the bubble reads the thumbnail
+// from msg.raw.location.jpegThumbnail (already kept in `raw`) so we don't
+// double-store the blob.
+function extractLocation(msg) {
+  const loc = msg && msg.location;
+  if (!loc || typeof loc !== "object") return null;
+  const lat = loc.latitude != null ? loc.latitude : loc.degreesLatitude;
+  const lng = loc.longitude != null ? loc.longitude : loc.degreesLongitude;
+  if (lat == null || lng == null) return null;
+  return { lat, lng };
+}
+
 // Pretty preview string for the chat list when a message is media-only.
 function mediaPreview(media, messageType, fallbackText) {
   if (fallbackText) return fallbackText;
   if (media?.caption) return media.caption;
   const mt = (media?.mimeType || messageType || "").toLowerCase();
+  if (mt === "location") return "📍 Location";
   if (mt.startsWith("image") || mt === "image") return "📷 Photo";
   if (mt.startsWith("video") || mt === "video") return "🎥 Video";
   if (mt.startsWith("audio") || mt === "audio" || mt === "ptt") return "🎤 Voice note";
   if (mt.startsWith("document") || mt === "document") return `📎 ${media?.fileName || "Document"}`;
   if (mt === "sticker") return "🖼 Sticker";
+  if (mt === "poll") return "📊 Poll";
   return `📎 ${media?.fileName || "Attachment"}`;
 }
 

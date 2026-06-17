@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.293</title>
+<title>CommonCommunication v1.294</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2796,7 +2796,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.293";
+const APP_VERSION = "v1.294";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -10235,6 +10235,10 @@ function renderMessages(list) {
           .map((c) => renderContactCard(c))
           .join("")}</div>`
       : "";
+    // v1.294: shared location pin. Worker (v1.294+) stores m.location =
+    // {lat,lng}; older messages fall back to m.raw.location. Thumbnail
+    // (base64 JPEG) always comes from raw.location.jpegThumbnail.
+    const locationHtml = (!isDeleted) ? renderLocationHtml(m) : "";
     // Skip the body text ("N contacts") when we have parsed cards — the
     // cards say everything more usefully.
     const textHtml = (!isDeleted && m.text && !contactsForRender)
@@ -10300,7 +10304,7 @@ function renderMessages(list) {
     // vCards render as tappable contact cards inside the bubble.
     const bodyHtml = isDeleted
       ? `<div class="text deleted-body">🚫 This message was deleted</div>`
-      : `${mediaHtml}${contactsHtml}${textHtml}`;
+      : `${mediaHtml}${contactsHtml}${locationHtml}${textHtml}`;
     // v1.200: edited tag in footer when m.editedAt is set.
     const editedTag = (isEdited && !isDeleted) ? `<span class="edited-tag">edited</span>` : "";
     // v1.200: reactions pill aggregated by emoji. Click → toggle MY reaction
@@ -11027,6 +11031,29 @@ function renderContactCard(c) {
     <div class="contact-head">👤 <span class="contact-name">${escapeHtml(name)}</span></div>
     ${phones}
   </div>`;
+}
+
+// v1.294: shared location pin. Worker stores m.location = {lat,lng};
+// older messages fall back to m.raw.location. The base64 map thumbnail
+// (if any) comes from raw.location.jpegThumbnail. Renders a tappable card
+// opening Google Maps at the coordinates.
+function renderLocationHtml(m) {
+  const loc = m.location || null;
+  const raw = m.raw && m.raw.location ? m.raw.location : null;
+  const lat = (loc && loc.lat != null) ? loc.lat
+            : raw ? (raw.latitude != null ? raw.latitude : raw.degreesLatitude) : null;
+  const lng = (loc && loc.lng != null) ? loc.lng
+            : raw ? (raw.longitude != null ? raw.longitude : raw.degreesLongitude) : null;
+  if (lat == null || lng == null) return "";
+  const mapsUrl = `https://www.google.com/maps?q=${lat},${lng}`;
+  const thumb = raw && raw.jpegThumbnail ? raw.jpegThumbnail : null;
+  const thumbHtml = thumb
+    ? `<img src="data:image/jpeg;base64,${thumb}" style="width:220px; max-width:100%; height:120px; object-fit:cover; display:block; border-radius:8px 8px 0 0;" alt="Shared location" />`
+    : "";
+  return `<a class="location-card" href="${mapsUrl}" target="_blank" rel="noopener" style="display:block; text-decoration:none; background:rgba(0,0,0,0.04); border-radius:8px; overflow:hidden; margin-bottom:4px; max-width:240px;">
+    ${thumbHtml}
+    <div style="display:flex; align-items:center; gap:6px; padding:8px 10px; color:var(--green-dark, #008069); font-weight:600; font-size:13px;">📍 Location · open in Maps</div>
+  </a>`;
 }
 
 // route them through the worker's /media proxy (which attaches the right
