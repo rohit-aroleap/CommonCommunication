@@ -832,12 +832,21 @@ export function ThreadScreen({ route, navigation }: Props) {
     });
   }, [composer, user, pairKey, otherUid, replyTarget]);
 
+  const sendingRef = useRef(false);
   const send = useCallback(async () => {
     if (isDm) return sendDm();
     const text = composer.trim();
     // v1.225: media-only template = empty text + queued attachment is OK.
     if (!user) return;
     if (!text && !pendingTemplateMedia) return;
+    // v1.283: re-entrancy guard. setComposer("") only runs after the
+    // optimistic set + meta-update awaits below; on a laggy/dropped network,
+    // repeat taps during that window each fired send() again, sending the
+    // message multiple times (then deleted by hand). Block concurrent sends;
+    // reset in finally so a failed send never wedges the composer.
+    if (sendingRef.current) return;
+    sendingRef.current = true;
+    try {
     // v1.153: snapshot the reply target NOW (before any await) so the
     // composer can clear immediately and a chat change can't blow it
     // away mid-flight.
@@ -955,6 +964,9 @@ export function ThreadScreen({ route, navigation }: Props) {
       }
     } catch (e: any) {
       await update(msgRef, { status: "failed", error: String(e) });
+    }
+    } finally {
+      sendingRef.current = false;
     }
   }, [
     isDm,
