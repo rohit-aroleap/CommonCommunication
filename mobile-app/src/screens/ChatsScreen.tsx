@@ -258,11 +258,16 @@ export function ChatsScreen() {
       rows = rows.filter((r) => set.has(r.row.chatKey));
     }
 
-    // Daily-workout cohort groups: only visible when explicitly picked.
+    // Daily-workout cohort groups: the dedicated tab shows them all; the
+    // everyday inbox (v1.292) shows them too BUT only once they have a text
+    // message (a typed question), rendered text-only. Image-only groups
+    // stay out of the main list.
     if (statusFilter === DAILY_SENTINEL) {
       rows = rows.filter((r) => isDailyGroup(r.row));
     } else {
-      rows = rows.filter((r) => !isDailyGroup(r.row));
+      rows = rows.filter(
+        (r) => !isDailyGroup(r.row) || (r.row.lastTextMsgAt || 0) > 0,
+      );
       if (statusFilter) {
         rows = rows.filter(
           (r) =>
@@ -287,13 +292,18 @@ export function ChatsScreen() {
         return false;
       });
     }
-    // v1.291: Text-only mode re-sorts daily groups by latest TEXT (groups
-    // with no text fall to the bottom) so typed questions surface above
-    // the photo stream.
+    // v1.291: Daily Groups tab Text-only mode → sort by latest TEXT.
+    // v1.292: everyday inbox → sort by activity time (daily groups use
+    // their latest TEXT, normal chats their latest message) so a group's
+    // photo flood doesn't bump it; only a typed message moves it up.
     if (textOnlyMode) {
       rows = [...rows].sort(
         (a, b) => (b.row.lastTextMsgAt || 0) - (a.row.lastTextMsgAt || 0),
       );
+    } else if (statusFilter !== DAILY_SENTINEL) {
+      const activityAt = (x: (typeof rows)[number]) =>
+        isDailyGroup(x.row) ? x.row.lastTextMsgAt || 0 : x.row.lastMsgAt || 0;
+      rows = [...rows].sort((a, b) => activityAt(b) - activityAt(a));
     }
     return rows;
   }, [
@@ -445,6 +455,14 @@ export function ChatsScreen() {
             myFavorites,
             mySendActivity,
           );
+          // v1.292: a daily group renders text-only ALWAYS in the everyday
+          // inbox, and per the toggle in the Daily Groups tab.
+          const rowIsDaily = isDailyGroup(r);
+          const rowTextOnly = rowIsDaily
+            ? dailyView
+              ? dailyTextOnly
+              : true
+            : false;
 
           return (
             <ChatRowItem
@@ -458,11 +476,14 @@ export function ChatsScreen() {
               isFavorite={isFavorite}
               suggestPin={suggestPin}
               noCohort={noCohort}
-              textOnly={textOnlyMode}
+              textOnly={rowTextOnly}
               onPress={() =>
                 navigation.navigate("Thread", {
                   chatKey: r.chatKey,
                   initialTitle: enrichedRow.name,
+                  // v1.292: a daily group opened from the everyday inbox
+                  // (not the Daily Groups tab) shows a text-only thread.
+                  textOnly: rowIsDaily && !dailyView ? true : undefined,
                 })
               }
               onToggleFavorite={() => toggleFavorite(r.chatKey)}

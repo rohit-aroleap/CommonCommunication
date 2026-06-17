@@ -623,7 +623,11 @@ export function ThreadScreen({ route, navigation }: Props) {
   // before dedup/reverse so the thread reads as a clean text conversation.
   const isDailyWorkoutGroup =
     isGroup && /Daily Workout Ferra C/i.test(meta.groupName || "");
-  const hideMedia = dailyTextOnly && isDailyWorkoutGroup;
+  // v1.292: hide media when the Daily-tab toggle is on OR this group was
+  // opened from the everyday inbox (route param textOnly), which is
+  // text-only by design.
+  const hideMedia =
+    isDailyWorkoutGroup && (dailyTextOnly || route.params.textOnly === true);
   const visible = useMemo(() => {
     let src = messages;
     if (hideMedia) {

@@ -14,7 +14,9 @@ export type RootStackParamList = {
   // landing on the latest. ThreadScreen reads it from route.params,
   // finds the message in the list once it's loaded, and scrollToIndex's
   // to it with a brief highlight.
-  Thread: { chatKey: string; initialTitle?: string; anchorMsgKey?: string };
+  // v1.292: textOnly forces a daily-workout group's thread to hide media
+  // (set when opened from the everyday inbox rather than the Daily tab).
+  Thread: { chatKey: string; initialTitle?: string; anchorMsgKey?: string; textOnly?: boolean };
   CustomerInfo: { chatKey: string };
   Settings: undefined;
   // v1.264: 1:1 audio call route. callId is the Daily.co room name /

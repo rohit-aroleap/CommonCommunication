@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.291</title>
+<title>CommonCommunication v1.292</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2796,7 +2796,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.291";
+const APP_VERSION = "v1.292";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -7941,6 +7941,12 @@ function renderChatList(rows) {
   // Apply the status (row 1) filter first, separately from the tag (row 2)
   // filter. We need each row's counts to reflect "what would happen if I
   // clicked this pill given the OTHER row's current selection."
+  // v1.292: a chat's "activity time" for the everyday inbox. Normal chats
+  // use their last message; daily-workout groups use their last TEXT, so a
+  // group's photo flood doesn't keep bumping it — only a typed message
+  // moves it up.
+  const chatActivityAt = (r) =>
+    isDailyGroup(r) ? (r.lastTextMsgAt || 0) : (r.lastMsgAt || 0);
   const applyStatusFilter = (rows) => {
     if (currentStatusFilter === "Daily Groups") return rows.filter(isDailyGroup);
     // v1.246: My tickets is the ONE filter where daily groups SHOULD pass
@@ -7951,10 +7957,16 @@ function renderChatList(rows) {
     // actively wrong. Phone app already includes group tickets here;
     // bringing web in line.
     if (currentStatusFilter === "My tickets") return rows.filter(r => myChatKeys.has(r.chatKey));
-    let v = rows.filter(r => !isDailyGroup(r));
+    // v1.292: daily-workout groups now ALSO surface in the everyday inbox —
+    // but ONLY once they have a text message (a member's typed question),
+    // and rendered text-only. Image-only groups stay out of the main list
+    // (they live in the Daily Groups tab). chatActivityAt() makes a daily
+    // group sort by its latest TEXT, so a typed question floats up by
+    // recency while the constant photo stream is ignored here.
+    let v = rows.filter(r => !isDailyGroup(r) || (r.lastTextMsgAt || 0) > 0);
     if (currentStatusFilter === "Live") {
       const liveCutoff = Date.now() - LIVE_WINDOW_MS;
-      v = v.filter(r => (r.lastMsgAt || 0) >= liveCutoff);
+      v = v.filter(r => chatActivityAt(r) >= liveCutoff);
     } else if (currentStatusFilter === "Favorites") {
       v = v.filter(r => isFavorite(r.chatKey));
     } else if (currentStatusFilter === "Urgent") {
@@ -8027,13 +8039,18 @@ function renderChatList(rows) {
   }
   const pinnedRows = ticketRows.concat(favoriteRows);
 
-  // v1.291: daily-workout "Text only" mode. Re-sort by latest TEXT (groups
-  // with no text fall to the bottom) so typed questions surface above the
-  // photo stream. Daily Groups is never partitioned, so all rows are in
-  // restRows.
+  // v1.291: daily-workout "Text only" mode (Daily Groups tab). Re-sort by
+  // latest TEXT (groups with no text fall to the bottom). Daily Groups is
+  // never partitioned, so all rows are in restRows.
   const textOnlyMode = currentStatusFilter === "Daily Groups" && dailyTextOnly;
   if (textOnlyMode) {
     restRows.sort((a, b) => (b.lastTextMsgAt || 0) - (a.lastTextMsgAt || 0));
+  } else if (currentStatusFilter !== "Daily Groups") {
+    // v1.292: everyday inbox — sort by activity time so daily groups slot
+    // in by their latest TEXT while normal chats keep their last-message
+    // order (chatActivityAt === lastMsgAt for non-groups, so unchanged).
+    restRows.sort((a, b) => chatActivityAt(b) - chatActivityAt(a));
+    pinnedRows.sort((a, b) => chatActivityAt(b) - chatActivityAt(a));
   }
 
   const renderRow = (r) => {
@@ -8054,10 +8071,14 @@ function renderChatList(rows) {
       avatarStyle = isGroup ? "background:#6b7280;" : "";
     }
     const avatarClass = hasTicket ? "avatar has-ticket" : "avatar";
-    // v1.291: in Text-only mode the row shows the latest TEXT (with its
-    // sender) + that text's timestamp, instead of the latest photo.
+    // v1.291/v1.292: daily groups render text-only — ALWAYS in the everyday
+    // inbox, and per the toggle in the Daily Groups tab. The row then shows
+    // the latest TEXT (with sender) + that text's time, not the photo.
+    const rowTextOnly = isDailyGroup(r)
+      ? (currentStatusFilter === "Daily Groups" ? dailyTextOnly : true)
+      : false;
     let previewWho, previewText, rowTime;
-    if (textOnlyMode) {
+    if (rowTextOnly) {
       rowTime = r.lastTextMsgAt || 0;
       if (r.lastTextMsgAt) {
         previewText = r.lastTextPreview || "";
@@ -8604,6 +8625,10 @@ let currentStatusFilter = "All";
 let dailyTextOnly = false;
 try { dailyTextOnly = localStorage.getItem("cc_dailyTextOnly") === "1"; } catch {}
 let _lastRenderedMsgs = null; // cache so the toggle can re-filter the open thread
+// v1.292: set when a daily-workout group is opened from the EVERYDAY inbox
+// (not the Daily Groups tab) — its thread renders text-only regardless of
+// the tab toggle. Decided at open time in openChat.
+let _threadDailyTextOnly = false;
 function setDailyTextOnly(v) {
   dailyTextOnly = !!v;
   try { localStorage.setItem("cc_dailyTextOnly", v ? "1" : "0"); } catch {}
@@ -9239,6 +9264,15 @@ function openChat(chatKey) {
   messagesPageLimit = INITIAL_MESSAGE_LIMIT;
   loadingMoreMessages = false;
   postRenderHook = null;
+  // v1.292: decide the thread's media visibility for daily-workout groups
+  // at open time. From the everyday inbox → text-only; from the Daily
+  // Groups tab → follow the toggle (handled in renderMessages).
+  {
+    const om = chatsCache[chatKey] || {};
+    const oIsGroup = om.chatType === "group" || String(om.chatId || "").endsWith("@g.us");
+    const oIsDaily = oIsGroup && String(om.groupName || "").startsWith(DAILY_GROUP_PREFIX);
+    _threadDailyTextOnly = oIsDaily && currentStatusFilter !== "Daily Groups";
+  }
   currentChatId = chatKey;
   // Reset note edit state when switching chats so a half-typed note from one
   // chat doesn't appear in another. Notes are collapsed by default — count is
@@ -10112,7 +10146,9 @@ function renderMessages(list) {
   // WITH a caption keeps its caption text). A message is "media-only" when
   // it has media/contacts and no text body.
   const isDailyWorkoutGroup = isGroup && String(meta.groupName || "").startsWith(DAILY_GROUP_PREFIX);
-  if (dailyTextOnly && isDailyWorkoutGroup) {
+  // v1.292: hide media when the Daily-tab toggle is on OR this group was
+  // opened from the everyday inbox (text-only by design).
+  if (isDailyWorkoutGroup && (dailyTextOnly || _threadDailyTextOnly)) {
     list = list.filter((m) => {
       const hasText = !!String(m.text || "").trim();
       const isMedia = !!(m.media || m.contacts) || m.messageType === "vcard";
@@ -10120,7 +10156,7 @@ function renderMessages(list) {
     });
   }
   if (!list.length) {
-    messagesEl.innerHTML = `<div class="thread-empty" style="background:transparent;"><div>${dailyTextOnly ? "No text messages in this group yet — toggle off “Text only” to see photos." : "No messages yet — say hi."}</div></div>`;
+    messagesEl.innerHTML = `<div class="thread-empty" style="background:transparent;"><div>${(dailyTextOnly || _threadDailyTextOnly) ? "No text messages here yet — only workout photos (hidden in this text-only view)." : "No messages yet — say hi."}</div></div>`;
     // Even with no messages, render the tickets banner (in case there are tickets — rare)
     renderTicketsBanner();
     return;
