@@ -463,11 +463,18 @@ export function ChatsScreen() {
               ? dailyTextOnly
               : true
             : false;
+          // v1.293: tag the everyday-inbox copy of a daily group with
+          // "(no image)" so it reads as the text-only view, distinct from
+          // the full group in the Daily Groups tab. Display-only.
+          const rowName =
+            rowIsDaily && !dailyView
+              ? `${enrichedRow.name} (no image)`
+              : enrichedRow.name;
 
           return (
             <ChatRowItem
               row={r}
-              name={enrichedRow.name}
+              name={rowName}
               subscriptionStatus={status}
               stage={stage}
               hasOpenTicket={hasOpenTicket}
