@@ -206,6 +206,28 @@ async function processQueue(): Promise<void> {
   if (_processorRunning) return;
   _processorRunning = true;
   try {
+    // v1.296: recover STALE in-flight items. An item is only ever set to
+    // "in-flight" by a running processor; since we just confirmed none was
+    // running (_processorRunning was false), any "in-flight" left in
+    // storage is a leftover from an attempt that was interrupted — the app
+    // was killed mid-upload, or a fetch hung on a dead socket and the app
+    // restarted. Without this, such an item would sit "in-flight" forever
+    // (the loop below only picks pending / failed-retry), and the
+    // recording would never upload. Reset it to retry immediately.
+    {
+      const items = await loadFromStorage();
+      const stale = items.filter((it) => it.status === "in-flight");
+      if (stale.length) {
+        const now = Date.now();
+        await saveToStorage(
+          items.map((it) =>
+            it.status === "in-flight"
+              ? { ...it, status: "failed-retry" as SaQueueStatus, nextAttemptAt: now }
+              : it,
+          ),
+        );
+      }
+    }
     while (true) {
       const items = await loadFromStorage();
       const now = Date.now();
@@ -305,4 +327,39 @@ async function updateItem(
 // Public kick. Called from app startup / network reconnect / Stop button.
 export function kickProcessor(): void {
   void processQueue();
+}
+
+// v1.296: bring every not-yet-done item due RIGHT NOW and process. Unlike
+// kickProcessor (which respects each item's backoff timer), this bypasses
+// the backoff for items waiting to retry — exactly what you want when the
+// network just came back or the trainer taps "Retry now": don't make them
+// sit through a 30-minute backoff when connectivity is restored. Does NOT
+// touch items already "ready". Returns how many it nudged.
+export async function retryAllNow(): Promise<number> {
+  const items = await loadFromStorage();
+  const now = Date.now();
+  let nudged = 0;
+  const next = items.map((it) => {
+    if (
+      it.status === "pending" ||
+      it.status === "failed-retry" ||
+      it.status === "failed-stop" ||
+      it.status === "in-flight"
+    ) {
+      nudged++;
+      return {
+        ...it,
+        status: "pending" as SaQueueStatus,
+        nextAttemptAt: now,
+        // Don't reset retryCount for auto (network) nudges vs manual — we
+        // keep the count so failed-stop after MAX_RETRIES still holds if
+        // the network truly never works; manualRetry (below) is the one
+        // that fully resets the count.
+      };
+    }
+    return it;
+  });
+  if (nudged) await saveToStorage(next);
+  void processQueue();
+  return nudged;
 }

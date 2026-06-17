@@ -51,6 +51,8 @@ import {
   // v1.263: subscribe to the queue from the recorder modal so the "next
   // steps" view can show the upload-to-server stage in real time.
   subscribe as subscribeSaQueue,
+  // v1.296: manual "Retry now" from the post-stop checklist.
+  manualRetry as manualRetrySa,
   type SaQueueItem,
 } from "@/lib/saTranscriptionQueue";
 import { FERRA_TAG_STAGE } from "@/config";
@@ -2024,6 +2026,13 @@ function SaRecorderModal({
       stages.uploaded === "done" &&
       stages.dropbox === "done" &&
       stages.transcribed === "done";
+    // v1.296: the upload has hit trouble — failed outright, or it's still
+    // "trying" but has already burned a retry (the stuck-on-bad-network
+    // case). Either way, surface a "Retry now" button + reassurance.
+    const uploadStuck =
+      queueItem?.status === "failed-retry" ||
+      queueItem?.status === "failed-stop" ||
+      (!!queueItem?.retryCount && queueItem.retryCount > 0);
     const sizeMB = savedFileBytes ? `${(savedFileBytes / 1024 / 1024).toFixed(1)} MB` : "";
     const durStr = savedDurationSec
       ? `${Math.floor(savedDurationSec / 60)}m ${Math.round(savedDurationSec % 60)}s`
@@ -2081,18 +2090,34 @@ function SaRecorderModal({
           <Text style={styles.saStagesHint}>
             {allDone
               ? "All done — tap Close to return."
-              : "Keep this screen open until every step is ✓. Closing early might lose progress."}
+              : uploadStuck
+                ? "The recording is saved on this tablet and will keep retrying on its own — including after you close the app. Tap Retry now to try again immediately, or Close; it resumes in the background."
+                : "You can close this anytime — the recording is saved and uploads in the background, resuming automatically if the connection drops."}
           </Text>
         </View>
         <View style={styles.saModalActions}>
+          {/* v1.296: Retry now — bypasses the upload backoff. Shown when
+              the upload has hit at least one failure / retry. */}
+          {!allDone && uploadStuck && (
+            <TouchableOpacity
+              onPress={async () => {
+                if (currentSessionId) await manualRetrySa(currentSessionId);
+              }}
+              style={[styles.saActionBtn, styles.saActionBtnStart]}
+            >
+              <Text style={styles.saActionBtnStartTxt}>↻ Retry now</Text>
+            </TouchableOpacity>
+          )}
+          {/* v1.296: Close is ALWAYS enabled now. The upload is a persistent
+              background queue (saved on disk, survives app close), so
+              trapping the trainer on this screen until every step finishes
+              was wrong — especially on a flaky connection. */}
           <TouchableOpacity
             onPress={handleCloseDone}
             style={[
               styles.saActionBtn,
               allDone ? styles.saActionBtnStart : styles.saActionBtnSecondary,
-              !allDone && { opacity: 0.4 },
             ]}
-            disabled={!allDone}
           >
             <Text
               style={

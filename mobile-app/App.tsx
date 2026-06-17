@@ -24,7 +24,11 @@ import {
   View,
 } from "react-native";
 import { refreshFerraNow } from "@/lib/worker";
-import { kickProcessor as kickSaProcessor } from "@/lib/saTranscriptionQueue";
+import {
+  kickProcessor as kickSaProcessor,
+  retryAllNow,
+} from "@/lib/saTranscriptionQueue";
+import NetInfo from "@react-native-community/netinfo";
 // v1.253: app-wide keep-awake. Trainer asked for the screen to stay on
 // across all CommonComm screens, not just the SA recorder. Useful for
 // long shifts where the tablet sits on a stand — chat list / customer
@@ -476,7 +480,24 @@ function useSaQueueProcessor() {
     const sub = AppState.addEventListener("change", (state) => {
       if (state === "active") kickSaProcessor();
     });
-    return () => sub.remove();
+    // v1.296: when connectivity is restored, bypass each item's backoff
+    // and retry immediately. Previously a stuck upload (e.g. "Retry 7",
+    // 30-min backoff) would sit idle even after wifi came back — the
+    // processor only fired on its slow timer. NetInfo's reachability
+    // transition false/null -> true triggers retryAllNow. Tracks the
+    // previous state so we only fire on the rising edge, not every event.
+    let wasOnline: boolean | null = null;
+    const netSub = NetInfo.addEventListener((s) => {
+      const online = !!s.isConnected && s.isInternetReachable !== false;
+      if (online && wasOnline === false) {
+        void retryAllNow();
+      }
+      wasOnline = online;
+    });
+    return () => {
+      sub.remove();
+      netSub();
+    };
   }, []);
 }
 
