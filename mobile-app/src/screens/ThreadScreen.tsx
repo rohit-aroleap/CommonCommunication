@@ -58,6 +58,7 @@ import {
 import { useAuth } from "@/auth/AuthContext";
 import { resolveDisplayName } from "@/lib/displayName";
 import { patchDmMeta } from "@/lib/dmMeta";
+import { useDailyTextOnly } from "@/lib/dailyTextOnly";
 import { dayLabel } from "@/lib/format";
 import { chatKeyToChatId, encodeKey } from "@/lib/encodeKey";
 import {
@@ -118,6 +119,8 @@ type Props = NativeStackScreenProps<RootStackParamList, "Thread">;
 export function ThreadScreen({ route, navigation }: Props) {
   const { chatKey, initialTitle, anchorMsgKey } = route.params;
   const { user } = useAuth();
+  // v1.291: daily-workout Text-only mode (shared with the chat list).
+  const [dailyTextOnly] = useDailyTextOnly();
   // Bottom inset = the home indicator / gesture-nav pill on iPhones with
   // notches and Androids with the bottom swipe-up bar. Without this padding
   // the composer's mic/send buttons sit flush against the phone's bottom
@@ -615,10 +618,25 @@ export function ThreadScreen({ route, navigation }: Props) {
   // dedupMessages returns ascending (oldest → newest) to match the webapp's
   // top-down renderer. The inverted FlatList below needs descending so data[0]
   // (newest) renders at the BOTTOM of the screen.
-  const visible = useMemo(
-    () => [...dedupMessages(messages)].reverse(),
-    [messages],
-  );
+  // v1.291: in daily-workout groups with Text-only on, hide media-only
+  // messages (keep typed messages + any captioned photo's text). Filters
+  // before dedup/reverse so the thread reads as a clean text conversation.
+  const isDailyWorkoutGroup =
+    isGroup && /Daily Workout Ferra C/i.test(meta.groupName || "");
+  const hideMedia = dailyTextOnly && isDailyWorkoutGroup;
+  const visible = useMemo(() => {
+    let src = messages;
+    if (hideMedia) {
+      src = messages.filter((m) => {
+        const hasText = !!String(m.text || "").trim();
+        const isMedia =
+          !!(m.media || (m.contacts && m.contacts.length)) ||
+          m.messageType === "vcard";
+        return hasText || !isMedia;
+      });
+    }
+    return [...dedupMessages(src)].reverse();
+  }, [messages, hideMedia]);
 
   // v1.206: scroll to a specific message in the thread (the inverted
   // FlatList) and briefly highlight it. Used both for the route-param

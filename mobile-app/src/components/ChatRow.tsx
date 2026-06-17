@@ -28,6 +28,9 @@ interface Props {
   // group yet. Renders a small "no group" pill so trainers can spot
   // them while scrolling instead of opening each profile.
   noCohort?: boolean;
+  // v1.291: daily-workout Text-only mode — show the latest TEXT message
+  // (with its sender) + that text's time, instead of "📷 Photo".
+  textOnly?: boolean;
   onPress: () => void;
   onToggleFavorite: () => void;
 }
@@ -43,6 +46,7 @@ export function ChatRowItem({
   isFavorite,
   suggestPin,
   noCohort,
+  textOnly,
   onPress,
   onToggleFavorite,
 }: Props) {
@@ -58,10 +62,28 @@ export function ChatRowItem({
   };
   const avatarChar = isGroup ? "👥" : initial(name);
 
-  const previewPrefix =
-    row.direction === "out" && row.sentByName
-      ? `${row.sentByName}: `
-      : "";
+  // v1.291: Text-only mode shows the latest TEXT (+ its sender) and that
+  // text's timestamp, instead of the latest photo.
+  let previewPrefix: string;
+  let previewBody: string;
+  let rowTime: number;
+  if (textOnly) {
+    rowTime = row.lastTextMsgAt || 0;
+    if (row.lastTextMsgAt) {
+      previewBody = row.lastTextPreview || "";
+      const who =
+        row.lastTextDirection === "out" ? "You" : row.lastTextSender || "";
+      previewPrefix = who ? `${who}: ` : "";
+    } else {
+      previewBody = "no text messages yet";
+      previewPrefix = "";
+    }
+  } else {
+    rowTime = row.lastMsgAt;
+    previewBody = row.preview || "No messages yet";
+    previewPrefix =
+      row.direction === "out" && row.sentByName ? `${row.sentByName}: ` : "";
+  }
 
   // v1.167: NEW badge — mobile mirror of the desktop isChatNeedsTriage
   // signal. Fires when the latest message is INBOUND and there's NO
@@ -72,8 +94,6 @@ export function ChatRowItem({
   // from various members that doesn't represent a customer waiting for
   // a reply. The badge would just flash constantly and lose meaning.
   const needsTriage = row.direction === "in" && !hasOpenTicket && !isGroup;
-
-  const time = formatTime(row.lastMsgAt);
 
   // Stop propagation so tapping the star/Pin? button doesn't open the thread.
   const onStarPress = (e: { stopPropagation?: () => void }) => {
@@ -96,7 +116,7 @@ export function ChatRowItem({
               <Text style={styles.newBadgeTxt}>🆕 NEW</Text>
             </View>
           )}
-          <Text style={styles.time}>{time}</Text>
+          <Text style={styles.time}>{rowTime ? formatTime(rowTime) : ""}</Text>
         </View>
         <View style={styles.bottomLine}>
           <Text
@@ -106,7 +126,7 @@ export function ChatRowItem({
             {previewPrefix
               ? <Text style={styles.previewWho}>{previewPrefix}</Text>
               : null}
-            {row.preview || "No messages yet"}
+            {previewBody}
           </Text>
           <View style={styles.badges}>
             {myTicket && (

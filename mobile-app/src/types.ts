@@ -17,6 +17,12 @@ export interface ChatMeta {
   lastMsgPreview?: string;
   lastMsgDirection?: "in" | "out";
   lastMsgSentByName?: string | null;
+  // v1.291: latest TEXT message (worker-tracked, distinct from the latest
+  // message of any kind). Powers the daily-workout "Text only" view.
+  lastTextMsgAt?: number;
+  lastTextPreview?: string;
+  lastTextSender?: string | null;
+  lastTextDirection?: "in" | "out";
 }
 
 export interface ChatRow {
@@ -31,6 +37,11 @@ export interface ChatRow {
   preview: string;
   direction: "in" | "out";
   sentByName: string | null;
+  // v1.291: latest TEXT metadata (see ChatMeta).
+  lastTextMsgAt?: number;
+  lastTextPreview?: string;
+  lastTextSender?: string | null;
+  lastTextDirection?: "in" | "out";
 }
 
 export interface MediaInfo {

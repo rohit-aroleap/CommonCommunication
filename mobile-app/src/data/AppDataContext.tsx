@@ -507,6 +507,11 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
         preview,
         direction: rawMeta.lastMsgDirection || "in",
         sentByName: rawMeta.lastMsgSentByName || null,
+        // v1.291: latest-TEXT metadata for the daily-workout Text-only view.
+        lastTextMsgAt: rawMeta.lastTextMsgAt || 0,
+        lastTextPreview: rawMeta.lastTextPreview || "",
+        lastTextSender: rawMeta.lastTextSender || null,
+        lastTextDirection: rawMeta.lastTextDirection || "in",
       });
     }
     rows.sort((a, b) => (b.lastMsgAt || 0) - (a.lastMsgAt || 0));

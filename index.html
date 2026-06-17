@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.290</title>
+<title>CommonCommunication v1.291</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2796,7 +2796,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.290";
+const APP_VERSION = "v1.291";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -5195,6 +5195,12 @@ function listenChats() {
         triageUrgency: meta.triageUrgency || null,
         triageIntent: meta.triageIntent || null,
         triageAt: meta.triageAt || 0,
+        // v1.291: latest-TEXT metadata (worker-tracked) — powers the
+        // daily-workout "Text only" view's sort + preview.
+        lastTextMsgAt: meta.lastTextMsgAt || 0,
+        lastTextPreview: meta.lastTextPreview || "",
+        lastTextSender: meta.lastTextSender || null,
+        lastTextDirection: meta.lastTextDirection || "in",
       });
     }
     rows.sort((a,b) => (b.lastMsgAt || 0) - (a.lastMsgAt || 0));
@@ -8021,6 +8027,15 @@ function renderChatList(rows) {
   }
   const pinnedRows = ticketRows.concat(favoriteRows);
 
+  // v1.291: daily-workout "Text only" mode. Re-sort by latest TEXT (groups
+  // with no text fall to the bottom) so typed questions surface above the
+  // photo stream. Daily Groups is never partitioned, so all rows are in
+  // restRows.
+  const textOnlyMode = currentStatusFilter === "Daily Groups" && dailyTextOnly;
+  if (textOnlyMode) {
+    restRows.sort((a, b) => (b.lastTextMsgAt || 0) - (a.lastTextMsgAt || 0));
+  }
+
   const renderRow = (r) => {
     const isGroup = r.chatType === "group";
     const openTix = getOpenTicketsForChat(r.chatKey);
@@ -8039,9 +8054,26 @@ function renderChatList(rows) {
       avatarStyle = isGroup ? "background:#6b7280;" : "";
     }
     const avatarClass = hasTicket ? "avatar has-ticket" : "avatar";
-    const previewWho = r.direction === "out" && r.sentByName
-      ? `<span class="who">${escapeHtml(r.sentByName)}:</span> `
-      : "";
+    // v1.291: in Text-only mode the row shows the latest TEXT (with its
+    // sender) + that text's timestamp, instead of the latest photo.
+    let previewWho, previewText, rowTime;
+    if (textOnlyMode) {
+      rowTime = r.lastTextMsgAt || 0;
+      if (r.lastTextMsgAt) {
+        previewText = r.lastTextPreview || "";
+        const who = r.lastTextDirection === "out" ? "You" : r.lastTextSender;
+        previewWho = who ? `<span class="who">${escapeHtml(who)}:</span> ` : "";
+      } else {
+        previewText = "no text messages yet";
+        previewWho = "";
+      }
+    } else {
+      rowTime = r.lastMsgAt;
+      previewText = r.preview;
+      previewWho = r.direction === "out" && r.sentByName
+        ? `<span class="who">${escapeHtml(r.sentByName)}:</span> `
+        : "";
+    }
     // Pills (Active/Cancelled, subscription stage) only apply to individual chats.
     const pillsHtml = isGroup ? "" : renderFerraPills(r.phone);
     const lockPrefix = r.private ? `<span title="Private chat — admins only" style="margin-right:4px;">🔒</span>` : "";
@@ -8078,10 +8110,10 @@ function renderChatList(rows) {
       <div class="meta">
         <div class="top">
           <span class="name">${lockPrefix}${escapeHtml(r.name)}${triageBadge}${aiBadge}</span>
-          <span class="time">${formatTime(r.lastMsgAt)}${unreadDot}</span>
+          <span class="time">${rowTime ? formatTime(rowTime) : ""}${unreadDot}</span>
         </div>
         <div class="bottom">
-          <span class="preview">${previewWho}${escapeHtml(r.preview)}</span>
+          <span class="preview">${previewWho}${escapeHtml(previewText)}</span>
           ${starHtml}
         </div>
         ${assigneeTag}
@@ -8095,7 +8127,19 @@ function renderChatList(rows) {
   const dividerHtml = (pinnedRows.length > 0 && restRows.length > 0)
     ? `<div class="list-divider"><span class="line"></span><span class="lbl">More chats</span><span class="line"></span></div>`
     : "";
-  chatList.innerHTML = pinnedHtml + dividerHtml + restHtml;
+  // v1.291: Text-only toggle bar, shown only in the Daily Groups view.
+  const dailyToggleHtml = currentStatusFilter === "Daily Groups"
+    ? `<div style="position:sticky; top:0; z-index:2; background:var(--panel); border-bottom:1px solid var(--border); padding:8px 12px;">
+         <label style="display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--text); cursor:pointer;">
+           <input type="checkbox" id="dailyTextOnlyToggle" ${dailyTextOnly ? "checked" : ""} style="cursor:pointer;" />
+           <span><b>💬 Text only</b> — hide workout photos, sort by latest message</span>
+         </label>
+       </div>`
+    : "";
+  chatList.innerHTML = dailyToggleHtml + pinnedHtml + dividerHtml + restHtml;
+
+  const dailyTgl = document.getElementById("dailyTextOnlyToggle");
+  if (dailyTgl) dailyTgl.onchange = (e) => setDailyTextOnly(e.target.checked);
 
   chatList.querySelectorAll(".chat-row").forEach(el => {
     el.onclick = () => openChat(el.dataset.key);
@@ -8552,6 +8596,21 @@ async function backfillDailyGroupMembers() {
   }
 }
 let currentStatusFilter = "All";
+// v1.291: daily-workout "Text only" view. When on AND the Daily Groups
+// filter is active, the list sorts by latest TEXT message (not latest
+// photo), shows the text as the preview, and the open group's thread
+// hides media — turning the photo-flooded cohort groups into a normal
+// "who texted a question" inbox. Persisted per-browser.
+let dailyTextOnly = false;
+try { dailyTextOnly = localStorage.getItem("cc_dailyTextOnly") === "1"; } catch {}
+let _lastRenderedMsgs = null; // cache so the toggle can re-filter the open thread
+function setDailyTextOnly(v) {
+  dailyTextOnly = !!v;
+  try { localStorage.setItem("cc_dailyTextOnly", v ? "1" : "0"); } catch {}
+  renderChatList(lastChatRows);
+  // Re-apply / remove the media filter on the currently-open thread.
+  if (_lastRenderedMsgs) renderMessages(_lastRenderedMsgs);
+}
 // v1.285 — hoisted from ~L8902. renderFilterPills() runs at module init
 // (around L8766) and calls updateFiltersBtnIndicator, which reads
 // currentTagFilter. With the original declaration further down, the read
@@ -10043,14 +10102,29 @@ function listenMessages(chatKey) {
 }
 
 function renderMessages(list) {
+  // v1.291: cache the unfiltered list so toggling Text-only re-renders the
+  // open thread without waiting for the next Firebase snapshot.
+  _lastRenderedMsgs = list;
+  const meta = chatsCache[currentChatId] || {};
+  const isGroup = meta.chatType === "group" || String(meta.chatId || "").endsWith("@g.us");
+  // v1.291: in Text-only mode, hide media-only messages from a daily-workout
+  // group's thread — show only the typed messages (and any photo that came
+  // WITH a caption keeps its caption text). A message is "media-only" when
+  // it has media/contacts and no text body.
+  const isDailyWorkoutGroup = isGroup && String(meta.groupName || "").startsWith(DAILY_GROUP_PREFIX);
+  if (dailyTextOnly && isDailyWorkoutGroup) {
+    list = list.filter((m) => {
+      const hasText = !!String(m.text || "").trim();
+      const isMedia = !!(m.media || m.contacts) || m.messageType === "vcard";
+      return hasText || !isMedia;
+    });
+  }
   if (!list.length) {
-    messagesEl.innerHTML = `<div class="thread-empty" style="background:transparent;"><div>No messages yet — say hi.</div></div>`;
+    messagesEl.innerHTML = `<div class="thread-empty" style="background:transparent;"><div>${dailyTextOnly ? "No text messages in this group yet — toggle off “Text only” to see photos." : "No messages yet — say hi."}</div></div>`;
     // Even with no messages, render the tickets banner (in case there are tickets — rare)
     renderTicketsBanner();
     return;
   }
-  const meta = chatsCache[currentChatId] || {};
-  const isGroup = meta.chatType === "group" || String(meta.chatId || "").endsWith("@g.us");
   // Render-time dedup safety net for outbound duplicates where the /send
   // copy and the webhook copy carry the inner unique_id in *different* fields:
   //   - /send-written:   periskopeUniqueId = "3EB052..."

@@ -197,6 +197,12 @@ export default {
       if (url.pathname === "/backfill-dms-index" && request.method === "POST") {
         return cors(env, await handleBackfillDmsIndex(env));
       }
+      // v1.291: backfill lastTextMsgAt/Preview/Sender for daily-workout
+      // groups so the "Text only" view sorts by existing texts, not just
+      // ones received after this shipped. Chunked { offset, limit }.
+      if (url.pathname === "/backfill-last-text" && request.method === "POST") {
+        return cors(env, await handleBackfillLastText(request, env));
+      }
       if (url.pathname === "/edit-message" && request.method === "POST") {
         return cors(env, await handleEditMessage(request, env));
       }
@@ -760,14 +766,26 @@ async function handleSend(request, env) {
             : `📎 ${name || "Attachment"}`;
     preview = preview.slice(0, 120);
   }
-  await patchChatMeta(env, encodeKey(resolvedChatId), {
+  const outMetaUpdate = {
     phone: resolvedPhone,
     chatId: resolvedChatId,
     lastMsgAt: ts,
     lastMsgPreview: preview,
     lastMsgDirection: "out",
     lastMsgSentByName: sentByName,
-  });
+  };
+  // v1.291: track the latest TEXT message separately from the latest
+  // message-of-any-kind. Powers the daily-workout "Text only" view, which
+  // sorts groups by their newest text so questions surface above the
+  // flood of workout photos. A send counts as text when it carries a
+  // non-empty message body and no media attachment.
+  if (message && message.trim() && !body.media) {
+    outMetaUpdate.lastTextMsgAt = ts;
+    outMetaUpdate.lastTextPreview = message.slice(0, 120);
+    outMetaUpdate.lastTextDirection = "out";
+    outMetaUpdate.lastTextSender = sentByName || null;
+  }
+  await patchChatMeta(env, encodeKey(resolvedChatId), outMetaUpdate);
   if (expectedWebhookMsgId && msgKey) {
     await fbPut(env, `${ROOT}/byPeriskopeId/${encodeKey(expectedWebhookMsgId)}`, {
       chatId: resolvedChatId,
@@ -1306,6 +1324,21 @@ async function handleWebhook(request, env) {
     lastMsgPreview: mediaPreview(media, messageType, text).slice(0, 120),
     lastMsgDirection: isFromMe ? "out" : "in",
   };
+  // v1.291: latest-TEXT tracking (see handleSend). A message counts as
+  // text when it has a non-empty body and is NOT a media or vCard
+  // message — i.e. a real typed message, not a workout photo. Powers the
+  // daily-workout "Text only" view: groups sort by lastTextMsgAt so a
+  // typed question floats above the photo stream. For groups we also
+  // stash who sent it so the row can show "~ Name: …".
+  const isTextMsg = !media && !contacts && !!String(text || "").trim();
+  if (isTextMsg) {
+    metaUpdate.lastTextMsgAt = ts;
+    metaUpdate.lastTextPreview = String(text).slice(0, 120);
+    metaUpdate.lastTextDirection = isFromMe ? "out" : "in";
+    metaUpdate.lastTextSender = isFromMe
+      ? null
+      : senderName || chatIdToPhone(senderPhone) || null;
+  }
   // contactName: only learn from inbound senders on 1-on-1 chats. Outbound
   // sender info is OUR org, not the customer.
   if (!isGroup && !isFromMe && senderName) {
@@ -1749,6 +1782,69 @@ async function handleBackfillChatsIndex(request, env) {
     nextOffset: done ? null : nextOffset,
     done,
     written,
+  });
+}
+
+// ---------- /backfill-last-text (one-shot, chunked) ----------
+// v1.291: for each daily-workout group, find the most recent TEXT message
+// in its history and write lastTextMsgAt/Preview/Sender to meta+index, so
+// the "Text only" view can sort by existing texts immediately. Daily
+// groups are identified by the "Daily Workout Ferra C0xx" name. Chunked
+// over the daily-group list so each call stays well under the 50-
+// subrequest cap (1 index read + `limit` message reads + 1 batch write).
+function isDailyGroupName(name) {
+  return /Daily Workout Ferra C\d+/i.test(String(name || ""));
+}
+async function handleBackfillLastText(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const offset = Math.max(0, Number(body.offset) || 0);
+  const limit = Math.min(15, Math.max(1, Number(body.limit) || 10));
+
+  const index = (await fbGet(env, `${ROOT}/chatsIndex`)) || {};
+  const dailyKeys = Object.keys(index)
+    .filter((k) => isDailyGroupName(index[k]?.groupName))
+    .sort();
+  const slice = dailyKeys.slice(offset, offset + limit);
+
+  const updates = {};
+  let written = 0;
+  for (const chatKey of slice) {
+    const msgs = await fbGet(env, `${ROOT}/chats/${chatKey}/messages`);
+    if (!msgs || typeof msgs !== "object") continue;
+    // Find the newest message that is text (non-empty body, no media/vcard).
+    let best = null;
+    for (const m of Object.values(msgs)) {
+      if (!m) continue;
+      if (m.media || m.contacts || m.messageType === "vcard") continue;
+      const t = String(m.text || "").trim();
+      if (!t) continue;
+      if (!best || (m.ts || 0) > (best.ts || 0)) {
+        best = { ts: m.ts || 0, text: t, dir: m.direction || "in", raw: m.raw };
+      }
+    }
+    if (!best) continue;
+    const sender = best.dir === "out" ? null : best.raw?.sender_name || null;
+    updates[`${ROOT}/chats/${chatKey}/meta/lastTextMsgAt`] = best.ts;
+    updates[`${ROOT}/chats/${chatKey}/meta/lastTextPreview`] = best.text.slice(0, 120);
+    updates[`${ROOT}/chats/${chatKey}/meta/lastTextDirection`] = best.dir;
+    updates[`${ROOT}/chats/${chatKey}/meta/lastTextSender`] = sender;
+    updates[`${ROOT}/chatsIndex/${chatKey}/lastTextMsgAt`] = best.ts;
+    updates[`${ROOT}/chatsIndex/${chatKey}/lastTextPreview`] = best.text.slice(0, 120);
+    updates[`${ROOT}/chatsIndex/${chatKey}/lastTextDirection`] = best.dir;
+    updates[`${ROOT}/chatsIndex/${chatKey}/lastTextSender`] = sender;
+    written++;
+  }
+  if (Object.keys(updates).length) await fbPatchRoot(env, updates);
+
+  const nextOffset = offset + slice.length;
+  const done = nextOffset >= dailyKeys.length;
+  return json({
+    ok: true,
+    totalDailyGroups: dailyKeys.length,
+    processed: slice.length,
+    written,
+    nextOffset: done ? null : nextOffset,
+    done,
   });
 }
 

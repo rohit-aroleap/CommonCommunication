@@ -11,6 +11,7 @@ import { useAuth } from "@/auth/AuthContext";
 import { resolveDisplayName } from "@/lib/displayName";
 import { ChatRowItem } from "@/components/ChatRow";
 import { cohortPhoneKey, useCohorts } from "@/lib/cohorts";
+import { useDailyTextOnly } from "@/lib/dailyTextOnly";
 import { FilterBar } from "@/components/FilterBar";
 import { AddCustomerModal } from "@/components/AddCustomerModal";
 import { DAILY_SENTINEL } from "@/types";
@@ -65,6 +66,10 @@ export function ChatsScreen() {
   // v1.274: daily-cohort registry — powers the "no group" pill on rows.
   const { assignedPhoneKeys: cohortAssignedKeys, loaded: cohortsLoaded } =
     useCohorts();
+  // v1.291: daily-workout "Text only" toggle (shared with ThreadScreen).
+  const [dailyTextOnly, setDailyTextOnly] = useDailyTextOnly();
+  const dailyView = statusFilter === DAILY_SENTINEL;
+  const textOnlyMode = dailyView && dailyTextOnly;
   // v1.196: limited-trainer "Add customer" modal state.
   const [addCustomerOpen, setAddCustomerOpen] = useState(false);
   const styles = useStyles(makeStyles);
@@ -282,6 +287,14 @@ export function ChatsScreen() {
         return false;
       });
     }
+    // v1.291: Text-only mode re-sorts daily groups by latest TEXT (groups
+    // with no text fall to the bottom) so typed questions surface above
+    // the photo stream.
+    if (textOnlyMode) {
+      rows = [...rows].sort(
+        (a, b) => (b.row.lastTextMsgAt || 0) - (a.row.lastTextMsgAt || 0),
+      );
+    }
     return rows;
   }, [
     enriched,
@@ -293,6 +306,7 @@ export function ChatsScreen() {
     sharedSubsByPhone,
     visibleChatKeysForLimited,
     visibleChatKeysForTeams,
+    textOnlyMode,
   ]);
 
   // Partition: chats with my open ticket anchor the very top, then
@@ -373,6 +387,19 @@ export function ChatsScreen() {
           <Text style={styles.addCustomerTxt}>＋  Add customer</Text>
         </TouchableOpacity>
       )}
+      {/* v1.291: Text-only toggle — only in the Daily Groups view. */}
+      {dailyView && (
+        <TouchableOpacity
+          style={styles.textOnlyBar}
+          activeOpacity={0.7}
+          onPress={() => setDailyTextOnly(!dailyTextOnly)}
+        >
+          <Text style={styles.textOnlyChk}>{dailyTextOnly ? "☑" : "☐"}</Text>
+          <Text style={styles.textOnlyTxt}>
+            💬 Text only — hide workout photos, sort by latest message
+          </Text>
+        </TouchableOpacity>
+      )}
       <FlatList
         data={listData}
         keyExtractor={(item) => item.key}
@@ -431,6 +458,7 @@ export function ChatsScreen() {
               isFavorite={isFavorite}
               suggestPin={suggestPin}
               noCohort={noCohort}
+              textOnly={textOnlyMode}
               onPress={() =>
                 navigation.navigate("Thread", {
                   chatKey: r.chatKey,
@@ -529,6 +557,19 @@ function makeStyles(colors: Colors) {
       fontSize: 14,
       fontWeight: "600",
     },
+    // v1.291: daily-workout Text-only toggle bar.
+    textOnlyBar: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+      paddingHorizontal: space.md,
+      paddingVertical: 10,
+      backgroundColor: colors.panel,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+    },
+    textOnlyChk: { fontSize: 16, color: colors.green },
+    textOnlyTxt: { flex: 1, fontSize: 12.5, color: colors.text },
     // v1.199: "Start a new chat" button shown in the empty state when the
     // search input parses as a phone number. Replaces the missing-from-
     // mobile "+ new chat" affordance the desktop has in its rail.
