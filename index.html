@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.296</title>
+<title>CommonCommunication v1.297</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2796,7 +2796,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.296";
+const APP_VERSION = "v1.297";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -5620,16 +5620,34 @@ function renderTicketsBanner() {
   const open = getOpenTicketsForChat(currentChatId);
   if (!open.length) { ticketsBanner.style.display = "none"; ticketsBanner.innerHTML = ""; return; }
   ticketsBanner.style.display = "flex";
-  ticketsBanner.innerHTML = open.map(t => `
-    <div class="ticket-bar">
-      <span class="title" data-msg-key="${escapeHtml(t.anchorMsgKey)}" title="${escapeHtml(t.title || "")}">🎫 ${escapeHtml(t.title || "(no title)")}</span>
+  ticketsBanner.innerHTML = open.map(t => {
+    // v1.297: rich hover tooltip with the full ticket detail — the note
+    // the assigner wrote (title), who wrote it, the message it's about,
+    // assignee, created time, and the reassignment trail. The mobile app
+    // shows this in a long-press popup; on the web, hovering the banner
+    // surfaces the same context (newlines render as line breaks in the
+    // native title tooltip).
+    const detailTip = [
+      t.title ? `Note: ${t.title}` : "",
+      t.createdByName ? `From: ${t.createdByName}` : "",
+      t.anchorText ? `About: "${t.anchorText}"` : "",
+      `Assigned: ${t.assigneeName || "Unassigned"}`,
+      t.createdAt ? `Created: ${new Date(t.createdAt).toLocaleString()}` : "",
+      ...(Array.isArray(t.reassignments)
+        ? t.reassignments.map(r => `Reassigned by ${r.byName || "?"}: ${r.fromName || "Unassigned"} → ${r.toName}`)
+        : []),
+    ].filter(Boolean).join("\n");
+    return `
+    <div class="ticket-bar" title="${escapeHtml(detailTip)}">
+      <span class="title" data-msg-key="${escapeHtml(t.anchorMsgKey)}" title="${escapeHtml(detailTip)}">🎫 ${escapeHtml(t.title || "(no title)")}</span>
       <span class="who">${escapeHtml(t.assigneeName || "?")}</span>
       <div class="acts">
         <button data-act="reassign" data-id="${escapeHtml(t.id)}">Reassign</button>
         <button data-act="resolve"  data-id="${escapeHtml(t.id)}">Resolve</button>
       </div>
     </div>
-  `).join("");
+  `;
+  }).join("");
   ticketsBanner.querySelectorAll(".title").forEach(el => {
     el.addEventListener("click", () => {
       const k = el.dataset.msgKey;

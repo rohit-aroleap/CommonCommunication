@@ -55,6 +55,11 @@ export function TicketBanner({
   const [resolveTarget, setResolveTarget] = useState<Ticket | null>(null);
   const [noteText, setNoteText] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  // v1.297: long-press the banner → details popup. Tapping the banner only
+  // scrolls to the anchor message; it didn't surface the note the assigner
+  // wrote (the ticket title) or the message context. This holds the ticket
+  // whose details are being shown.
+  const [detailsTarget, setDetailsTarget] = useState<Ticket | null>(null);
 
   // Tap → if it's someone else's ticket, confirm first; then open the
   // note-input modal. Mirrors desktop's confirm() → prompt() chain.
@@ -154,8 +159,12 @@ export function TicketBanner({
             <TouchableOpacity
               style={styles.txtTap}
               onPress={() => onTap?.(t)}
+              // v1.297: long-press → ticket details popup (the note the
+              // assigner wrote + the message it's about + who/when).
+              onLongPress={() => setDetailsTarget(t)}
+              delayLongPress={350}
               activeOpacity={onTap ? 0.6 : 1}
-              accessibilityLabel="Scroll to the message this ticket is about"
+              accessibilityLabel="Tap to scroll to the message; long-press for ticket details"
             >
               <Text style={[styles.txt, { color: fg }]} numberOfLines={1}>
                 🎫{" "}
@@ -165,6 +174,7 @@ export function TicketBanner({
                   <Text style={styles.unassigned}>Unassigned</Text>
                 )}
                 {t.title ? ` · ${t.title}` : ""}
+                <Text style={[styles.infoHint, { color: fg }]}> ⓘ</Text>
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -185,6 +195,78 @@ export function TicketBanner({
           </View>
         );
       })}
+
+      {/* v1.297: ticket details popup — opened by long-pressing the
+          banner. Shows the full note the assigner wrote (the ticket
+          title), the message it's about, who's on it, when it was
+          created, and any reassignment trail. Read-only. */}
+      <Modal
+        visible={!!detailsTarget}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setDetailsTarget(null)}
+      >
+        <TouchableOpacity
+          style={styles.modalScrim}
+          activeOpacity={1}
+          onPress={() => setDetailsTarget(null)}
+        >
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>🎫 Ticket details</Text>
+            {detailsTarget?.title ? (
+              <>
+                <Text style={styles.detailLabel}>
+                  Note from {detailsTarget.createdByName || "teammate"}
+                </Text>
+                <Text style={styles.detailNote}>{detailsTarget.title}</Text>
+              </>
+            ) : null}
+            {detailsTarget?.anchorText ? (
+              <>
+                <Text style={styles.detailLabel}>About this message</Text>
+                <Text style={styles.detailQuote}>
+                  “{detailsTarget.anchorText}”
+                </Text>
+              </>
+            ) : null}
+            <Text style={styles.detailLabel}>Assigned to</Text>
+            <Text style={styles.detailValue}>
+              {detailsTarget?.assigneeName || "Unassigned"}
+            </Text>
+            {detailsTarget?.createdAt ? (
+              <>
+                <Text style={styles.detailLabel}>Created</Text>
+                <Text style={styles.detailValue}>
+                  {new Date(detailsTarget.createdAt).toLocaleString()}
+                  {detailsTarget.createdByName
+                    ? ` · by ${detailsTarget.createdByName}`
+                    : ""}
+                </Text>
+              </>
+            ) : null}
+            {detailsTarget?.reassignments &&
+            detailsTarget.reassignments.length ? (
+              <>
+                <Text style={styles.detailLabel}>Reassignment history</Text>
+                {detailsTarget.reassignments.map((r, i) => (
+                  <Text key={i} style={styles.detailReassign}>
+                    {r.byName || "Someone"}: {r.fromName || "Unassigned"} →{" "}
+                    {r.toName}
+                  </Text>
+                ))}
+              </>
+            ) : null}
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                onPress={() => setDetailsTarget(null)}
+                style={[styles.modalBtn, styles.modalBtnPrimary]}
+              >
+                <Text style={styles.modalBtnPrimaryTxt}>Close</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       <Modal
         visible={!!resolveTarget}
@@ -256,6 +338,32 @@ function makeStyles(colors: Colors) {
     linkBtn: { paddingHorizontal: 2 },
     link: { fontSize: 12, fontWeight: "600", textDecorationLine: "underline" },
     sep: { fontSize: 12, opacity: 0.5, paddingHorizontal: 1 },
+    // v1.297: subtle ⓘ hint that the banner is long-pressable for details.
+    infoHint: { fontSize: 11, opacity: 0.7 },
+    // Details popup rows.
+    detailLabel: {
+      fontSize: 11,
+      fontWeight: "700",
+      letterSpacing: 0.3,
+      color: colors.muted,
+      marginTop: 10,
+      textTransform: "uppercase",
+    },
+    detailNote: {
+      fontSize: 15,
+      color: colors.text,
+      lineHeight: 21,
+      marginTop: 2,
+    },
+    detailQuote: {
+      fontSize: 13,
+      color: colors.text,
+      fontStyle: "italic",
+      lineHeight: 19,
+      marginTop: 2,
+    },
+    detailValue: { fontSize: 14, color: colors.text, marginTop: 2 },
+    detailReassign: { fontSize: 12, color: colors.muted, marginTop: 2 },
 
     // Modal styles. The scrim is intentionally darker than typical RN
     // modals so it works visibly in both light and dark themes.
