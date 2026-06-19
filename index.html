@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.301</title>
+<title>CommonCommunication v1.302</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -128,6 +128,14 @@
        is the original guard against the customer-info drawer pushing
        past the viewport edge with a long unbreakable string. */
     grid-template-columns: 56px 380px minmax(0, 1fr);
+    /* v1.302: pin the single grid row to the viewport height. Without an
+       explicit row track the implicit auto-row sized to its CONTENT, so on
+       short / display-scaled / zoomed-in screens the thread column grew taller
+       than the viewport and the bottom-pinned composer (send box) was clipped
+       off-screen — trainers saw no text box. minmax(0,1fr) forces the row to
+       exactly fill .main, so the message area shrinks/scrolls instead and the
+       composer stays visible at 100% zoom on any screen. */
+    grid-template-rows: minmax(0, 1fr);
     min-height: 0;
   }
 
@@ -2804,7 +2812,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.301";
+const APP_VERSION = "v1.302";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
