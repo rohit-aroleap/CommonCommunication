@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.298</title>
+<title>CommonCommunication v1.299</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2796,7 +2796,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.298";
+const APP_VERSION = "v1.299";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -8019,10 +8019,27 @@ function renderChatList(rows) {
   // Final visible list: apply both filters
   let visible = applyTagFilter(applyStatusFilter(afterPrivacy));
   const q = searchInput.value.trim().toLowerCase();
-  const filtered = !q ? visible : visible.filter(r =>
-    (r.name && r.name.toLowerCase().includes(q)) ||
-    (r.phone && r.phone.toLowerCase().includes(q))
-  );
+  // Phone-number-aware search. A query pasted from WhatsApp like
+  // "+91 98800 72287" (with +, country code and spaces) should still match a
+  // stored number like "919880072287". We strip both sides to digits and
+  // compare. `phoneQuery` is only set when the query is phone-shaped (digits +
+  // phone punctuation, no letters, ≥3 digits) so a name search like "John2"
+  // isn't hijacked into a number match.
+  const qDigits = q.replace(/[\s+\-().]/g, "");
+  const phoneQuery = qDigits.length >= 3 && /^\d+$/.test(qDigits) ? qDigits : "";
+  const filtered = !q ? visible : visible.filter(r => {
+    if (r.name && r.name.toLowerCase().includes(q)) return true;
+    if (!r.phone) return false;
+    if (r.phone.toLowerCase().includes(q)) return true;
+    if (phoneQuery) {
+      const pd = String(r.phone).replace(/\D/g, "");
+      if (pd.includes(phoneQuery)) return true;
+      // Country-code-agnostic: match on the last 10 digits so a stored
+      // 10-digit number matches a +91-prefixed query and vice-versa.
+      if (phoneQuery.length >= 10 && pd.slice(-10) === phoneQuery.slice(-10)) return true;
+    }
+    return false;
+  });
 
   if (!filtered.length) {
     const empty = q
