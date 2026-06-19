@@ -15,6 +15,7 @@ import { space, useStyles, type Colors } from "@/theme";
 import { useAppData, myOpenTickets } from "@/data/AppDataContext";
 import { useAuth } from "@/auth/AuthContext";
 import { resolveDisplayName } from "@/lib/displayName";
+import { normalizeFerraPhone } from "@/lib/ferra";
 import { formatTime } from "@/lib/format";
 import { encodeKey } from "@/lib/encodeKey";
 import { useNavigation } from "@react-navigation/native";
@@ -54,8 +55,16 @@ export function TicketsScreen() {
           const chatType =
             meta.chatType ||
             (String(t.anchorChatId).endsWith("@g.us") ? "group" : "user");
+          // v1.301: derive the phone from the ticket's own anchor chat id
+          // (e.g. "919916257035@c.us") when the chat's meta isn't in the
+          // loaded index — older / less-active chats aren't always paged in,
+          // so meta.phone was empty and the Ferra name lookup had nothing to
+          // go on, leaving the row showing "?" even though Customer Info
+          // resolved the name fine. normalizeFerraPhone strips the @c.us
+          // suffix; it returns "" for groups (which resolve by group name).
+          const phone = meta.phone || normalizeFerraPhone(t.anchorChatId);
           const name = resolveDisplayName(
-            meta.phone || "",
+            phone,
             meta.contactName || meta.displayName,
             { chatType, groupName: meta.groupName },
             {
