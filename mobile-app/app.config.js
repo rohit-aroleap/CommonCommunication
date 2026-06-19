@@ -11,6 +11,15 @@ require("dotenv").config();
 
 const e = process.env;
 
+// EAS project ID. This is NOT a secret — it ships in the public OTA update URL
+// (https://u.expo.dev/<id>) regardless. It MUST have a hardcoded fallback:
+// `.env` is git-ignored and is NOT uploaded to EAS cloud builds, so relying on
+// the env var alone produced cloud binaries with an empty update URL
+// ("https://u.expo.dev/") that could never pull an OTA. Keep the env override
+// for flexibility, but always fall back to the real ID so every build — local
+// or cloud — bakes in a working update endpoint.
+const EAS_PROJECT_ID = e.EAS_PROJECT_ID ?? "1b355b67-849c-479d-8c56-4534d62b61f6";
+
 module.exports = ({ config }) => ({
   ...config,
   name: "CommonCommunication",
@@ -34,7 +43,7 @@ module.exports = ({ config }) => ({
   // tweaks reuse the existing runtimeVersion and ship via `eas update`.
   runtimeVersion: { policy: "appVersion" },
   updates: {
-    url: `https://u.expo.dev/${e.EAS_PROJECT_ID ?? ""}`,
+    url: `https://u.expo.dev/${EAS_PROJECT_ID}`,
     fallbackToCacheTimeout: 0,
     checkAutomatically: "ON_LOAD",
   },
@@ -160,7 +169,7 @@ module.exports = ({ config }) => ({
     "./plugins/with-widget.js",
   ],
   extra: {
-    eas: { projectId: e.EAS_PROJECT_ID ?? "" },
+    eas: { projectId: EAS_PROJECT_ID },
     googleSignIn: {
       iosClientId: e.GOOGLE_IOS_CLIENT_ID ?? "",
       androidClientId: e.GOOGLE_ANDROID_CLIENT_ID ?? "",
