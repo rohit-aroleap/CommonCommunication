@@ -103,6 +103,12 @@ export default {
       if (url.pathname === "/admin/path-sizes" && request.method === "GET") {
         return cors(env, await handlePathSizes(env));
       }
+      // Push-delivery diagnostic. Sends a real test push to registered tokens
+      // (optionally ?uid= / ?platform=ios) and reads back Expo's delivery
+      // RECEIPTS — the only place a missing/invalid iOS APNs key shows up.
+      if (url.pathname === "/admin/test-push" && request.method === "GET") {
+        return cors(env, await handleAdminTestPush(request, env));
+      }
       // v1.288: seed/merge the Exotel allowlist (commonComm/config/
       // exotelAgents). No dashboard UI yet — this admin-gated endpoint is
       // how trainers get enabled. Body: { agents: [{email, phone,
@@ -1553,6 +1559,112 @@ async function sendPushToUids(env, uidSet, { title, body, data }) {
       });
     } catch (e) { /* swallow — push is best-effort */ }
   }
+}
+
+// ---------- /admin/test-push (push-delivery diagnostic) ----------
+// Sends a REAL test push to every registered token (optionally narrowed by
+// ?uid=<uid> or ?platform=ios|android) and then pulls the Expo delivery
+// RECEIPT for each accepted ticket. iOS APNs problems (missing / invalid
+// push key) do NOT show in the send ticket — they only surface in the
+// receipt, e.g. { status:"error", details:{ error:"InvalidCredentials" } }.
+// So a healthy iOS token reads ticket.status "ok" AND receipt.status "ok".
+// Admin-gated (x-admin-key) by the /admin/* check in fetch(). Side effect:
+// one visible "test" notification on each targeted device.
+async function handleAdminTestPush(request, env) {
+  const url = new URL(request.url);
+  const onlyUid = url.searchParams.get("uid");
+  const onlyPlatform = url.searchParams.get("platform");
+
+  const all = await fbGet(env, `${ROOT}/pushTokens`);
+  const tokens = [];
+  if (all && typeof all === "object") {
+    for (const [uid, userMap] of Object.entries(all)) {
+      if (onlyUid && uid !== onlyUid) continue;
+      if (!userMap || typeof userMap !== "object") continue;
+      for (const entry of Object.values(userMap)) {
+        if (!entry || !entry.token) continue;
+        if (!/^ExponentPushToken\[.+\]$/.test(entry.token)) continue;
+        const platform = entry.platform || "unknown";
+        if (onlyPlatform && platform !== onlyPlatform) continue;
+        tokens.push({ uid, token: entry.token, platform });
+      }
+    }
+  }
+  if (!tokens.length) {
+    return json({
+      ok: true,
+      tokens: 0,
+      note: "No matching Expo push tokens registered. Sign in on the device (and grant notification permission) first, then retry.",
+    });
+  }
+
+  const headers = { "Content-Type": "application/json", "Accept": "application/json" };
+  if (env.EXPO_ACCESS_TOKEN) headers["Authorization"] = `Bearer ${env.EXPO_ACCESS_TOKEN}`;
+
+  // 1. Send.
+  const messages = tokens.map((t) => ({
+    to: t.token,
+    title: "🔔 CommonComm push test",
+    body: "Test notification — safe to ignore.",
+    data: { test: true },
+    sound: "default",
+    priority: "high",
+    channelId: "default",
+  }));
+  let tickets = [];
+  try {
+    const resp = await fetch("https://exp.host/--/api/v2/push/send", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(messages),
+    });
+    const j = await resp.json().catch(() => null);
+    tickets = (j && j.data) || [];
+  } catch (e) {
+    return json({ ok: false, error: "send_failed", detail: String(e) });
+  }
+  const results = tokens.map((t, i) => ({
+    uid: t.uid,
+    platform: t.platform,
+    tokenTail: t.token.slice(-9, -1),
+    ticket: tickets[i] || null,
+  }));
+
+  // 2. Poll receipts for accepted tickets (where APNs errors surface).
+  const ticketIds = tickets
+    .filter((x) => x && x.status === "ok" && x.id)
+    .map((x) => x.id);
+  if (ticketIds.length) {
+    await new Promise((r) => setTimeout(r, 4000));
+    try {
+      const resp = await fetch("https://exp.host/--/api/v2/push/getReceipts", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ ids: ticketIds }),
+      });
+      const j = await resp.json().catch(() => null);
+      const receipts = (j && j.data) || {};
+      for (const r of results) {
+        if (r.ticket && r.ticket.status === "ok" && r.ticket.id) {
+          r.receipt =
+            receipts[r.ticket.id] ||
+            "pending (not ready yet — re-run to re-poll the receipt)";
+        }
+      }
+    } catch (e) {
+      for (const r of results) r.receiptError = String(e);
+    }
+  }
+
+  return json({
+    ok: true,
+    tokens: tokens.length,
+    iosTokens: results.filter((r) => r.platform === "ios").length,
+    androidTokens: results.filter((r) => r.platform === "android").length,
+    howToRead:
+      "Per token: ticket.status 'ok' = Expo accepted it; receipt.status 'ok' = APNs/FCM delivered. A receipt error mentioning credentials/InvalidCredentials on an iOS token = APNs key missing.",
+    results,
+  });
 }
 
 // Returns a Set of uids to push to. v1.120 strict rules — no more broadcast,
