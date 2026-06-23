@@ -70,6 +70,12 @@ import {
   deleteMessage,
   reactToMessage,
   exotelCall,
+  fetchWatiTemplates,
+  fetchWatiMessages,
+  sendWatiTemplate,
+  sendWatiSession,
+  type WatiSession,
+  type WatiTemplate,
 } from "@/lib/worker";
 import { makeVoiceNoteRecordingOptions } from "@/lib/voiceRecording";
 import { prewarmTranscription } from "@/lib/prewarm";
@@ -178,6 +184,7 @@ export function ThreadScreen({ route, navigation }: Props) {
     !isDm &&
     (meta.chatType === "group" ||
       String(meta.chatId || "").endsWith("@g.us"));
+  const canUseWati = !isDm && !isGroup;
   const chatId = isDm ? "" : meta.chatId || chatKeyToChatId(chatKey);
   const phone = isDm ? "" : meta.phone || chatId.split("@")[0];
 
@@ -216,7 +223,17 @@ export function ThreadScreen({ route, navigation }: Props) {
   ]);
 
   const [messages, setMessages] = useState<Message[]>([]);
+  const [channel, setChannel] = useState<"periskope" | "wati">("periskope");
+  const [watiMessages, setWatiMessages] = useState<Message[]>([]);
+  const [watiTemplates, setWatiTemplates] = useState<WatiTemplate[]>([]);
+  const [watiTemplateName, setWatiTemplateName] = useState("");
+  const [watiSession, setWatiSession] = useState<WatiSession>({ isOpen: false });
+  const [watiLoading, setWatiLoading] = useState(false);
+  const [watiSending, setWatiSending] = useState(false);
   const [composer, setComposer] = useState("");
+  useEffect(() => {
+    if (!canUseWati && channel === "wati") setChannel("periskope");
+  }, [canUseWati, channel]);
   // v1.130: structured mentions parallel to the composer text. When the
   // user picks "@Ashima" from the autocomplete, we add Ashima's uid here
   // so the worker can ping her even if she isn't on the ticket. Kept as
@@ -707,6 +724,36 @@ export function ThreadScreen({ route, navigation }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatKey]);
 
+  useEffect(() => {
+    if (!canUseWati || channel !== "wati" || !phone) return;
+    let cancelled = false;
+    async function loadWati() {
+      setWatiLoading(true);
+      try {
+        const [tpls, msgRes] = await Promise.all([
+          watiTemplates.length ? Promise.resolve(watiTemplates) : fetchWatiTemplates(),
+          fetchWatiMessages(phone),
+        ]);
+        if (cancelled) return;
+        setWatiTemplates(tpls);
+        const readyTemplates = tpls.filter((t) => (!t.status || t.status === "APPROVED") && (t.paramCount || 0) <= 1);
+        setWatiTemplateName((cur) => cur || readyTemplates[0]?.name || "");
+        setWatiSession(msgRes.session);
+        const list = (msgRes.messages || []).map((m) => ({ ...m, id: m.id })) as Message[];
+        list.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+        setWatiMessages(list);
+      } catch (e) {
+        if (!cancelled) Alert.alert("Wati failed", String((e as Error)?.message || e));
+      } finally {
+        if (!cancelled) setWatiLoading(false);
+      }
+    }
+    void loadWati();
+    return () => {
+      cancelled = true;
+    };
+  }, [channel, canUseWati, phone, watiTemplates]);
+
   // Deduplicate by inner unique id — see lib/messageDedup for the rationale.
   // dedupMessages returns ascending (oldest → newest) to match the webapp's
   // top-down renderer. The inverted FlatList below needs descending so data[0]
@@ -722,6 +769,7 @@ export function ThreadScreen({ route, navigation }: Props) {
   const hideMedia =
     isDailyWorkoutGroup && (dailyTextOnly || route.params.textOnly === true);
   const visible = useMemo(() => {
+    if (channel === "wati") return [...watiMessages].reverse();
     let src = messages;
     if (hideMedia) {
       src = messages.filter((m) => {
@@ -733,7 +781,7 @@ export function ThreadScreen({ route, navigation }: Props) {
       });
     }
     return [...dedupMessages(src)].reverse();
-  }, [messages, hideMedia]);
+  }, [messages, hideMedia, channel, watiMessages]);
 
   // v1.206: scroll to a specific message in the thread (the inverted
   // FlatList) and briefly highlight it. Used both for the route-param
@@ -833,7 +881,53 @@ export function ThreadScreen({ route, navigation }: Props) {
   }, [composer, user, pairKey, otherUid, replyTarget]);
 
   const sendingRef = useRef(false);
+  const sendWati = useCallback(async () => {
+    if (!canUseWati || !phone || watiSending) return;
+    const sentByUid = user?.uid;
+    const sentByName = user?.displayName || user?.email || "";
+    setWatiSending(true);
+    try {
+      if (composer.trim()) {
+        if (!watiSession.isOpen) {
+          Alert.alert("Wati session closed", "Free text is only available within 24 hours of the customer's last Wati message. Send a template instead.");
+          return;
+        }
+        const res = await sendWatiSession({
+          phone,
+          message: composer.trim(),
+          sentByUid,
+          sentByName,
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok || !j?.ok) throw new Error(j?.detail || j?.error || `HTTP ${res.status}`);
+        setComposer("");
+      } else if (watiTemplateName) {
+        const res = await sendWatiTemplate({
+          phone,
+          templateName: watiTemplateName,
+          parameters: { "1": headerName },
+          sentByUid,
+          sentByName,
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok || !j?.ok) throw new Error(j?.detail || j?.error || `HTTP ${res.status}`);
+      } else {
+        return;
+      }
+      const msgRes = await fetchWatiMessages(phone);
+      setWatiSession(msgRes.session);
+      const list = (msgRes.messages || []).map((m) => ({ ...m, id: m.id })) as Message[];
+      list.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+      setWatiMessages(list);
+    } catch (e) {
+      Alert.alert("Wati send failed", String((e as Error)?.message || e));
+    } finally {
+      setWatiSending(false);
+    }
+  }, [canUseWati, phone, watiSending, user, composer, watiSession.isOpen, watiTemplateName, headerName]);
+
   const send = useCallback(async () => {
+    if (channel === "wati") return sendWati();
     if (isDm) return sendDm();
     const text = composer.trim();
     // v1.225: media-only template = empty text + queued attachment is OK.
@@ -972,6 +1066,8 @@ export function ThreadScreen({ route, navigation }: Props) {
   }, [
     isDm,
     sendDm,
+    sendWati,
+    channel,
     composer,
     user,
     chatKey,
@@ -1896,10 +1992,11 @@ export function ThreadScreen({ route, navigation }: Props) {
               // Single tap → open "Create ticket from this message" flow.
               // Matches webapp behaviour where clicking a bubble is the
               // primary affordance for raising a ticket.
-              if (isDm) return; // DMs don't support tickets
+              if (isDm || channel === "wati") return; // DMs / Wati don't support tickets
               setTicketCreateFor(m);
             }}
             onLongPress={async (m) => {
+              if (channel === "wati") return;
               // v1.169: gate now opens the menu for DM messages too.
               // - Customer chats: need a periskopeMsgId (otherwise edit/
               //   delete/react can't round-trip through Periskope).
@@ -1961,7 +2058,29 @@ export function ThreadScreen({ route, navigation }: Props) {
       behavior={Platform.OS === "ios" ? "padding" : undefined}
       keyboardVerticalOffset={Platform.OS === "ios" ? 80 : 0}
     >
-      {!isDm && (
+      {canUseWati && (
+        <View style={styles.channelTabs}>
+          <TouchableOpacity
+            style={[styles.channelTab, channel === "periskope" && styles.channelTabActive]}
+            onPress={() => setChannel("periskope")}
+            activeOpacity={0.85}
+          >
+            <Text style={[styles.channelTabTxt, channel === "periskope" && styles.channelTabTxtActive]}>
+              Trainer 1
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.channelTab, channel === "wati" && styles.channelTabActive]}
+            onPress={() => setChannel("wati")}
+            activeOpacity={0.85}
+          >
+            <Text style={[styles.channelTabTxt, channel === "wati" && styles.channelTabTxtActive]}>
+              Wati
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
+      {!isDm && channel === "periskope" && (
         <TicketBanner
           tickets={banner}
           currentUid={user?.uid ?? ""}
@@ -2157,7 +2276,48 @@ export function ThreadScreen({ route, navigation }: Props) {
             input gets full width — previously the two icon mics squeezed
             the typing area on narrow phones. 📝 hidden on DMs (no notes
             feature there), in which case 🎤 expands to fill the row. */}
-        {audioMod && (
+        {channel === "wati" && (
+          <View style={styles.watiPanel}>
+            <Text style={styles.watiSessionTxt}>
+              {watiLoading
+                ? "Loading Wati..."
+                : watiSession.isOpen
+                  ? "24h Wati window open"
+                  : "24h Wati window closed. Templates only."}
+            </Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              style={styles.watiTplScroll}
+            >
+              {watiTemplates
+                .filter((t) => (!t.status || t.status === "APPROVED") && (t.paramCount || 0) <= 1)
+                .map((t) => (
+                  <TouchableOpacity
+                    key={t.name}
+                    style={[
+                      styles.watiTplChip,
+                      watiTemplateName === t.name && styles.watiTplChipActive,
+                    ]}
+                    onPress={() => setWatiTemplateName(t.name)}
+                    activeOpacity={0.85}
+                  >
+                    <Text
+                      style={[
+                        styles.watiTplChipTxt,
+                        watiTemplateName === t.name && styles.watiTplChipTxtActive,
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {t.name}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+            </ScrollView>
+          </View>
+        )}
+        {audioMod && channel === "periskope" && (
           <View style={styles.voiceRow}>
             {!isDm && (
               <VoiceMicButton
@@ -2191,7 +2351,7 @@ export function ThreadScreen({ route, navigation }: Props) {
             when the trainer picked "Reply" from a message's action sheet.
             Shows who they're replying to + a snippet of the text + an X
             to dismiss. Theme-aware via colors.bg / .text / .muted. */}
-        {replyTarget && (
+        {channel === "periskope" && replyTarget && (
           <View style={styles.replyBar}>
             <View style={styles.replyBarAccent} />
             <View style={styles.replyBarBody}>
@@ -2221,7 +2381,7 @@ export function ThreadScreen({ route, navigation }: Props) {
             queued attachment so the trainer can decide to send just the
             text after all. Reuses the reply-bar visual language for
             consistency — same green accent stripe, same chrome. */}
-        {pendingTemplateMedia && (
+        {channel === "periskope" && pendingTemplateMedia && (
           <View style={styles.replyBar}>
             <View style={styles.replyBarAccent} />
             <View style={styles.replyBarBody}>
@@ -2246,7 +2406,7 @@ export function ThreadScreen({ route, navigation }: Props) {
         <View style={styles.composerRow}>
           <TextInput
             ref={composerInputRef}
-            style={styles.input}
+            style={[styles.input, channel === "wati" && !watiSession.isOpen && styles.inputDisabled]}
             value={composer}
             onChangeText={setComposer}
             onSelectionChange={(e) => {
@@ -2255,14 +2415,22 @@ export function ThreadScreen({ route, navigation }: Props) {
               const has = sel.start !== sel.end;
               if (has !== hasComposerSelection) setHasComposerSelection(has);
             }}
-            placeholder={replyTarget ? "Reply…" : "Type a message"}
+            placeholder={
+              channel === "wati" && !watiSession.isOpen
+                ? "Free text locked. Send a Wati template."
+                : replyTarget
+                  ? "Reply…"
+                  : "Type a message"
+            }
             placeholderTextColor={colors.muted}
             multiline
+            editable={channel !== "wati" || watiSession.isOpen}
           />
           {/* v1.183: formatting cheat-sheet. Tappable hint that pops an
               Alert listing all the WhatsApp markers — including block
               ones (quote, bullet, numbered) that don't have a button in
               the contextual toolbar. */}
+          {channel === "periskope" && (
           <TouchableOpacity
             style={styles.fmtHint}
             onPress={() =>
@@ -2275,6 +2443,8 @@ export function ThreadScreen({ route, navigation }: Props) {
           >
             <Text style={styles.fmtHintTxt}>Aa</Text>
           </TouchableOpacity>
+          )}
+          {channel === "periskope" && (
           <TouchableOpacity
             style={[styles.attach, attachBusy && styles.attachBusy]}
             onPress={onAttach}
@@ -2282,9 +2452,20 @@ export function ThreadScreen({ route, navigation }: Props) {
           >
             <Text style={styles.attachTxt}>📎</Text>
           </TouchableOpacity>
+          )}
           <TouchableOpacity
-            style={[styles.send, !composer.trim() && styles.sendDisabled]}
-            disabled={!composer.trim()}
+            style={[
+              styles.send,
+              ((channel === "periskope" && !composer.trim()) ||
+                (channel === "wati" && watiSending) ||
+                (channel === "wati" && !composer.trim() && !watiTemplateName)) &&
+                styles.sendDisabled,
+            ]}
+            disabled={
+              (channel === "periskope" && !composer.trim()) ||
+              (channel === "wati" && watiSending) ||
+              (channel === "wati" && !composer.trim() && !watiTemplateName)
+            }
             onPress={send}
           >
             <Text style={styles.sendTxt}>➤</Text>
@@ -3090,6 +3271,33 @@ function makeStyles(colors: Colors) {
   root: { flex: 1, backgroundColor: colors.bg },
   list: { flex: 1, backgroundColor: colors.bg },
   listContent: { paddingHorizontal: 8, paddingVertical: 12 },
+  channelTabs: {
+    flexDirection: "row",
+    padding: 6,
+    gap: 6,
+    backgroundColor: colors.panel,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  channelTab: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 9,
+    borderRadius: 6,
+    backgroundColor: colors.bg,
+  },
+  channelTabActive: {
+    backgroundColor: colors.green,
+  },
+  channelTabTxt: {
+    color: colors.muted,
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  channelTabTxtActive: {
+    color: "white",
+  },
   // v1.118: smaller, more subtle date dividers. The old teal pill drew too
   // much attention given how often these recur. Matches WhatsApp's quiet
   // grey-on-white style.
@@ -3121,6 +3329,40 @@ function makeStyles(colors: Colors) {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
+  },
+  watiPanel: {
+    gap: 6,
+  },
+  watiSessionTxt: {
+    color: "rgba(255,255,255,0.8)",
+    fontSize: 11,
+    fontWeight: "600",
+    paddingHorizontal: 4,
+  },
+  watiTplScroll: {
+    maxHeight: 38,
+  },
+  watiTplChip: {
+    maxWidth: 210,
+    marginRight: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 6,
+    backgroundColor: "rgba(255,255,255,0.12)",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255,255,255,0.2)",
+  },
+  watiTplChipActive: {
+    backgroundColor: "white",
+    borderColor: "white",
+  },
+  watiTplChipTxt: {
+    color: "white",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  watiTplChipTxtActive: {
+    color: colors.greenDark,
   },
   // Slash-command template picker (v1.126). Anchored above the composer,
   // dark surface so it pops against the message list. Capped at ~240px so
@@ -3278,8 +3520,8 @@ function makeStyles(colors: Colors) {
     color: "white",
     fontSize: 14,
   },
-  input: {
-    flex: 1,
+	  input: {
+	    flex: 1,
     backgroundColor: colors.panel,
     borderRadius: 22,
     paddingHorizontal: 14,
@@ -3288,7 +3530,10 @@ function makeStyles(colors: Colors) {
     color: colors.text,
     minHeight: 40,
     maxHeight: 120,
-  },
+	  },
+	  inputDisabled: {
+	    opacity: 0.55,
+	  },
   send: {
     width: 44,
     height: 44,

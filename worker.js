@@ -72,6 +72,18 @@ export default {
       if (url.pathname === "/send" && request.method === "POST") {
         return cors(env, await handleSend(request, env));
       }
+      if (url.pathname === "/wati/templates" && request.method === "GET") {
+        return cors(env, await handleWatiTemplates(env));
+      }
+      if (url.pathname === "/wati/messages" && request.method === "GET") {
+        return cors(env, await handleWatiMessages(request, env));
+      }
+      if (url.pathname === "/wati/send-template" && request.method === "POST") {
+        return cors(env, await handleWatiSendTemplate(request, env));
+      }
+      if (url.pathname === "/wati/send-session" && request.method === "POST") {
+        return cors(env, await handleWatiSendSession(request, env));
+      }
       if (url.pathname === "/webhook" && request.method === "POST") {
         return cors(env, await handleWebhook(request, env));
       }
@@ -861,6 +873,317 @@ async function handleSend(request, env) {
   }
 
   return json({ ok, periskope: periskopeJson }, ok ? 200 : 502);
+}
+
+// ---------- Wati / Trainer 2 ----------
+// Wati is the official WhatsApp Business API channel used by Wati-Reach-Outs.
+// CommonCommunication keeps it separate from Periskope: different Firebase
+// subtree, template-only sends for now, no edits/deletes/media/replies.
+async function handleWatiTemplates(env) {
+  const cfg = await getWatiConfig(env);
+  if (cfg.error) return json({ ok: false, error: cfg.error }, 503);
+  const res = await fetch(`${cfg.baseUrl}/api/v1/getMessageTemplates?pageSize=200&pageNumber=1`, {
+    headers: watiHeaders(cfg),
+  });
+  const j = await safeJson(res);
+  if (!res.ok) {
+    return json({ ok: false, error: "wati_templates_failed", detail: watiError(j, res.status) }, 502);
+  }
+  const arr = j?.messageTemplates || j?.templates || j?.data || [];
+  const templates = (Array.isArray(arr) ? arr : [])
+    .map((t) => normalizeWatiTemplate(t))
+    .filter((t) => t.name)
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return json({ ok: true, templates, from: cfg.from || null });
+}
+
+async function handleWatiMessages(request, env) {
+  const url = new URL(request.url);
+  const phone = normalizePhone(url.searchParams.get("phone") || "");
+  if (!phone) return json({ ok: false, error: "missing phone" }, 400);
+  const cfg = await getWatiConfig(env);
+  if (cfg.error) return json({ ok: false, error: cfg.error }, 503);
+
+  const qs = new URLSearchParams({
+    pageSize: String(Math.min(100, Math.max(10, Number(url.searchParams.get("limit")) || 50))),
+    pageNumber: "1",
+  });
+  const fromDate = url.searchParams.get("fromDate");
+  const toDate = url.searchParams.get("toDate");
+  if (fromDate) qs.set("fromDate", fromDate);
+  if (toDate) qs.set("toDate", toDate);
+
+  const res = await fetch(`${cfg.baseUrl}/api/v1/getMessages/${encodeURIComponent(phone)}?${qs}`, {
+    headers: watiHeaders(cfg),
+  });
+  const j = await safeJson(res);
+  if (!res.ok) {
+    return json({ ok: false, error: "wati_messages_failed", detail: watiError(j, res.status) }, 502);
+  }
+  const raw = j?.messages || j?.items || j?.data || [];
+  const apiMessages = normalizeWatiMessages(raw, phone);
+
+  const local = await fbGet(env, `${ROOT}/watiChats/${phone}/messages`);
+  const localMessages = Object.entries(local || {}).map(([id, m]) => ({ id, ...(m || {}) }));
+  const byId = new Map();
+  for (const m of [...localMessages, ...apiMessages]) {
+    const id = m.watiMessageId || m.id || `${m.ts}_${m.direction}_${String(m.text || "").slice(0, 20)}`;
+    const prev = byId.get(id);
+    if (!prev || statusRank(m.status) >= statusRank(prev.status)) byId.set(id, m);
+  }
+  const messages = [...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0));
+  const session = watiSessionWindow(messages);
+  return json({ ok: true, phone, messages, session });
+}
+
+async function handleWatiSendTemplate(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const phone = normalizePhone(body.phone || "");
+  const templateName = String(body.templateName || "").trim();
+  if (!phone) return json({ ok: false, error: "missing phone" }, 400);
+  if (!templateName) return json({ ok: false, error: "missing templateName" }, 400);
+
+  const cfg = await getWatiConfig(env);
+  if (cfg.error) return json({ ok: false, error: cfg.error }, 503);
+  const parameters = normalizeWatiParameters(body.parameters);
+  const payload = {
+    template_name: templateName,
+    broadcast_name: templateName,
+    parameters,
+  };
+  const res = await fetch(
+    `${cfg.baseUrl}/api/v1/sendTemplateMessage?whatsappNumber=${encodeURIComponent(phone)}`,
+    {
+      method: "POST",
+      headers: watiHeaders(cfg),
+      body: JSON.stringify(payload),
+    },
+  );
+  const j = await safeJson(res);
+  const receiver = Array.isArray(j?.receivers) ? j.receivers[0] : null;
+  const explicitInvalid = receiver && receiver.isValidWhatsAppNumber === false;
+  const ok = res.ok && j?.result === true && !explicitInvalid;
+  const ts = Date.now();
+  const text = watiTemplatePreview(templateName, parameters);
+  const record = {
+    channel: "wati",
+    direction: "out",
+    text,
+    ts,
+    status: ok ? "sent" : "failed",
+    templateName,
+    parameters,
+    sentByUid: body.sentByUid || null,
+    sentByName: body.sentByName || null,
+    watiResp: j || null,
+    error: ok ? null : watiError(j, res.status),
+  };
+  const pushed = await fbPush(env, `${ROOT}/watiChats/${phone}/messages`, record);
+  await fbPatch(env, `${ROOT}/watiChats/${phone}/meta`, {
+    phone,
+    lastMsgAt: ts,
+    lastMsgPreview: text.slice(0, 120),
+    lastMsgDirection: "out",
+    lastMsgStatus: ok ? "sent" : "failed",
+  });
+  if (!ok) return json({ ok: false, error: "wati_send_failed", detail: record.error, raw: j }, 502);
+  return json({ ok: true, message: { id: pushed?.name || null, ...record }, raw: j });
+}
+
+async function handleWatiSendSession(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const phone = normalizePhone(body.phone || "");
+  const message = String(body.message || "").trim();
+  if (!phone) return json({ ok: false, error: "missing phone" }, 400);
+  if (!message) return json({ ok: false, error: "missing message" }, 400);
+
+  const cfg = await getWatiConfig(env);
+  if (cfg.error) return json({ ok: false, error: cfg.error }, 503);
+
+  const recent = await fetchRecentWatiMessages(cfg, phone, 50);
+  if (recent.error) return json({ ok: false, error: recent.error, detail: recent.detail }, 502);
+  const session = watiSessionWindow(recent.messages || []);
+  if (!session.isOpen) {
+    return json({
+      ok: false,
+      error: "wati_session_closed",
+      detail: "Free text is only allowed within 24 hours of the customer's last Wati message. Send a template instead.",
+      session,
+    }, 409);
+  }
+
+  const form = new FormData();
+  form.append("messageText", message);
+  const res = await fetch(`${cfg.baseUrl}/api/v1/sendSessionMessage/${encodeURIComponent(phone)}`, {
+    method: "POST",
+    headers: {
+      Authorization: cfg.token.startsWith("Bearer ") ? cfg.token : `Bearer ${cfg.token}`,
+    },
+    body: form,
+  });
+  const j = await safeJson(res);
+  const ok = res.ok && (j?.result === true || j?.success === true || j?.ok === true);
+  const ts = Date.now();
+  const record = {
+    channel: "wati",
+    direction: "out",
+    text: message,
+    ts,
+    status: ok ? "sent" : "failed",
+    sentByUid: body.sentByUid || null,
+    sentByName: body.sentByName || null,
+    watiResp: j || null,
+    error: ok ? null : watiError(j, res.status),
+  };
+  const pushed = await fbPush(env, `${ROOT}/watiChats/${phone}/messages`, record);
+  await fbPatch(env, `${ROOT}/watiChats/${phone}/meta`, {
+    phone,
+    lastMsgAt: ts,
+    lastMsgPreview: message.slice(0, 120),
+    lastMsgDirection: "out",
+    lastMsgStatus: ok ? "sent" : "failed",
+  });
+  if (!ok) return json({ ok: false, error: "wati_session_send_failed", detail: record.error, raw: j }, 502);
+  return json({ ok: true, message: { id: pushed?.name || null, ...record }, raw: j, session });
+}
+
+async function getWatiConfig(env) {
+  const fbCfg = await fbGet(env, "watiReachOuts/config").catch(() => null);
+  const baseUrl = String(env.WATI_BASE_URL || fbCfg?.baseUrl || "https://live-mt-server.wati.io/10115731/").trim().replace(/\/$/, "");
+  const token = String(env.WATI_TOKEN || fbCfg?.token || "").trim();
+  const from = String(env.WATI_FROM_NUMBER || fbCfg?.from || "").replace(/\D/g, "");
+  if (!baseUrl || !token) return { error: "wati_not_configured" };
+  return { baseUrl, token, from };
+}
+
+function watiHeaders(cfg) {
+  return {
+    Authorization: cfg.token.startsWith("Bearer ") ? cfg.token : `Bearer ${cfg.token}`,
+    "Content-Type": "application/json",
+  };
+}
+
+function normalizeWatiTemplate(t) {
+  const name = t?.name || t?.elementName || "";
+  const bodyText = extractWatiTemplateBody(t);
+  return {
+    name,
+    status: String(t?.status || "").toUpperCase(),
+    category: t?.category || "",
+    language: t?.language || "",
+    bodyText,
+    paramCount: countTemplateParams(bodyText),
+  };
+}
+
+function extractWatiTemplateBody(t) {
+  const components = t?.components || [];
+  if (Array.isArray(components)) {
+    const body = components.find((c) => String(c?.type || "").toUpperCase() === "BODY") || components[0];
+    if (body?.text) return String(body.text);
+  }
+  return String(t?.body || t?.templateBody || t?.text || t?.message || "");
+}
+
+function countTemplateParams(text) {
+  const matches = String(text || "").match(/\{\{\s*\d+\s*\}\}/g) || [];
+  let max = 0;
+  for (const m of matches) {
+    const n = Number(m.replace(/\D/g, ""));
+    if (n > max) max = n;
+  }
+  return max;
+}
+
+function normalizeWatiParameters(params) {
+  if (Array.isArray(params)) {
+    return params
+      .map((p, i) => ({
+        name: String(p?.name || i + 1),
+        value: String(p?.value ?? ""),
+      }))
+      .filter((p) => p.name);
+  }
+  return Object.entries(params || {}).map(([name, value]) => ({
+    name: String(name),
+    value: String(value ?? ""),
+  }));
+}
+
+function watiTemplatePreview(templateName, parameters) {
+  const values = (parameters || []).map((p) => p.value).filter((v) => String(v || "").trim());
+  return values.length
+    ? `[Wati template: ${templateName}] ${values.join(" | ")}`
+    : `[Wati template: ${templateName}]`;
+}
+
+async function fetchRecentWatiMessages(cfg, phone, limit = 50) {
+  const qs = new URLSearchParams({ pageSize: String(limit), pageNumber: "1" });
+  const res = await fetch(`${cfg.baseUrl}/api/v1/getMessages/${encodeURIComponent(phone)}?${qs}`, {
+    headers: watiHeaders(cfg),
+  });
+  const j = await safeJson(res);
+  if (!res.ok) return { error: "wati_messages_failed", detail: watiError(j, res.status) };
+  const raw = j?.messages || j?.items || j?.data || [];
+  return { messages: normalizeWatiMessages(raw, phone) };
+}
+
+function normalizeWatiMessages(raw, phone) {
+  return (Array.isArray(raw) ? raw : [])
+    .map((m, idx) => normalizeWatiMessage(m, phone, idx))
+    .filter(Boolean);
+}
+
+function watiSessionWindow(messages) {
+  const latestInbound = (messages || [])
+    .filter((m) => m.direction === "in")
+    .sort((a, b) => (b.ts || 0) - (a.ts || 0))[0];
+  const lastInboundAt = latestInbound?.ts || null;
+  const openUntil = lastInboundAt ? lastInboundAt + 24 * 60 * 60 * 1000 : null;
+  return {
+    isOpen: !!openUntil && Date.now() < openUntil,
+    lastInboundAt,
+    openUntil,
+  };
+}
+
+function normalizeWatiMessage(m, phone, idx) {
+  if (!m || typeof m !== "object") return null;
+  const outbound = m.owner === true || m.direction === "outbound" || /sent/i.test(String(m.eventType || ""));
+  const templateName = m.template?.name || m.templateName || m.template_name || "";
+  const text = m.text || m.message || m.finalText || m.body || (templateName ? `[Wati template: ${templateName}]` : "");
+  const ts = parseTs(m.createdAt || m.created_at || m.timestamp || m.localMessageTime || m.time);
+  return {
+    id: `wati_${m.id || m.messageId || m.whatsappMessageId || idx}`,
+    watiMessageId: String(m.id || m.messageId || m.whatsappMessageId || ""),
+    channel: "wati",
+    direction: outbound ? "out" : "in",
+    text,
+    ts,
+    status: outbound ? watiStatus(m) : undefined,
+    templateName: templateName || null,
+    raw: m,
+  };
+}
+
+function watiStatus(m) {
+  const s = String(m.status || m.eventType || "").toLowerCase();
+  if (/read/.test(s)) return "read";
+  if (/deliver/.test(s)) return "delivered";
+  if (/fail|error|reject/.test(s)) return "failed";
+  return "sent";
+}
+
+function watiError(j, status) {
+  const receiver = Array.isArray(j?.receivers) ? j.receivers[0] : null;
+  return (
+    j?.info ||
+    j?.message ||
+    j?.error ||
+    receiver?.errors?.[0]?.error ||
+    (receiver?.isValidWhatsAppNumber === false ? `Invalid WhatsApp number: ${receiver.waId || ""}` : "") ||
+    `HTTP ${status}`
+  );
 }
 
 // ---------- /edit-message ----------

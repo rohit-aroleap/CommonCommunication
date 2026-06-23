@@ -57,6 +57,87 @@ export async function sendMessage(body: SendBody): Promise<Response> {
   });
 }
 
+export interface WatiTemplate {
+  name: string;
+  status?: string;
+  category?: string;
+  language?: string;
+  bodyText?: string;
+  paramCount?: number;
+}
+
+export interface WatiSession {
+  isOpen: boolean;
+  lastInboundAt?: number | null;
+  openUntil?: number | null;
+}
+
+export interface WatiMessage {
+  id: string;
+  channel?: "wati";
+  direction: "in" | "out";
+  text?: string;
+  ts: number;
+  status?: "sending" | "sent" | "delivered" | "read" | "failed";
+  templateName?: string | null;
+}
+
+export async function fetchWatiTemplates(): Promise<WatiTemplate[]> {
+  const res = await fetch(`${WORKER_URL}/wati/templates`);
+  const j = (await res.json().catch(() => ({}))) as {
+    ok?: boolean;
+    templates?: WatiTemplate[];
+    error?: string;
+  };
+  if (!res.ok || !j.ok) throw new Error(j.error || `HTTP ${res.status}`);
+  return j.templates || [];
+}
+
+export async function fetchWatiMessages(phone: string): Promise<{
+  messages: WatiMessage[];
+  session: WatiSession;
+}> {
+  const res = await fetch(`${WORKER_URL}/wati/messages?phone=${encodeURIComponent(phone)}&limit=50`);
+  const j = (await res.json().catch(() => ({}))) as {
+    ok?: boolean;
+    messages?: WatiMessage[];
+    session?: WatiSession;
+    error?: string;
+  };
+  if (!res.ok || !j.ok) throw new Error(j.error || `HTTP ${res.status}`);
+  return {
+    messages: j.messages || [],
+    session: j.session || { isOpen: false },
+  };
+}
+
+export async function sendWatiTemplate(body: {
+  phone: string;
+  templateName: string;
+  parameters?: Record<string, string>;
+  sentByUid?: string;
+  sentByName?: string;
+}): Promise<Response> {
+  return fetch(`${WORKER_URL}/wati/send-template`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function sendWatiSession(body: {
+  phone: string;
+  message: string;
+  sentByUid?: string;
+  sentByName?: string;
+}): Promise<Response> {
+  return fetch(`${WORKER_URL}/wati/send-session`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 // v1.280: Exotel click-to-call. The worker rings the trainer's own phone
 // (looked up server-side from the exotelAgents allowlist) then bridges to
 // the customer. No in-app audio — the call lands on the trainer's real

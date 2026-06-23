@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.304</title>
+<title>CommonCommunication v1.305</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -893,6 +893,32 @@
   .thread-header .info .sub {
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
+  .channel-tabs {
+    display: none;
+    flex-shrink: 0;
+    gap: 8px;
+    padding: 8px 16px;
+    background: #fff;
+    border-left: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+  .channel-tab {
+    flex: 1;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #f8fafc;
+    color: var(--muted);
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    padding: 8px 10px;
+    cursor: pointer;
+  }
+  .channel-tab.active {
+    background: #e7f7f2;
+    border-color: var(--green);
+    color: var(--green-dark);
+  }
   .thread-empty {
     flex: 1; display: flex; align-items: center; justify-content: center;
     flex-direction: column; color: var(--muted);
@@ -1193,6 +1219,36 @@
     padding: 10px 14px; font-size: 14px; min-height: 42px; max-height: 160px;
     font-family: inherit;
     line-height: 1.4;
+  }
+  .composer textarea.locked {
+    background: #f3f4f6;
+    color: #6b7280;
+    cursor: not-allowed;
+  }
+  .wati-composer-panel {
+    display: none;
+    flex-shrink: 0;
+    gap: 8px;
+    align-items: center;
+    padding: 8px 16px;
+    background: var(--header);
+    border-top: 1px solid var(--border);
+  }
+  .wati-template-select {
+    min-width: 240px;
+    max-width: 360px;
+    height: 36px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #fff;
+    font-family: inherit;
+    font-size: 13px;
+    padding: 0 10px;
+  }
+  .wati-session-hint {
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 600;
   }
   .composer .send-btn {
     background: var(--green); border: none; color: white;
@@ -2343,6 +2399,10 @@
             <div class="sub" id="threadSub">—</div>
           </div>
         </div>
+        <div class="channel-tabs" id="channelTabs">
+          <button class="channel-tab active" id="periskopeTab" data-channel="periskope">Trainer 1</button>
+          <button class="channel-tab" id="watiTab" data-channel="wati">Wati</button>
+        </div>
         <div class="tickets-banner" id="ticketsBanner" style="display:none;"></div>
         <div class="notes-panel" id="notesPanel">
           <div class="notes-header" id="notesHeader">
@@ -2373,6 +2433,10 @@
              handleReply() when the user picks "Reply" from a message's
              action popover. ✕ clears the reply target. -->
         <div class="composer-reply-bar" id="composerReplyBar"></div>
+        <div class="wati-composer-panel" id="watiComposerPanel">
+          <select class="wati-template-select" id="watiTemplateSelect" title="Wati template"></select>
+          <span class="wati-session-hint" id="watiSessionHint">Loading Wati...</span>
+        </div>
         <div class="composer">
           <button class="emoji-btn" id="emojiBtn" title="Insert emoji">😀</button>
           <!-- v1.183 formatting hint. Hover for cheat sheet; click pops the
@@ -2831,7 +2895,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.304";
+const APP_VERSION = "v1.305";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -2864,6 +2928,7 @@ const provider = new GoogleAuthProvider();
 // ====== STATE ======
 let currentUser = null;
 let currentChatId = null;
+let currentChannel = "periskope"; // "periskope" | "wati"
 let chatsCache = {};      // chatId -> meta
 let lastChatRows = [];    // last computed row list for re-render on search
 let messagesUnsub = null; // detach for current thread listener
@@ -2911,6 +2976,10 @@ let teamPhones = new Set();       // derived: every phone listed in teamMembersC
 let dmsCache = {};                // pairKey -> { meta: {participants, lastMsgAt, ...} }
 let dmRows = [];                  // last computed list for re-render
 let currentView = "chats";        // "chats" | "team" — sidebar toggle
+let watiTemplatesCache = [];
+let watiMessagesCache = [];
+let watiSession = { isOpen: false };
+let watiLoading = false;
 
 // ====== ELEMENTS ======
 const $ = (id) => document.getElementById(id);
@@ -2947,6 +3016,13 @@ const threadName = $("threadName");
 const threadSub = $("threadSub");
 const threadAvatar = $("threadAvatar");
 const messagesEl = $("messages");
+const composerReplyBar = $("composerReplyBar");
+const channelTabs = $("channelTabs");
+const periskopeTab = $("periskopeTab");
+const watiTab = $("watiTab");
+const watiComposerPanel = $("watiComposerPanel");
+const watiTemplateSelect = $("watiTemplateSelect");
+const watiSessionHint = $("watiSessionHint");
 // v1.269: scroll-to-top auto-paginate. When the trainer scrolls within
 // 80px of the top of the thread, bump the page window and re-attach
 // the Firebase listener with a wider limitToLast. The post-render
@@ -3003,6 +3079,7 @@ const suggestReplyBtn = $("suggestReplyBtn");
 const voiceNoteBtn = $("voiceNoteBtn");
 const emojiBtn = $("emojiBtn");
 const attachBtn = $("attachBtn");
+const fmtHintBtn = $("fmtHintBtn");
 const fileInput = $("fileInput");
 const newChatBtn = $("newChatBtn");
 const newChatModal = $("newChatModal");
@@ -5653,6 +5730,7 @@ async function resolveTicket(ticket) {
 
 function renderTicketsBanner() {
   if (!currentChatId) { ticketsBanner.style.display = "none"; return; }
+  if (currentChannel === "wati") { ticketsBanner.style.display = "none"; return; }
   const open = getOpenTicketsForChat(currentChatId);
   if (!open.length) { ticketsBanner.style.display = "none"; ticketsBanner.innerHTML = ""; return; }
   ticketsBanner.style.display = "flex";
@@ -9356,6 +9434,9 @@ function openChat(chatKey) {
     _threadDailyTextOnly = oIsDaily && currentStatusFilter !== "Daily Groups";
   }
   currentChatId = chatKey;
+  currentChannel = "periskope";
+  watiMessagesCache = [];
+  watiSession = { isOpen: false };
   // Reset note edit state when switching chats so a half-typed note from one
   // chat doesn't appear in another. Notes are collapsed by default — count is
   // visible in the bar; click the chevron / bar to expand.
@@ -9381,11 +9462,13 @@ function openChat(chatKey) {
     renderNotes();
     ticketsBanner.style.display = "none";
     hideThreadHeaderCustomerTools();
+    refreshChannelUi();
     rebuildDmRows();
     if (currentView === "team") renderChatList(lastChatRows);
     updateTeamUnreadBadge();
   } else {
     showThreadHeaderCustomerTools();
+    refreshChannelUi();
     listenMessages(chatKey);
     listenNotes(chatKey);
     renderTicketsBanner();
@@ -9417,6 +9500,122 @@ function showThreadHeaderCustomerTools() {
   // privateToggleBtn visibility is admin-gated in updateThreadHeader.
 }
 
+function isWatiEligibleThread() {
+  if (!currentChatId || isDmKey(currentChatId)) return false;
+  const meta = chatsCache[currentChatId] || {};
+  return !(meta.chatType === "group" || String(meta.chatId || "").endsWith("@g.us"));
+}
+
+function refreshChannelUi() {
+  const canWati = isWatiEligibleThread();
+  if (!canWati) currentChannel = "periskope";
+  if (channelTabs) channelTabs.style.display = canWati ? "flex" : "none";
+  if (periskopeTab) periskopeTab.classList.toggle("active", currentChannel === "periskope");
+  if (watiTab) watiTab.classList.toggle("active", currentChannel === "wati");
+  if (ticketsBanner) ticketsBanner.style.display = currentChannel === "wati" ? "none" : ticketsBanner.style.display;
+  if (notesPanel) notesPanel.style.display = currentChannel === "wati" ? "none" : (canWati ? "" : notesPanel.style.display);
+  const toolbarEl = $("fmtToolbar");
+  if (toolbarEl) toolbarEl.style.display = currentChannel === "wati" ? "none" : toolbarEl.style.display;
+
+  const watiMode = currentChannel === "wati";
+  if (watiComposerPanel) watiComposerPanel.style.display = watiMode ? "flex" : "none";
+  for (const el of [fmtHintBtn, attachBtn, suggestReplyBtn, voiceNoteBtn, $("voiceComposerBtn")]) {
+    if (el) el.style.display = watiMode ? "none" : "";
+  }
+  if (composerReplyBar) composerReplyBar.style.display = watiMode ? "none" : "";
+  if (composerInput) {
+    const locked = watiMode && !watiSession.isOpen;
+    composerInput.readOnly = locked;
+    composerInput.classList.toggle("locked", locked);
+    composerInput.placeholder = watiMode
+      ? (locked ? "Free text locked. Send a Wati template." : "Type a Wati message")
+      : "Type a message";
+    if (locked && composerInput.value.trim()) {
+      composerInput.value = "";
+      composerInput.style.height = "auto";
+      closeTplPicker();
+    }
+  }
+  if (watiSessionHint) {
+    watiSessionHint.textContent = watiLoading
+      ? "Loading Wati..."
+      : watiSession.isOpen
+        ? "24h Wati window open"
+        : "24h Wati window closed. Templates only.";
+  }
+}
+
+async function setChannel(next) {
+  if (next === currentChannel) return;
+  if (next === "wati" && !isWatiEligibleThread()) return;
+  currentChannel = next === "wati" ? "wati" : "periskope";
+  clearReply();
+  setPendingTemplateMedia(null);
+  composerInput.value = "";
+  composerInput.style.height = "auto";
+  closeTplPicker();
+  refreshChannelUi();
+  if (currentChannel === "wati") {
+    await loadWatiThread();
+  } else {
+    renderMessages(_lastRenderedMsgs || []);
+    renderTicketsBanner();
+  }
+}
+
+if (periskopeTab) periskopeTab.onclick = () => setChannel("periskope");
+if (watiTab) watiTab.onclick = () => setChannel("wati");
+
+function watiPhoneForCurrentChat() {
+  const meta = chatsCache[currentChatId] || {};
+  return String(meta.phone || (meta.chatId || currentChatId || "").split("@")[0]).replace(/\D/g, "");
+}
+
+async function loadWatiTemplates() {
+  if (watiTemplatesCache.length) return watiTemplatesCache;
+  if (!WORKER_URL) throw new Error("Worker URL not configured");
+  const res = await fetch(`${WORKER_URL}/wati/templates`);
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || !j?.ok) throw new Error(j?.detail || j?.error || `HTTP ${res.status}`);
+  watiTemplatesCache = Array.isArray(j.templates) ? j.templates : [];
+  renderWatiTemplateOptions();
+  return watiTemplatesCache;
+}
+
+function renderWatiTemplateOptions() {
+  if (!watiTemplateSelect) return;
+  const approved = (watiTemplatesCache || []).filter((t) => (!t.status || t.status === "APPROVED") && (Number(t.paramCount) || 0) <= 1);
+  const source = approved;
+  const current = watiTemplateSelect.value;
+  watiTemplateSelect.innerHTML = source.length
+    ? source.map((t) => `<option value="${escapeHtml(t.name)}">${escapeHtml(t.name)}</option>`).join("")
+    : `<option value="">No Wati templates ready</option>`;
+  if (current && source.some((t) => t.name === current)) watiTemplateSelect.value = current;
+}
+
+async function loadWatiThread() {
+  if (!currentChatId || !isWatiEligibleThread()) return;
+  if (!WORKER_URL) { alert("Worker URL not configured."); return; }
+  const phone = watiPhoneForCurrentChat();
+  if (!phone) { alert("No customer phone found for Wati."); return; }
+  watiLoading = true;
+  refreshChannelUi();
+  try {
+    await loadWatiTemplates();
+    const res = await fetch(`${WORKER_URL}/wati/messages?phone=${encodeURIComponent(phone)}&limit=50`);
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || !j?.ok) throw new Error(j?.detail || j?.error || `HTTP ${res.status}`);
+    watiSession = j.session || { isOpen: false };
+    watiMessagesCache = (Array.isArray(j.messages) ? j.messages : []).sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    renderMessages(watiMessagesCache);
+  } catch (e) {
+    messagesEl.innerHTML = `<div class="thread-empty" style="background:transparent;"><div>Couldn't load Wati: ${escapeHtml(String(e?.message || e))}</div></div>`;
+  } finally {
+    watiLoading = false;
+    refreshChannelUi();
+  }
+}
+
 // DM thread message listener. Same shape as listenMessages but reads from
 // /dms/{pairKey}/messages and skips the customer-meta self-heal step.
 function listenDmMessages(pairKey) {
@@ -9434,7 +9633,7 @@ function listenDmMessages(pairKey) {
       direction: m.fromUid === me ? "out" : "in",
       sentByName: m.fromName || null,
     })).sort((a, b) => (a.ts || 0) - (b.ts || 0));
-    renderMessages(list);
+    if (currentChannel === "periskope") renderMessages(list);
   });
 }
 
@@ -10220,7 +10419,7 @@ function listenMessages(chatKey) {
 function renderMessages(list) {
   // v1.291: cache the unfiltered list so toggling Text-only re-renders the
   // open thread without waiting for the next Firebase snapshot.
-  _lastRenderedMsgs = list;
+  if (currentChannel !== "wati") _lastRenderedMsgs = list;
   const meta = chatsCache[currentChatId] || {};
   const isGroup = meta.chatType === "group" || String(meta.chatId || "").endsWith("@g.us");
   // v1.291: in Text-only mode, hide media-only messages from a daily-workout
@@ -10230,7 +10429,7 @@ function renderMessages(list) {
   const isDailyWorkoutGroup = isGroup && String(meta.groupName || "").startsWith(DAILY_GROUP_PREFIX);
   // v1.292: hide media when the Daily-tab toggle is on OR this group was
   // opened from the everyday inbox (text-only by design).
-  if (isDailyWorkoutGroup && (dailyTextOnly || _threadDailyTextOnly)) {
+  if (currentChannel !== "wati" && isDailyWorkoutGroup && (dailyTextOnly || _threadDailyTextOnly)) {
     list = list.filter((m) => {
       const hasText = !!String(m.text || "").trim();
       const isMedia = !!(m.media || m.contacts) || m.messageType === "vcard";
@@ -10238,9 +10437,9 @@ function renderMessages(list) {
     });
   }
   if (!list.length) {
-    messagesEl.innerHTML = `<div class="thread-empty" style="background:transparent;"><div>${(dailyTextOnly || _threadDailyTextOnly) ? "No text messages here yet — only workout photos (hidden in this text-only view)." : "No messages yet — say hi."}</div></div>`;
+    messagesEl.innerHTML = `<div class="thread-empty" style="background:transparent;"><div>${currentChannel === "wati" ? "No Wati messages yet." : (dailyTextOnly || _threadDailyTextOnly) ? "No text messages here yet — only workout photos (hidden in this text-only view)." : "No messages yet — say hi."}</div></div>`;
     // Even with no messages, render the tickets banner (in case there are tickets — rare)
-    renderTicketsBanner();
+    if (currentChannel !== "wati") renderTicketsBanner();
     return;
   }
   // Render-time dedup safety net for outbound duplicates where the /send
@@ -10320,7 +10519,7 @@ function renderMessages(list) {
     const textHtml = (!isDeleted && m.text && !contactsForRender)
       ? `<div class="text">${formatWhatsApp(m.text)}</div>`
       : "";
-    const ribbon = renderTicketRibbon(m.id);
+    const ribbon = currentChannel === "wati" ? "" : renderTicketRibbon(m.id);
     // v1.200: forwarded-from header above the body (mirrors mobile MessageBubble).
     // v1.208: clickable when we have the source chatId — tapping it opens the
     // source customer chat in a new tab (and scrolls to the originalMsgKey if
@@ -10403,7 +10602,7 @@ function renderMessages(list) {
     // WhatsApp Web's pattern and improve visibility against the
     // white inbound bubble background.
     // Deleted messages get no trigger (you can't react / reply / edit a tombstone).
-    const actionsTrigger = !isDeleted
+    const actionsTrigger = !isDeleted && currentChannel !== "wati"
       ? `<button class="msg-actions-trigger" data-msg-key="${escapeHtml(m.id)}" title="React, reply, forward, more">▾</button>`
       : "";
     html += `
@@ -10460,7 +10659,7 @@ function renderMessages(list) {
       if (e.target.closest(".reply-quote.tappable")) return;
       if (e.target.closest(".forwarded-header.tappable")) return;
       // Skip clicks on DM bubbles (DMs don't have tickets).
-      if (isDmKey(currentChatId)) return;
+      if (isDmKey(currentChatId) || currentChannel === "wati") return;
       const msgKey = b.dataset.msgKey;
       if (!msgKey) return;
       const message = list.find(m => m.id === msgKey);
@@ -10532,7 +10731,7 @@ function renderMessages(list) {
     });
   });
 
-  renderTicketsBanner();
+  if (currentChannel !== "wati") renderTicketsBanner();
 }
 
 // Compute a tiny ribbon for messages that have ticket(s) anchored to them.
@@ -11566,6 +11765,7 @@ let _tplPicker = null;
 let _tplFocusIdx = 0;
 
 composerInput.addEventListener("input", () => {
+  if (currentChannel === "wati") { closeTplPicker(); return; }
   const val = composerInput.value;
   if (val.startsWith("/")) {
     const q = val.slice(1).toLowerCase().trim();
@@ -11905,6 +12105,7 @@ const COMMON_EMOJIS = [
 ];
 let _emojiPop = null;
 emojiBtn.onclick = (e) => {
+  if (currentChannel === "wati" && !watiSession.isOpen) return;
   e.stopPropagation();
   if (_emojiPop) { closeEmojiPopover(); return; }
   openEmojiPopover();
@@ -11967,6 +12168,7 @@ function insertAtCursor(textarea, text) {
 
 // AI suggested reply — Claude drafts a short response based on the recent thread
 suggestReplyBtn.onclick = async () => {
+  if (currentChannel === "wati") return;
   if (!currentChatId || !WORKER_URL) return;
   const meta = chatsCache[currentChatId] || {};
   const chatId = meta.chatId || currentChatId;
@@ -12270,6 +12472,7 @@ function maybeNudgeGroqSetup() {
 const NOTE_MIC_IDLE_HTML = "📝";
 const NOTE_MIC_IDLE_TITLE = "Record a private note — transcribed and added to the notes panel (NOT sent to the customer)";
 voiceNoteBtn.onclick = () => {
+  if (currentChannel === "wati") return;
   if (mediaRecorder && mediaRecorder.state === "recording") {
     // Only the button that started the recording can stop it. Taps on the
     // other mic during an active recording are ignored.
@@ -12287,6 +12490,7 @@ const COMPOSER_MIC_IDLE_HTML = '<span class="voice-pill-icon">🎤</span><span c
 const COMPOSER_MIC_IDLE_TITLE = "Record a voice message — transcribed and added to the reply box (you can edit before sending)";
 const voiceComposerBtn = $("voiceComposerBtn");
 voiceComposerBtn.onclick = () => {
+  if (currentChannel === "wati") return;
   if (mediaRecorder && mediaRecorder.state === "recording") {
     if (activeMicBtn === voiceComposerBtn) stopMicRecording();
     return;
@@ -12297,7 +12501,10 @@ voiceComposerBtn.onclick = () => {
 // Attach: open file picker, then send via worker. Customer-chat path reads
 // the file as base64 (worker /send wants JSON); DM path streams the File
 // object directly through FormData so we skip the base64 round-trip.
-attachBtn.onclick = () => fileInput.click();
+attachBtn.onclick = () => {
+  if (currentChannel === "wati") return;
+  fileInput.click();
+};
 fileInput.onchange = async () => {
   const file = fileInput.files?.[0];
   if (!file) return;
@@ -12618,7 +12825,61 @@ async function doSendDmMedia(media) {
 }
 
 let _sendInFlight = false;  // re-entrancy guard for doSend (see below)
+async function doSendWati() {
+  if (!currentChatId || !currentUser || !isWatiEligibleThread()) return;
+  if (!WORKER_URL) { alert("Worker URL not configured."); return; }
+  if (_sendInFlight) return;
+  const phone = watiPhoneForCurrentChat();
+  const text = composerInput.value.trim();
+  const templateName = watiTemplateSelect?.value || "";
+  if (!phone) { alert("No customer phone found for Wati."); return; }
+  if (!text && !templateName) return;
+  if (text && !watiSession.isOpen) {
+    alert("Wati free text is locked because the customer's 24-hour window is closed. Send a template instead.");
+    return;
+  }
+
+  _sendInFlight = true;
+  if (sendBtn) sendBtn.disabled = true;
+  try {
+    const meta = chatsCache[currentChatId] || {};
+    const customerName = (threadName?.textContent || meta.contactName || meta.displayName || meta.phone || phone || "").replace(/^🔒\s*/, "");
+    const payload = text
+      ? {
+          phone,
+          message: text,
+          sentByUid: currentUser.uid,
+          sentByName: currentUser.displayName || currentUser.email || "",
+        }
+      : {
+          phone,
+          templateName,
+          parameters: { "1": customerName },
+          sentByUid: currentUser.uid,
+          sentByName: currentUser.displayName || currentUser.email || "",
+        };
+    const endpoint = text ? "send-session" : "send-template";
+    const res = await fetch(`${WORKER_URL}/wati/${endpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || !j?.ok) throw new Error(j?.detail || j?.error || `HTTP ${res.status}`);
+    composerInput.value = "";
+    composerInput.style.height = "auto";
+    await loadWatiThread();
+  } catch (e) {
+    alert("Wati send failed: " + String(e?.message || e));
+  } finally {
+    _sendInFlight = false;
+    if (sendBtn) sendBtn.disabled = false;
+    refreshChannelUi();
+  }
+}
+
 async function doSend() {
+  if (currentChannel === "wati") return doSendWati();
   const text = composerInput.value.trim();
   // v1.243: a template can be media-only (no caption) — when the queued
   // attachment exists, we allow an empty text body. Otherwise the
