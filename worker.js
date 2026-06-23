@@ -131,6 +131,12 @@ export default {
       if (url.pathname === "/admin/test-push" && request.method === "GET") {
         return cors(env, await handleAdminTestPush(request, env));
       }
+      // Read-only delivery diagnostic. Samples recent outbound customer
+      // messages, compares our Firebase status with Periskope's ack, and
+      // returns only counts + masked samples.
+      if (url.pathname === "/admin/delivery-audit" && request.method === "GET") {
+        return cors(env, await handleDeliveryAudit(request, env));
+      }
       // v1.288: seed/merge the Exotel allowlist (commonComm/config/
       // exotelAgents). No dashboard UI yet — this admin-gated endpoint is
       // how trainers get enabled. Body: { agents: [{email, phone,
@@ -5986,6 +5992,181 @@ async function handleSetExotelAgents(request, env) {
   if (!written.length) return json({ error: "no valid agents" }, 400);
   await fbPatchRoot(env, updates);
   return json({ ok: true, written });
+}
+
+// ---------- /admin/delivery-audit ----------
+// Read-only investigation helper for WhatsApp delivery issues. It checks the
+// newest chats in Firebase, pulls their recent messages from Periskope, and
+// compares the two status views. This intentionally returns masked identifiers
+// and no message bodies.
+async function handleDeliveryAudit(request, env) {
+  const url = new URL(request.url);
+  const chatLimit = Math.min(50, Math.max(1, Number(url.searchParams.get("chats")) || 20));
+  const perChatLimit = Math.min(25, Math.max(1, Number(url.searchParams.get("perChat")) || 5));
+  const periskopeLimit = Math.min(100, Math.max(20, Number(url.searchParams.get("periskopeLimit")) || 50));
+  const sinceHoursRaw = Number(url.searchParams.get("sinceHours"));
+  const sinceMs = Number.isFinite(sinceHoursRaw) && sinceHoursRaw > 0
+    ? Date.now() - sinceHoursRaw * 60 * 60 * 1000
+    : 0;
+
+  const chatsIndex = await fbGet(env, `${ROOT}/chatsIndex`);
+  const chatRows = Object.entries(chatsIndex || {})
+    .map(([chatKey, meta]) => ({ chatKey, meta: meta || {} }))
+    .filter((r) => r.meta?.chatId && !String(r.meta.chatId).endsWith("@g.us"))
+    .sort((a, b) => Number(b.meta.lastMsgAt || 0) - Number(a.meta.lastMsgAt || 0))
+    .slice(0, chatLimit);
+
+  const summary = {
+    chatsScanned: chatRows.length,
+    outboundChecked: 0,
+    firebaseFailed: 0,
+    firebasePending: 0,
+    periskopeMissing: 0,
+    periskopeSentOnly: 0,
+    periskopeDeliveredOrRead: 0,
+    firebaseBehindPeriskope: 0,
+    fetchErrors: 0,
+  };
+  const samples = [];
+
+  for (const row of chatRows) {
+    const chatId = row.meta.chatId;
+    const fbMessages = await fbGet(env, `${ROOT}/chats/${row.chatKey}/messages`);
+    const outbound = Object.entries(fbMessages || {})
+      .map(([msgKey, m]) => ({ msgKey, ...(m || {}) }))
+      .filter((m) => m.direction === "out" && (!sinceMs || Number(m.ts || 0) >= sinceMs))
+      .sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0))
+      .slice(0, perChatLimit);
+    if (!outbound.length) continue;
+
+    let periskopeById = new Map();
+    try {
+      const pr = await fetch(
+        `${PERISKOPE_BASE}/chats/${encodeURIComponent(chatId)}/messages?offset=0&limit=${periskopeLimit}`,
+        { headers: periskopeHeaders(env) },
+      );
+      const pj = await safeJson(pr);
+      if (!pr.ok) {
+        summary.fetchErrors++;
+        samples.push({
+          kind: "periskope_fetch_error",
+          chat: maskChatId(chatId),
+          httpStatus: pr.status,
+          detail: safeDetail(pj),
+        });
+        continue;
+      }
+      periskopeById = buildPeriskopeMessageMap(pj?.messages || []);
+    } catch (e) {
+      summary.fetchErrors++;
+      samples.push({ kind: "periskope_fetch_exception", chat: maskChatId(chatId), error: String(e?.message || e) });
+      continue;
+    }
+
+    for (const m of outbound) {
+      summary.outboundChecked++;
+      const fbStatus = m.status || "unknown";
+      if (fbStatus === "failed") summary.firebaseFailed++;
+      if (fbStatus !== "delivered" && fbStatus !== "read") summary.firebasePending++;
+
+      const ids = [
+        m.periskopeMsgId,
+        m.periskopeUniqueId && `true_${chatId}_${m.periskopeUniqueId}`,
+        m.periskopeUniqueId,
+      ].filter(Boolean).map(String);
+      let pm = null;
+      for (const id of ids) {
+        pm = periskopeById.get(id);
+        if (pm) break;
+      }
+      if (!pm) {
+        summary.periskopeMissing++;
+        addAuditSample(samples, {
+          kind: "missing_in_periskope_recent_fetch",
+          chat: maskChatId(chatId),
+          ageMin: ageMinutes(m.ts),
+          firebaseStatus: fbStatus,
+          hasPeriskopeMsgId: !!m.periskopeMsgId,
+          hasUniqueId: !!m.periskopeUniqueId,
+        });
+        continue;
+      }
+
+      const periskopeStatus = statusFromPeriskopeAck(pm) || "unknown";
+      if (periskopeStatus === "delivered" || periskopeStatus === "read") {
+        summary.periskopeDeliveredOrRead++;
+      } else {
+        summary.periskopeSentOnly++;
+      }
+      if (statusRank(periskopeStatus) > statusRank(fbStatus)) {
+        summary.firebaseBehindPeriskope++;
+        addAuditSample(samples, {
+          kind: "firebase_behind_periskope",
+          chat: maskChatId(chatId),
+          ageMin: ageMinutes(m.ts),
+          firebaseStatus: fbStatus,
+          periskopeStatus,
+          ack: pm.ack ?? null,
+          deliveredCount: pm.delivery_info?.delivered_count ?? null,
+          readCount: pm.delivery_info?.read_count ?? null,
+        });
+      } else if (periskopeStatus !== "delivered" && periskopeStatus !== "read") {
+        addAuditSample(samples, {
+          kind: "not_delivered_by_periskope",
+          chat: maskChatId(chatId),
+          ageMin: ageMinutes(m.ts),
+          firebaseStatus: fbStatus,
+          periskopeStatus,
+          ack: pm.ack ?? null,
+          pendingCount: Array.isArray(pm.delivery_info?.pending) ? pm.delivery_info.pending.length : null,
+        });
+      }
+    }
+  }
+
+  return json({
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    params: { chats: chatLimit, perChat: perChatLimit, periskopeLimit, sinceHours: sinceHoursRaw || null },
+    summary,
+    samples,
+  });
+}
+
+function buildPeriskopeMessageMap(messages) {
+  const out = new Map();
+  for (const m of messages || []) {
+    const ids = [
+      m?.message_id,
+      m?.unique_id,
+      m?.id?.serialized,
+      typeof m?.id === "string" || typeof m?.id === "number" ? m.id : null,
+    ].filter(Boolean).map(String);
+    for (const id of ids) out.set(id, m);
+  }
+  return out;
+}
+
+function addAuditSample(samples, sample) {
+  if (samples.length < 25) samples.push(sample);
+}
+
+function maskChatId(chatId) {
+  const d = digitsOnly(String(chatId || "").split("@")[0]);
+  if (!d) return "unknown";
+  return `${"*".repeat(Math.max(0, d.length - 4))}${d.slice(-4)}`;
+}
+
+function ageMinutes(ts) {
+  const n = Number(ts || 0);
+  if (!n) return null;
+  return Math.max(0, Math.round((Date.now() - n) / 60000));
+}
+
+function safeDetail(v) {
+  if (v == null) return null;
+  const s = typeof v === "string" ? v : JSON.stringify(v);
+  return s.slice(0, 300);
 }
 
 // ---------- /admin/path-sizes (download-footprint diagnostic) ----------
