@@ -32,6 +32,11 @@ import type { RootStackParamList } from "@/screens/types";
 // "tab screen but used as stack" prop mismatch.
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
+function isCustomerTeamPhoneException(phone: string) {
+  const digits = String(phone || "").replace(/\D/g, "");
+  return digits === "9650854161" || digits === "919650854161" || digits.endsWith("9650854161");
+}
+
 export function ChatsScreen() {
   const navigation = useNavigation<Nav>();
   const { isAdmin } = useAuth();
@@ -170,7 +175,7 @@ export function ChatsScreen() {
         // Hide chats whose phone is mapped to a teammate's WhatsApp number.
         // Those conversations belong in the Team tab as internal DMs, not
         // in the customer inbox.
-        .filter((r) => !teamPhones.has(r.phone.replace(/\D/g, "")))
+        .filter((r) => !teamPhones.has(r.phone.replace(/\D/g, "")) || isCustomerTeamPhoneException(r.phone))
         .map((r) => ({
           row: r,
           name: resolveDisplayName(
