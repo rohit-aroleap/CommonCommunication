@@ -917,6 +917,13 @@ export function ThreadScreen({ route, navigation }: Props) {
         });
         const j = await res.json().catch(() => ({}));
         if (!res.ok || !j?.ok) throw new Error(j?.detail || j?.error || `HTTP ${res.status}`);
+        if (j?.message) {
+          setWatiMessages((prev) => {
+            const next = [{ ...j.message, id: j.message.id || String(Date.now()) } as Message, ...prev];
+            next.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+            return next;
+          });
+        }
       } else {
         return;
       }

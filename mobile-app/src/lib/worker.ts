@@ -97,7 +97,9 @@ export async function fetchWatiMessages(phone: string): Promise<{
   messages: WatiMessage[];
   session: WatiSession;
 }> {
-  const res = await fetch(`${WORKER_URL}/wati/messages?phone=${encodeURIComponent(phone)}&limit=50`);
+  const res = await fetch(`${WORKER_URL}/wati/messages?phone=${encodeURIComponent(phone)}&limit=50&_=${Date.now()}`, {
+    cache: "no-store",
+  });
   const j = (await res.json().catch(() => ({}))) as {
     ok?: boolean;
     messages?: WatiMessage[];
