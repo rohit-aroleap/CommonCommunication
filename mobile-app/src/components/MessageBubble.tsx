@@ -71,6 +71,7 @@ export function MessageBubble({
   // the bubble visible so ticket-anchor records have somewhere to point.
   const isDeleted = m.deleted === true;
   const isEdited = !isDeleted && !!m.editedAt;
+  const pendingDelivery = out && m.status !== "delivered" && m.status !== "read";
 
   // Detect "empty" messages: no text, no usable media. Periskope occasionally
   // sends these (reaction-only, deleted-for-me, system events). Without this
@@ -114,6 +115,7 @@ export function MessageBubble({
         style={[
           styles.bubble,
           out ? styles.bubbleOut : styles.bubbleIn,
+          pendingDelivery && styles.bubblePendingDelivery,
           isDeleted && styles.bubbleDeleted,
           highlighted && styles.bubbleHighlighted,
         ]}
@@ -548,6 +550,11 @@ function makeStyles(colors: Colors) {
     bubbleOut: {
       backgroundColor: colors.bubbleOut,
       borderTopRightRadius: 0,
+    },
+    bubblePendingDelivery: {
+      backgroundColor: "#ffe4e6",
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: "#fecdd3",
     },
     senderTag: {
       fontSize: 11.5,

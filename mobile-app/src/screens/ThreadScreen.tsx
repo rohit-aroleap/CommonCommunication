@@ -905,6 +905,7 @@ export function ThreadScreen({ route, navigation }: Props) {
       lastMsgPreview: previewText.slice(0, 120),
       lastMsgDirection: "out",
       lastMsgSentByName: user.displayName || user.email,
+      lastMsgStatus: "sending",
     });
     bumpSendActivity(chatKey);
     // v1.130: snapshot mentions whose names still appear in the outgoing
@@ -1702,6 +1703,7 @@ export function ThreadScreen({ route, navigation }: Props) {
         lastMsgPreview: caption || `${previewIcon} ${media.filename}`,
         lastMsgDirection: "out",
         lastMsgSentByName: user.displayName || user.email,
+        lastMsgStatus: "sending",
       });
       bumpSendActivity(chatKey);
       setComposer("");

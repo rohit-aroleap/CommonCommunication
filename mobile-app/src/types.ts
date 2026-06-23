@@ -17,6 +17,7 @@ export interface ChatMeta {
   lastMsgPreview?: string;
   lastMsgDirection?: "in" | "out";
   lastMsgSentByName?: string | null;
+  lastMsgStatus?: "sending" | "sent" | "delivered" | "read" | "failed" | null;
   // v1.291: latest TEXT message (worker-tracked, distinct from the latest
   // message of any kind). Powers the daily-workout "Text only" view.
   lastTextMsgAt?: number;
@@ -36,6 +37,7 @@ export interface ChatRow {
   lastMsgAt: number;
   preview: string;
   direction: "in" | "out";
+  lastMsgStatus?: "sending" | "sent" | "delivered" | "read" | "failed" | null;
   sentByName: string | null;
   // v1.291: latest TEXT metadata (see ChatMeta).
   lastTextMsgAt?: number;

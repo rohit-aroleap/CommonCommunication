@@ -801,6 +801,7 @@ async function handleSend(request, env) {
     lastMsgPreview: preview,
     lastMsgDirection: "out",
     lastMsgSentByName: sentByName,
+    lastMsgStatus: ok ? "sent" : "failed",
   };
   // v1.291: track the latest TEXT message separately from the latest
   // message-of-any-kind. Powers the daily-workout "Text only" view, which
@@ -1289,11 +1290,11 @@ async function handleWebhook(request, env) {
         if (parentRef?.chatId && parentRef?.msgKey) {
           // Only ever ratchet status FORWARD. If we already saw "read",
           // don't downgrade to "delivered" because of a late event.
-          const existing = await fbGet(
+          const existingMsg = await fbGet(
             env,
-            `${ROOT}/chats/${encodeKey(parentRef.chatId)}/messages/${parentRef.msgKey}/status`,
+            `${ROOT}/chats/${encodeKey(parentRef.chatId)}/messages/${parentRef.msgKey}`,
           );
-          const cur = typeof existing === "string" ? existing : "sent";
+          const cur = typeof existingMsg?.status === "string" ? existingMsg.status : "sent";
           if (statusRank(newStatus) > statusRank(cur)) {
             const patch = { status: newStatus };
             if (newStatus === "delivered") patch.deliveredAt = Date.now();
@@ -1303,6 +1304,14 @@ async function handleWebhook(request, env) {
               `${ROOT}/chats/${encodeKey(parentRef.chatId)}/messages/${parentRef.msgKey}`,
               patch,
             );
+            const meta = await fbGet(env, `${ROOT}/chats/${encodeKey(parentRef.chatId)}/meta`);
+            if (
+              meta?.lastMsgDirection === "out" &&
+              existingMsg?.ts &&
+              (!meta.lastMsgAt || Number(existingMsg.ts) >= Number(meta.lastMsgAt))
+            ) {
+              await patchChatMeta(env, encodeKey(parentRef.chatId), { lastMsgStatus: newStatus });
+            }
           }
         }
       }
@@ -1370,6 +1379,7 @@ async function handleWebhook(request, env) {
     senderPhone,
     raw: msg,
   };
+  if (isFromMe) record.status = statusFromPeriskopeAck(msg) || "sent";
   if (media) record.media = media;
   if (contacts) record.contacts = contacts;
   if (location) record.location = location;
@@ -1392,6 +1402,7 @@ async function handleWebhook(request, env) {
     lastMsgAt: ts,
     lastMsgPreview: mediaPreview(media, messageType, text).slice(0, 120),
     lastMsgDirection: isFromMe ? "out" : "in",
+    lastMsgStatus: isFromMe ? (record.status || "sent") : null,
   };
   // v1.291: latest-TEXT tracking (see handleSend). A message counts as
   // text when it has a non-empty body and is NOT a media or vCard
@@ -2222,7 +2233,7 @@ async function backfillOneChat(env, chat, msgsPerChat) {
 
   // Build multi-path update
   const updates = {};
-  let written = 0, upgraded = 0, statusUpgraded = 0, latestTs = 0, latestPreview = "", latestDir = "in";
+  let written = 0, upgraded = 0, statusUpgraded = 0, latestTs = 0, latestPreview = "", latestDir = "in", latestStatus = null;
 
   for (const m of messages) {
     const id = m.message_id || m.unique_id || m.id?.serialized || null;
@@ -2234,6 +2245,12 @@ async function backfillOneChat(env, chat, msgsPerChat) {
     const senderPhone = m.sender_phone ? String(m.sender_phone).split("@")[0] : chatIdToPhone(chatId);
     const media = extractMedia(m);
     const ackStatus = isFromMe ? statusFromPeriskopeAck(m) : null;
+    if (ts > latestTs) {
+      latestTs = ts;
+      latestPreview = mediaPreview(media, m.message_type, text).slice(0, 120);
+      latestDir = isFromMe ? "out" : "in";
+      latestStatus = isFromMe ? (ackStatus || "sent") : null;
+    }
 
     const prior = existingById.get(id);
     if (prior) {
@@ -2279,11 +2296,6 @@ async function backfillOneChat(env, chat, msgsPerChat) {
     updates[`${ROOT}/byPeriskopeId/${msgKey}`] = { chatId, msgKey };
     written++;
 
-    if (ts > latestTs) {
-      latestTs = ts;
-      latestPreview = mediaPreview(media, m.message_type, text).slice(0, 120);
-      latestDir = isFromMe ? "out" : "in";
-    }
   }
 
   // Identity meta (chatId/phone/chatType/groupName/contactName) is written every
@@ -2319,10 +2331,11 @@ async function backfillOneChat(env, chat, msgsPerChat) {
   }
   // lastMsg* only updates when we actually have a newer message — never clobber
   // real activity with stale data.
-  if (written > 0 && latestTs > 0 && (!existingMeta?.lastMsgAt || latestTs > existingMeta.lastMsgAt)) {
+  if (latestTs > 0 && (!existingMeta?.lastMsgAt || latestTs >= existingMeta.lastMsgAt)) {
     updates[`${ROOT}/chats/${chatKey}/meta/lastMsgAt`] = latestTs;
     updates[`${ROOT}/chats/${chatKey}/meta/lastMsgPreview`] = latestPreview;
     updates[`${ROOT}/chats/${chatKey}/meta/lastMsgDirection`] = latestDir;
+    updates[`${ROOT}/chats/${chatKey}/meta/lastMsgStatus`] = latestDir === "out" ? latestStatus : null;
   }
 
   // (4) Atomic multi-path PATCH at root - one subrequest for all writes.

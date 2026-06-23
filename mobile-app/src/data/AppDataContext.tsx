@@ -506,6 +506,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
         lastMsgAt: rawMeta.lastMsgAt || 0,
         preview,
         direction: rawMeta.lastMsgDirection || "in",
+        lastMsgStatus: rawMeta.lastMsgStatus || null,
         sentByName: rawMeta.lastMsgSentByName || null,
         // v1.291: latest-TEXT metadata for the daily-workout Text-only view.
         lastTextMsgAt: rawMeta.lastTextMsgAt || 0,

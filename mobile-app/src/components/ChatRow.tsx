@@ -94,6 +94,11 @@ export function ChatRowItem({
   // from various members that doesn't represent a customer waiting for
   // a reply. The badge would just flash constantly and lose meaning.
   const needsTriage = row.direction === "in" && !hasOpenTicket && !isGroup;
+  const deliveryProblem =
+    row.direction === "out" &&
+    !!row.lastMsgStatus &&
+    row.lastMsgStatus !== "delivered" &&
+    row.lastMsgStatus !== "read";
 
   // Stop propagation so tapping the star/Pin? button doesn't open the thread.
   const onStarPress = (e: { stopPropagation?: () => void }) => {
@@ -111,6 +116,11 @@ export function ChatRowItem({
           <Text style={styles.name} numberOfLines={1}>
             {name}
           </Text>
+          {deliveryProblem && (
+            <View style={styles.deliveryAlert}>
+              <Text style={styles.deliveryAlertTxt}>!</Text>
+            </View>
+          )}
           {needsTriage && (
             <View style={styles.newBadge}>
               <Text style={styles.newBadgeTxt}>🆕 NEW</Text>
@@ -335,6 +345,21 @@ function makeStyles(colors: Colors) {
       paddingVertical: 1,
       borderRadius: 8,
       marginLeft: 6,
+    },
+    deliveryAlert: {
+      width: 16,
+      height: 16,
+      borderRadius: 8,
+      marginLeft: 6,
+      backgroundColor: colors.red,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    deliveryAlertTxt: {
+      color: "white",
+      fontSize: 11,
+      fontWeight: "800",
+      lineHeight: 13,
     },
     // v1.274: "no group" pill — ACTIVE customer not in any daily cohort.
     noCohortPill: {
