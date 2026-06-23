@@ -820,6 +820,15 @@ async function handleSend(request, env) {
       msgKey,
     });
   }
+  // v1.303: Periskope ack events may identify the message by the raw
+  // unique id instead of the full `true_${chatId}_${uniqueId}` webhook id.
+  // Store both aliases so delivery/read receipts can find this bubble.
+  if (uniqueId && msgKey && uniqueId !== expectedWebhookMsgId) {
+    await fbPut(env, `${ROOT}/byPeriskopeId/${encodeKey(uniqueId)}`, {
+      chatId: resolvedChatId,
+      msgKey,
+    });
+  }
 
   // v1.130: mention push override. If the send succeeded AND we have a
   // mentions list, ping those teammates regardless of ticket/favorite
@@ -1219,8 +1228,33 @@ async function handleWebhook(request, env) {
   const isAckEvent = /ack\.updated/i.test(String(evtType));
   if (isAckEvent) {
     try {
+      const ackUniqueId =
+        typeof msg.unique_id === "string" || typeof msg.unique_id === "number"
+          ? String(msg.unique_id)
+          : null;
+      const ackIdSerialized =
+        typeof msg.id?.serialized === "string" || typeof msg.id?.serialized === "number"
+          ? String(msg.id.serialized)
+          : null;
+      const ackRawId =
+        typeof msg.id === "string" || typeof msg.id === "number"
+          ? String(msg.id)
+          : null;
       const ackPeriskopeMsgId =
-        msg.message_id || msg.unique_id || msg.id?.serialized || msg.id || null;
+        msg.message_id || ackUniqueId || ackIdSerialized || ackRawId || null;
+      const ackCandidateIds = Array.from(
+        new Set(
+          [
+            msg.message_id,
+            ackUniqueId && chatId ? `true_${chatId}_${ackUniqueId}` : null,
+            ackUniqueId,
+            ackIdSerialized,
+            ackRawId,
+          ]
+            .filter(Boolean)
+            .map((x) => String(x)),
+        ),
+      );
       const ackNum =
         typeof msg.ack === "number"
           ? msg.ack
@@ -1237,16 +1271,21 @@ async function handleWebhook(request, env) {
       await fbPut(env, `${ROOT}/_debug/ack/${debugKey}`, {
         evtType,
         ackPeriskopeMsgId,
+        ackCandidateIds,
         ackNum,
         ackName,
         mappedTo: newStatus,
         receivedAt: Date.now(),
       });
-      if (newStatus && ackPeriskopeMsgId) {
-        const parentRef = await fbGet(
-          env,
-          `${ROOT}/byPeriskopeId/${encodeKey(ackPeriskopeMsgId)}`,
-        );
+      if (newStatus && ackCandidateIds.length) {
+        let parentRef = null;
+        for (const candidateId of ackCandidateIds) {
+          parentRef = await fbGet(
+            env,
+            `${ROOT}/byPeriskopeId/${encodeKey(candidateId)}`,
+          );
+          if (parentRef?.chatId && parentRef?.msgKey) break;
+        }
         if (parentRef?.chatId && parentRef?.msgKey) {
           // Only ever ratchet status FORWARD. If we already saw "read",
           // don't downgrade to "delivered" because of a late event.
