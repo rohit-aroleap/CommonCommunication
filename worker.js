@@ -6413,11 +6413,13 @@ async function handleAgentDmResolve(request, env) {
 async function handleAgentDmSend(request, env) {
   const body = await request.json().catch(() => ({}));
   const toEmail = String(body?.toEmail || "").trim().toLowerCase();
+  const fromEmail = String(body?.fromEmail || "").trim().toLowerCase();
   const text = String(body?.text || "").trim();
   const source = String(body?.source || "agent").slice(0, 40);
   const sourceThreadId = body?.sourceThreadId ? String(body.sourceThreadId).slice(0, 120) : null;
   const idempotencyKey = body?.idempotencyKey ? String(body.idempotencyKey).slice(0, 180) : "";
   if (!toEmail || !toEmail.includes("@")) return json({ error: "missing toEmail" }, 400);
+  if (fromEmail && !fromEmail.includes("@")) return json({ error: "invalid fromEmail" }, 400);
   if (!text) return json({ error: "missing text" }, 400);
   if (text.length > 8000) return json({ error: "text too long", max: 8000 }, 400);
 
@@ -6432,31 +6434,43 @@ async function handleAgentDmSend(request, env) {
   const recipient = await resolveCommonCommUserByEmail(env, toEmail);
   if (recipient.error) return json({ ok: false, ...recipient }, recipient.error === "invalid_email" ? 400 : 404);
 
-  await ensureAgentUser(env);
+  const sender = fromEmail
+    ? await resolveCommonCommUserByEmail(env, fromEmail)
+    : { uid: AGENT_UID, email: AGENT_EMAIL, name: AGENT_NAME };
+  if (sender.error) return json({ ok: false, senderError: sender.error, fromEmail }, sender.error === "invalid_email" ? 400 : 404);
+  if (!fromEmail) await ensureAgentUser(env);
+
   const ts = Date.now();
-  const pairKey = dmPairKeyFor(AGENT_UID, recipient.uid);
+  const senderName = sender.name || sender.email || AGENT_NAME;
+  const pairKey = dmPairKeyFor(sender.uid, recipient.uid);
   const msg = {
     text,
     ts,
-    fromUid: AGENT_UID,
-    fromName: AGENT_NAME,
+    fromUid: sender.uid,
+    fromName: senderName,
     source,
+    viaAgentUid: AGENT_UID,
+    viaAgentName: AGENT_NAME,
     ...(sourceThreadId ? { sourceThreadId } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
   };
   const pushed = await fbPush(env, `${ROOT}/dms/${pairKey}/messages`, msg);
   const messageId = pushed?.name || null;
   await patchDmMeta(env, pairKey, {
-    participants: { [AGENT_UID]: true, [recipient.uid]: true },
+    participants: { [sender.uid]: true, [recipient.uid]: true },
     lastMsgAt: ts,
     lastMsgPreview: text.slice(0, 120),
-    lastMsgFromUid: AGENT_UID,
-    lastMsgFromName: AGENT_NAME,
+    lastMsgFromUid: sender.uid,
+    lastMsgFromName: senderName,
   });
 
   const logRecord = {
     at: ts,
     source,
+    fromEmail: sender.email || fromEmail || AGENT_EMAIL,
+    fromUid: sender.uid,
+    fromName: senderName,
+    viaAgentUid: AGENT_UID,
     toEmail,
     toUid: recipient.uid,
     pairKey,
@@ -6472,13 +6486,14 @@ async function handleAgentDmSend(request, env) {
   await fbPatchRoot(env, updates);
 
   await sendPushToUids(env, new Set([recipient.uid]), {
-    title: AGENT_NAME,
+    title: senderName,
     body: text.slice(0, 200),
     data: { dmPairKey: pairKey, kind: "dm", source },
   });
 
   return json({
     ok: true,
+    sender: { uid: sender.uid, email: sender.email, name: senderName, duplicateCount: sender.duplicateCount },
     recipient: { uid: recipient.uid, email: recipient.email, name: recipient.name, duplicateCount: recipient.duplicateCount },
     pairKey,
     messageId,
