@@ -108,4 +108,4 @@ export const FERRA_TAG_TEAMS: Record<string, string[]> = {
   "Received in Warehouse":   ["retention"],
 };
 
-export const MAX_MEDIA_BYTES = 25 * 1024 * 1024; // 25 MB
+export const MAX_MEDIA_BYTES = 50 * 1024 * 1024; // 50 MB

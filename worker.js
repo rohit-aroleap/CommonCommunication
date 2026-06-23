@@ -56,7 +56,7 @@ async function callClaude(env, feature, anthropicBody) {
 // well under the 1M Class A ops/month free tier even at peak.
 const DM_MEDIA_USER_DAILY_LIMIT = 50;
 const DM_MEDIA_GLOBAL_DAILY_LIMIT = 1000;
-const DM_MEDIA_MAX_BYTES = 25 * 1024 * 1024;
+const DM_MEDIA_MAX_BYTES = 50 * 1024 * 1024;
 // Retention. Scheduled handler deletes R2 objects older than this. The
 // Firebase RTDB message record stays (so the chat history reads OK with
 // the "📎 filename" placeholder), only the blob is gone.
@@ -2929,7 +2929,7 @@ async function handleMediaProxy(request, env) {
 //   pairKey  — DM pair key (uidA_uidB, sorted)
 //   msgId    — Firebase RTDB message key (for namespacing)
 // Returns: { ok: true, url: "<WORKER_ORIGIN>/dm-media/<key>", key: "<key>" }.
-// Caps the file at 25 MB to match MAX_MEDIA_BYTES on the client.
+// Caps the file at 50 MB to match MAX_MEDIA_BYTES on the client.
 async function handleDmMediaUpload(request, env) {
   if (!env.DM_MEDIA) {
     return json({ error: "R2 bucket DM_MEDIA not bound" }, 500);
@@ -2980,7 +2980,7 @@ async function handleDmMediaUpload(request, env) {
       .slice(0, 200) || "file";
   const key = `dms/${pairKey}/${msgId}/${safeName}`;
   try {
-    // arrayBuffer rather than stream() — small (≤25 MB) and avoids any
+    // arrayBuffer rather than stream() — bounded by the upload cap and avoids any
     // platform quirks with multipart File.stream() consumption inside
     // Workers. Memory is bounded by the size cap.
     const bytes = await file.arrayBuffer();
@@ -3060,7 +3060,7 @@ async function handleDmMediaGet(request, env) {
 //   file        — the blob
 //   templateId  — the Firebase template key (for namespacing)
 // Returns: { ok: true, url: "<WORKER_ORIGIN>/template-media/templates/<id>/<name>", key }
-// Caps at the same 25 MB limit as dm-media. No per-user quota — templates
+// Caps at the same 50 MB limit as dm-media. No per-user quota — templates
 // are admin-only assets curated for the team, and Periskope itself enforces
 // a ~16 MB per-message ceiling downstream, so abuse risk is low.
 // Public read URLs so Periskope can fetch the media when relaying to

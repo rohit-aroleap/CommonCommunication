@@ -1736,7 +1736,7 @@ export function ThreadScreen({ route, navigation }: Props) {
         // was removed. Read info.size as before if it's present.
         const info = await FileSystem.getInfoAsync(uri);
         if (info.exists && info.size && info.size > MAX_MEDIA_BYTES) {
-          Alert.alert("Too large", "Max attachment size is 25 MB.");
+          Alert.alert("Too large", "Max attachment size is 50 MB.");
           return;
         }
         const mediaType = mimeType.startsWith("image/")
@@ -1750,7 +1750,7 @@ export function ThreadScreen({ route, navigation }: Props) {
           // v1.176: DM path — upload via worker /dm-media/upload (R2 backend).
           // No Periskope, no Firebase Storage. Streams the file as multipart,
           // so we skip the base64 read entirely (saves ~33% memory + time
-          // on a 25 MB file).
+          // on a 50 MB file).
           await doSendDmMedia({
             type: mediaType,
             filename: name,
