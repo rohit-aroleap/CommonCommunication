@@ -234,6 +234,10 @@ export function ThreadScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (!canUseWati && channel === "wati") setChannel("periskope");
   }, [canUseWati, channel]);
+  useEffect(() => {
+    setWatiMessages([]);
+    setWatiSession({ isOpen: false });
+  }, [chatKey]);
   // v1.130: structured mentions parallel to the composer text. When the
   // user picks "@Ashima" from the autocomplete, we add Ashima's uid here
   // so the worker can ping her even if she isn't on the ticket. Kept as
@@ -729,6 +733,8 @@ export function ThreadScreen({ route, navigation }: Props) {
     let cancelled = false;
     async function loadWati() {
       setWatiLoading(true);
+      setWatiMessages([]);
+      setWatiSession({ isOpen: false });
       try {
         const [tpls, msgRes] = await Promise.all([
           watiTemplates.length ? Promise.resolve(watiTemplates) : fetchWatiTemplates(),
