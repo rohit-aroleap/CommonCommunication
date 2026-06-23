@@ -1289,13 +1289,12 @@ async function handleWebhook(request, env) {
         if (parentRef?.chatId && parentRef?.msgKey) {
           // Only ever ratchet status FORWARD. If we already saw "read",
           // don't downgrade to "delivered" because of a late event.
-          const RANK = { sending: 0, sent: 1, delivered: 2, read: 3, failed: -1 };
           const existing = await fbGet(
             env,
             `${ROOT}/chats/${encodeKey(parentRef.chatId)}/messages/${parentRef.msgKey}/status`,
           );
           const cur = typeof existing === "string" ? existing : "sent";
-          if ((RANK[newStatus] ?? 0) > (RANK[cur] ?? 0)) {
+          if (statusRank(newStatus) > statusRank(cur)) {
             const patch = { status: newStatus };
             if (newStatus === "delivered") patch.deliveredAt = Date.now();
             if (newStatus === "read") patch.readAt = Date.now();
@@ -2223,7 +2222,7 @@ async function backfillOneChat(env, chat, msgsPerChat) {
 
   // Build multi-path update
   const updates = {};
-  let written = 0, upgraded = 0, latestTs = 0, latestPreview = "", latestDir = "in";
+  let written = 0, upgraded = 0, statusUpgraded = 0, latestTs = 0, latestPreview = "", latestDir = "in";
 
   for (const m of messages) {
     const id = m.message_id || m.unique_id || m.id?.serialized || null;
@@ -2234,6 +2233,7 @@ async function backfillOneChat(env, chat, msgsPerChat) {
     const ts = parseTs(m.timestamp);
     const senderPhone = m.sender_phone ? String(m.sender_phone).split("@")[0] : chatIdToPhone(chatId);
     const media = extractMedia(m);
+    const ackStatus = isFromMe ? statusFromPeriskopeAck(m) : null;
 
     const prior = existingById.get(id);
     if (prior) {
@@ -2246,6 +2246,13 @@ async function backfillOneChat(env, chat, msgsPerChat) {
           updates[`${ROOT}/chats/${chatKey}/messages/${prior.msgKey}/messageType`] = m.message_type;
         }
         upgraded++;
+      }
+      const statusPatch = statusRatchetPatch(prior.record?.status, ackStatus);
+      if (statusPatch) {
+        for (const [k, v] of Object.entries(statusPatch)) {
+          updates[`${ROOT}/chats/${chatKey}/messages/${prior.msgKey}/${k}`] = v;
+        }
+        statusUpgraded++;
       }
       continue;
     }
@@ -2260,6 +2267,9 @@ async function backfillOneChat(env, chat, msgsPerChat) {
       senderPhone,
       backfilled: true,
     };
+    if (isFromMe) {
+      msgRecord.status = ackStatus || "sent";
+    }
     if (media) msgRecord.media = media;
     // v1.265: same vCard extraction as the webhook path so backfilled
     // contact-share messages also render properly.
@@ -2331,6 +2341,7 @@ async function backfillOneChat(env, chat, msgsPerChat) {
     upgraded,
     skipped: messages.length - written - upgraded,
     fetched: messages.length,
+    statusUpgraded,
   };
 }
 
@@ -6893,6 +6904,35 @@ function parseTs(v) {
   if (/^\d+$/.test(s)) return s.length <= 10 ? Number(s) * 1000 : Number(s);
   const n = Date.parse(s);
   return isNaN(n) ? Date.now() : n;
+}
+
+function statusFromPeriskopeAck(msg) {
+  const ackNum =
+    typeof msg?.ack === "number"
+      ? msg.ack
+      : typeof msg?.ack === "string"
+        ? parseInt(msg.ack, 10)
+        : null;
+  const ackName = String(msg?.ack_name || msg?.status || "").toLowerCase();
+  if (ackName === "read" || ackNum === 3 || ackNum === 4) return "read";
+  if (ackName === "delivered" || ackNum === 2) return "delivered";
+  if (ackName === "sent" || ackName === "server" || ackNum === 1) return "sent";
+  return null;
+}
+
+function statusRank(status) {
+  const rank = { failed: -1, sending: 0, sent: 1, delivered: 2, read: 3 };
+  return rank[status] ?? 0;
+}
+
+function statusRatchetPatch(currentStatus, nextStatus) {
+  if (!nextStatus) return null;
+  const cur = typeof currentStatus === "string" ? currentStatus : "sent";
+  if (statusRank(nextStatus) <= statusRank(cur)) return null;
+  const patch = { status: nextStatus };
+  if (nextStatus === "delivered") patch.deliveredAt = Date.now();
+  if (nextStatus === "read") patch.readAt = Date.now();
+  return patch;
 }
 
 // ---------- Firebase RTDB REST helpers ----------
