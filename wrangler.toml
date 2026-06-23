@@ -65,7 +65,8 @@ bucket_name = "commoncomm-dm-media"
 #   wrangler secret put CLAUDE_API_KEY      (for /summarize, /suggest-reply)
 #   wrangler secret put EXPO_ACCESS_TOKEN   (optional, raises mobile push rate limits)
 #   wrangler secret put ADMIN_API_KEY       (v1.273, gates /admin/* endpoints)
-#   wrangler secret put AI_GATEWAY_KEY       (v1.276, gk_cc_... for ferra-ai-gateway)
+#   wrangler secret put AGENT_API_KEY       (gates /agent/* automation/Codex internal-DM endpoints)
+#   wrangler secret put AI_GATEWAY_KEY      (v1.276, gk_cc_... for ferra-ai-gateway)
 #   v1.280 Exotel click-to-call (all five required, else /exotel-call -> 503):
 #   wrangler secret put EXOTEL_API_KEY
 #   wrangler secret put EXOTEL_API_TOKEN

@@ -5,6 +5,7 @@
 //   FIREBASE_DB_SECRET  - Firebase RTDB legacy database secret
 //   CLAUDE_API_KEY      - Anthropic API key (for /summarize, /suggest-reply)
 //   EXPO_ACCESS_TOKEN   - optional, raises Expo Push rate limits
+//   AGENT_API_KEY       - bearer key for trusted automation/Codex agent sends
 //
 // Vars (wrangler.toml):
 //   FIREBASE_DB_URL     - https://motherofdashboard-default-rtdb.asia-southeast1.firebasedatabase.app
@@ -20,6 +21,10 @@ const ROOT = "commonComm";
 const ADMIN_EMAILS = new Set([
   "rohit@aroleap.com",
 ]);
+
+const AGENT_UID = "agent-codex";
+const AGENT_NAME = "Codex";
+const AGENT_EMAIL = "codex@internal.commoncomm";
 
 // v1.276: all Claude calls route through ferra-ai-gateway (per-dashboard
 // cost attribution + single key rotation + rate limiting) — the same
@@ -72,6 +77,23 @@ export default {
       }
       if (url.pathname === "/health") {
         return cors(env, json({ ok: true, ts: Date.now() }));
+      }
+      // Trusted automation/Codex surface. Lets non-browser agents deliver
+      // internal CommonComm DMs without a Firebase user session. Customer
+      // sends intentionally stay out of this endpoint family for now.
+      if (url.pathname.startsWith("/agent/")) {
+        const auth = request.headers.get("authorization") || "";
+        const bearer = auth.match(/^Bearer\s+(.+)$/i);
+        const token = bearer?.[1] || request.headers.get("x-agent-key") || "";
+        if (!env.AGENT_API_KEY || token !== env.AGENT_API_KEY) {
+          return cors(env, json({ error: "unauthorized" }, 401));
+        }
+      }
+      if (url.pathname === "/agent/dm/resolve-recipient" && request.method === "POST") {
+        return cors(env, await handleAgentDmResolve(request, env));
+      }
+      if (url.pathname === "/agent/dm/send" && request.method === "POST") {
+        return cors(env, await handleAgentDmSend(request, env));
       }
       // v1.271: diagnostic for "ghost teammate" investigations. Lists every
       // record under /commonComm/users alongside its admin-allowed status,
@@ -131,7 +153,7 @@ export default {
         return cors(env, json({
           service: "CommonCommunication Worker",
           status: "ok",
-          endpoints: ["/health", "/send (POST)", "/edit-message (POST)", "/delete-message (POST)", "/webhook (POST)", "/messages?chatId=... (GET)", "/transcribe (POST)", "/cleanup (POST)", "/register-push-token (POST)", "/ai-inbox (POST)"],
+          endpoints: ["/health", "/send (POST)", "/edit-message (POST)", "/delete-message (POST)", "/webhook (POST)", "/messages?chatId=... (GET)", "/transcribe (POST)", "/cleanup (POST)", "/register-push-token (POST)", "/ai-inbox (POST)", "/agent/dm/resolve-recipient (POST)", "/agent/dm/send (POST)"],
         }));
       }
       if (url.pathname === "/messages" && request.method === "GET") {
@@ -6297,6 +6319,171 @@ async function handleSearchMessages(request, env) {
 
   hits.sort((a, b) => b.ts - a.ts);
   return json({ results: hits.slice(0, limit), total: hits.length });
+}
+
+// ---------- /agent/dm/* ----------
+// Trusted automation/Codex path for internal team messages. This deliberately
+// targets team DMs only; customer WhatsApp sends should get a separate, more
+// restricted endpoint with approval/rate-limit controls.
+async function resolveCommonCommUserByEmail(env, email) {
+  const target = String(email || "").trim().toLowerCase();
+  if (!target || !target.includes("@")) return { error: "invalid_email" };
+
+  const users = await fbGet(env, `${ROOT}/users`);
+  const matches = [];
+  if (users && typeof users === "object") {
+    for (const [uid, u] of Object.entries(users)) {
+      if (String(u?.email || "").toLowerCase() !== target) continue;
+      matches.push({
+        uid,
+        email: u.email || target,
+        name: u.name || u.displayName || u.email || uid,
+        raw: u,
+      });
+    }
+  }
+  if (matches.length === 0) {
+    const members = await fbGet(env, `${ROOT}/config/teamMembers`);
+    if (members && typeof members === "object") {
+      for (const m of Object.values(members)) {
+        if (String(m?.email || "").toLowerCase() === target) {
+          return {
+            error: "team_member_has_no_uid",
+            email: target,
+            name: m?.name || target,
+          };
+        }
+      }
+    }
+    return { error: "not_found", email: target };
+  }
+
+  // Same-email ghosts can exist after Firebase Auth recreation. Prefer a
+  // UID with push tokens, then the most recently seen user record, then the
+  // first stable match.
+  const tokenMap = await fbGet(env, `${ROOT}/pushTokens`);
+  matches.sort((a, b) => {
+    const aHasPush = tokenMap && tokenMap[a.uid] ? 1 : 0;
+    const bHasPush = tokenMap && tokenMap[b.uid] ? 1 : 0;
+    if (aHasPush !== bHasPush) return bHasPush - aHasPush;
+    const aSeen = Number(a.raw?.lastSeen || a.raw?.updatedAt || 0);
+    const bSeen = Number(b.raw?.lastSeen || b.raw?.updatedAt || 0);
+    return bSeen - aSeen;
+  });
+
+  const chosen = matches[0];
+  return {
+    uid: chosen.uid,
+    email: chosen.email,
+    name: chosen.name,
+    duplicateCount: matches.length,
+    hadPushToken: !!(tokenMap && tokenMap[chosen.uid]),
+  };
+}
+
+function dmPairKeyFor(a, b) {
+  return [String(a), String(b)].sort().join("_");
+}
+
+async function patchDmMeta(env, pairKey, fields) {
+  const updates = {};
+  for (const [k, v] of Object.entries(fields)) {
+    updates[`${ROOT}/dms/${pairKey}/meta/${k}`] = v;
+    updates[`${ROOT}/dmsIndex/${pairKey}/${k}`] = v;
+  }
+  return fbPatchRoot(env, updates);
+}
+
+async function ensureAgentUser(env) {
+  return fbPatch(env, `${ROOT}/users/${AGENT_UID}`, {
+    name: AGENT_NAME,
+    email: AGENT_EMAIL,
+    role: "agent",
+    updatedAt: Date.now(),
+  });
+}
+
+async function handleAgentDmResolve(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const resolved = await resolveCommonCommUserByEmail(env, body?.toEmail || body?.email);
+  if (resolved.error) return json({ ok: false, ...resolved }, resolved.error === "invalid_email" ? 400 : 404);
+  return json({ ok: true, recipient: resolved });
+}
+
+async function handleAgentDmSend(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const toEmail = String(body?.toEmail || "").trim().toLowerCase();
+  const text = String(body?.text || "").trim();
+  const source = String(body?.source || "agent").slice(0, 40);
+  const sourceThreadId = body?.sourceThreadId ? String(body.sourceThreadId).slice(0, 120) : null;
+  const idempotencyKey = body?.idempotencyKey ? String(body.idempotencyKey).slice(0, 180) : "";
+  if (!toEmail || !toEmail.includes("@")) return json({ error: "missing toEmail" }, 400);
+  if (!text) return json({ error: "missing text" }, 400);
+  if (text.length > 8000) return json({ error: "text too long", max: 8000 }, 400);
+
+  const idemPath = idempotencyKey ? `${ROOT}/agentLogs/idempotency/${encodeKey(idempotencyKey)}` : "";
+  if (idemPath) {
+    const existing = await fbGet(env, idemPath);
+    if (existing?.messageId) {
+      return json({ ok: true, duplicate: true, ...existing });
+    }
+  }
+
+  const recipient = await resolveCommonCommUserByEmail(env, toEmail);
+  if (recipient.error) return json({ ok: false, ...recipient }, recipient.error === "invalid_email" ? 400 : 404);
+
+  await ensureAgentUser(env);
+  const ts = Date.now();
+  const pairKey = dmPairKeyFor(AGENT_UID, recipient.uid);
+  const msg = {
+    text,
+    ts,
+    fromUid: AGENT_UID,
+    fromName: AGENT_NAME,
+    source,
+    ...(sourceThreadId ? { sourceThreadId } : {}),
+    ...(idempotencyKey ? { idempotencyKey } : {}),
+  };
+  const pushed = await fbPush(env, `${ROOT}/dms/${pairKey}/messages`, msg);
+  const messageId = pushed?.name || null;
+  await patchDmMeta(env, pairKey, {
+    participants: { [AGENT_UID]: true, [recipient.uid]: true },
+    lastMsgAt: ts,
+    lastMsgPreview: text.slice(0, 120),
+    lastMsgFromUid: AGENT_UID,
+    lastMsgFromName: AGENT_NAME,
+  });
+
+  const logRecord = {
+    at: ts,
+    source,
+    toEmail,
+    toUid: recipient.uid,
+    pairKey,
+    messageId,
+    textPreview: text.slice(0, 200),
+  };
+  if (sourceThreadId) logRecord.sourceThreadId = sourceThreadId;
+  const logKey = `${ts}_${encodeKey(toEmail)}_${messageId || "msg"}`;
+  const updates = {
+    [`${ROOT}/agentLogs/sends/${logKey}`]: logRecord,
+  };
+  if (idempotencyKey) updates[`${ROOT}/agentLogs/idempotency/${encodeKey(idempotencyKey)}`] = logRecord;
+  await fbPatchRoot(env, updates);
+
+  await sendPushToUids(env, new Set([recipient.uid]), {
+    title: AGENT_NAME,
+    body: text.slice(0, 200),
+    data: { dmPairKey: pairKey, kind: "dm", source },
+  });
+
+  return json({
+    ok: true,
+    recipient: { uid: recipient.uid, email: recipient.email, name: recipient.name, duplicateCount: recipient.duplicateCount },
+    pairKey,
+    messageId,
+    pushAttempted: true,
+  });
 }
 
 // ---------- /dm-notify ----------
