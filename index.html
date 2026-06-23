@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.308</title>
+<title>CommonCommunication v1.309</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2895,7 +2895,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.308";
+const APP_VERSION = "v1.309";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -2980,6 +2980,7 @@ let watiTemplatesCache = [];
 let watiMessagesCache = [];
 let watiSession = { isOpen: false };
 let watiLoading = false;
+let watiLoadSeq = 0;
 
 // ====== ELEMENTS ======
 const $ = (id) => document.getElementById(id);
@@ -9553,6 +9554,7 @@ function refreshChannelUi() {
 async function setChannel(next) {
   if (next === currentChannel) return;
   if (next === "wati" && !isWatiEligibleThread()) return;
+  watiLoadSeq++;
   currentChannel = next === "wati" ? "wati" : "periskope";
   clearReply();
   setPendingTemplateMedia(null);
@@ -9601,6 +9603,8 @@ function renderWatiTemplateOptions() {
 async function loadWatiThread(clearBeforeLoad = true) {
   if (!currentChatId || !isWatiEligibleThread()) return;
   if (!WORKER_URL) { alert("Worker URL not configured."); return; }
+  const seq = watiLoadSeq;
+  const chatKeyAtStart = currentChatId;
   const phone = watiPhoneForCurrentChat();
   if (!phone) { alert("No customer phone found for Wati."); return; }
   if (clearBeforeLoad) {
@@ -9613,13 +9617,16 @@ async function loadWatiThread(clearBeforeLoad = true) {
     await loadWatiTemplates();
     const res = await fetch(`${WORKER_URL}/wati/messages?phone=${encodeURIComponent(phone)}&limit=50&_=${Date.now()}`, { cache: "no-store" });
     const j = await res.json().catch(() => ({}));
+    if (currentChannel !== "wati" || currentChatId !== chatKeyAtStart || seq !== watiLoadSeq) return;
     if (!res.ok || !j?.ok) throw new Error(j?.detail || j?.error || `HTTP ${res.status}`);
     watiSession = j.session || { isOpen: false };
     watiMessagesCache = (Array.isArray(j.messages) ? j.messages : []).sort((a, b) => (a.ts || 0) - (b.ts || 0));
     renderMessages(watiMessagesCache);
   } catch (e) {
+    if (currentChannel !== "wati" || currentChatId !== chatKeyAtStart || seq !== watiLoadSeq) return;
     messagesEl.innerHTML = `<div class="thread-empty" style="background:transparent;"><div>Couldn't load Wati: ${escapeHtml(String(e?.message || e))}</div></div>`;
   } finally {
+    if (currentChannel !== "wati" || currentChatId !== chatKeyAtStart || seq !== watiLoadSeq) return;
     watiLoading = false;
     refreshChannelUi();
   }
@@ -10426,6 +10433,9 @@ function listenMessages(chatKey) {
 }
 
 function renderMessages(list) {
+  if (currentChannel === "wati") {
+    list = (list || []).filter((m) => m?.channel === "wati");
+  }
   // v1.291: cache the unfiltered list so toggling Text-only re-renders the
   // open thread without waiting for the next Firebase snapshot.
   if (currentChannel !== "wati") _lastRenderedMsgs = list;
@@ -10486,7 +10496,7 @@ function renderMessages(list) {
       lastDay = day;
     }
     const out = m.direction === "out";
-    const pendingDelivery = out && !isDeliveredStatus(m.status);
+    const pendingDelivery = out && currentChannel !== "wati" && !isDeliveredStatus(m.status);
     let senderTag = "";
     if (out && m.sentByName) {
       // Outbound: which team member sent it

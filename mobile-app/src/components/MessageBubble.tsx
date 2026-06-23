@@ -71,7 +71,11 @@ export function MessageBubble({
   // the bubble visible so ticket-anchor records have somewhere to point.
   const isDeleted = m.deleted === true;
   const isEdited = !isDeleted && !!m.editedAt;
-  const pendingDelivery = out && m.status !== "delivered" && m.status !== "read";
+  const pendingDelivery =
+    out &&
+    m.channel !== "wati" &&
+    m.status !== "delivered" &&
+    m.status !== "read";
 
   // Detect "empty" messages: no text, no usable media. Periskope occasionally
   // sends these (reaction-only, deleted-for-me, system events). Without this

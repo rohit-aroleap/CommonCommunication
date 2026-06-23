@@ -56,6 +56,7 @@ export interface MediaInfo {
 
 export interface Message {
   id: string;
+  channel?: "wati";
   direction: "in" | "out";
   text?: string;
   ts: number;
