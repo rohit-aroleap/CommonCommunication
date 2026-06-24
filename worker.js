@@ -177,6 +177,9 @@ export default {
       if (url.pathname === "/messages" && request.method === "GET") {
         return cors(env, await handleFetchMessages(request, env));
       }
+      if (url.pathname === "/reconcile-delivery" && request.method === "POST") {
+        return cors(env, await handleReconcileDelivery(request, env));
+      }
       if (url.pathname === "/backfill-batch" && request.method === "POST") {
         return cors(env, await handleBackfillBatch(request, env));
       }
@@ -6456,12 +6459,14 @@ async function handleDeliveryAudit(request, env) {
   });
 }
 
-function buildPeriskopeMessageMap(messages) {
+function buildPeriskopeMessageMap(messages, chatId = "") {
   const out = new Map();
   for (const m of messages || []) {
+    const uniqueId = m?.unique_id != null ? String(m.unique_id) : "";
     const ids = [
       m?.message_id,
-      m?.unique_id,
+      uniqueId,
+      uniqueId && chatId ? `true_${chatId}_${uniqueId}` : null,
       m?.id?.serialized,
       typeof m?.id === "string" || typeof m?.id === "number" ? m.id : null,
     ].filter(Boolean).map(String);
@@ -6840,6 +6845,80 @@ async function handleFetchMessages(request, env) {
   });
   const j = await safeJson(r);
   return json(j, r.ok ? 200 : 502);
+}
+
+async function handleReconcileDelivery(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const chatId = String(body?.chatId || "").trim();
+  const limit = Math.min(100, Math.max(20, Number(body?.limit) || 50));
+  if (!chatId) return json({ error: "missing chatId" }, 400);
+
+  const chatKey = encodeKey(chatId);
+  const [fbMessages, fbMeta, periskopeRes] = await Promise.all([
+    fbGet(env, `${ROOT}/chats/${chatKey}/messages`),
+    fbGet(env, `${ROOT}/chats/${chatKey}/meta`),
+    fetch(
+      `${PERISKOPE_BASE}/chats/${encodeURIComponent(chatId)}/messages?offset=0&limit=${limit}`,
+      { headers: periskopeHeaders(env) },
+    ),
+  ]);
+  const periskopeJson = await safeJson(periskopeRes);
+  if (!periskopeRes.ok) {
+    return json({ error: "periskope_fetch_failed", status: periskopeRes.status, detail: safeDetail(periskopeJson) }, 502);
+  }
+
+  const periskopeById = buildPeriskopeMessageMap(periskopeJson?.messages || [], chatId);
+  const updates = {};
+  let checked = 0;
+  let patched = 0;
+  let matched = 0;
+  let latestPatched = null;
+
+  const outbound = Object.entries(fbMessages || {})
+    .map(([msgKey, m]) => ({ msgKey, ...(m || {}) }))
+    .filter((m) => m.direction === "out" && m.status !== "delivered" && m.status !== "read")
+    .sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0))
+    .slice(0, 20);
+
+  for (const m of outbound) {
+    checked++;
+    const ids = [
+      m.periskopeMsgId,
+      m.periskopeUniqueId && `true_${chatId}_${m.periskopeUniqueId}`,
+      m.periskopeUniqueId,
+    ].filter(Boolean).map(String);
+    let pm = null;
+    for (const id of ids) {
+      pm = periskopeById.get(id);
+      if (pm) break;
+    }
+    if (!pm) continue;
+    matched++;
+    const nextStatus = statusFromPeriskopeAck(pm) || "sent";
+    const statusPatch = statusRatchetPatch(m.status, nextStatus);
+    if (!statusPatch) continue;
+    for (const [k, v] of Object.entries(statusPatch)) {
+      updates[`${ROOT}/chats/${chatKey}/messages/${m.msgKey}/${k}`] = v;
+    }
+    patched++;
+    if (!latestPatched || Number(m.ts || 0) > Number(latestPatched.ts || 0)) {
+      latestPatched = { ts: m.ts || 0, status: statusPatch.status };
+    }
+  }
+
+  if (
+    latestPatched &&
+    fbMeta?.lastMsgDirection === "out" &&
+    (!fbMeta.lastMsgAt || Number(latestPatched.ts || 0) >= Number(fbMeta.lastMsgAt || 0))
+  ) {
+    updates[`${ROOT}/chats/${chatKey}/meta/lastMsgStatus`] = latestPatched.status;
+    updates[`${ROOT}/chatsIndex/${chatKey}/lastMsgStatus`] = latestPatched.status;
+  }
+
+  if (Object.keys(updates).length) {
+    await fbPatchRoot(env, updates);
+  }
+  return json({ ok: true, chatId, checked, matched, patched });
 }
 
 // ---------- /search-messages?q=...&limit=50 ----------

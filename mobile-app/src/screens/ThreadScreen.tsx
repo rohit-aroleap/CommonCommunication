@@ -939,6 +939,18 @@ export function ThreadScreen({ route, navigation }: Props) {
     }
   }, [canUseWati, phone, watiSending, user, composer, watiSession.isOpen, watiTemplateName, headerName]);
 
+  const scheduleDeliveryReconcile = useCallback((targetChatId: string) => {
+    if (!targetChatId) return;
+    const run = () => {
+      fetch(`${WORKER_URL}/reconcile-delivery`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chatId: targetChatId }),
+      }).catch(() => {});
+    };
+    [5000, 20000, 60000].forEach((ms) => setTimeout(run, ms));
+  }, []);
+
   const send = useCallback(async () => {
     if (channel === "wati") return sendWati();
     if (isDm) return sendDm();
@@ -1069,6 +1081,8 @@ export function ThreadScreen({ route, navigation }: Props) {
       if (!res.ok) {
         const t = await res.text();
         await update(msgRef, { status: "failed", error: t.slice(0, 300) });
+      } else {
+        scheduleDeliveryReconcile(chatId);
       }
     } catch (e: any) {
       await update(msgRef, { status: "failed", error: String(e) });
@@ -1090,6 +1104,7 @@ export function ThreadScreen({ route, navigation }: Props) {
     replyTarget,
     replySourceChatKey,
     pendingTemplateMedia,
+    scheduleDeliveryReconcile,
   ]);
 
   // Voice note flow — called by MicButton after recording stops with the
