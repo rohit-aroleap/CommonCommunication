@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.323</title>
+<title>CommonCommunication v1.324</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2661,13 +2661,14 @@
 
 <!-- v1.323: Wati templates visibility grid — rows are templates (name +
      approval status), columns are teammates. Tick a cell to let that teammate
-     use that template; untick to hide it from them. Everything is visible by
-     default. Click a template name to preview its message body. -->
+     use that template; untick to revoke. v1.324: opt-in — nothing is shared by
+     default; a member sees a template only once ticked. Click a template name
+     to preview its message body. -->
 <div class="modal-back" id="watiTemplatesModal">
   <div class="modal" style="width:1000px; max-width:96vw; max-height:88vh; display:flex; flex-direction:column;">
     <h3>Wati templates</h3>
     <div style="font-size:12px; color:var(--muted); margin-bottom:12px;">
-      Tick which Wati templates each teammate can use. Everything is visible by default — untick a box to hide that template from that person. Click a template name to preview its message. Admins always see every template; new templates are created in the Wati dashboard.
+      Tick which Wati templates each teammate can use. <b>Nothing is shared by default</b> — tick a box to give that person access to that template. Click a template name to preview its message. Admins always see every template; new templates are created in the Wati dashboard.
     </div>
     <div id="watiTplListBody" style="flex:1; overflow:auto; min-height:0;"></div>
     <div class="actions" style="margin-top:12px;">
@@ -2976,7 +2977,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.323";
+const APP_VERSION = "v1.324";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -3647,27 +3648,27 @@ function myChannelAccess() {
 // they have no team narrowing (= full visibility). Admin always returns
 // null. Reading the teams array off the same teamMembers record we
 // already use for `limited` so admin UI writes hit one consistent path.
-// v1.323: which Wati templates are HIDDEN from the signed-in member — set by
-// an admin in the Wati Templates grid. Returns a Set of hidden template names,
-// or null when the member sees every template (admin, or no team record, or
-// nothing hidden). Mirrors myChannelAccess(): a template is visible unless
-// config/teamMembers/{key}/watiTemplates/{name} === false.
-function myWatiHiddenTemplates() {
+// v1.324: opt-in visibility — a non-admin sees a Wati template ONLY if an admin
+// ticked it for them in the Wati Templates grid
+// (config/teamMembers/{key}/watiTemplates/{name} === true). Returns null when
+// the member sees everything (admin), otherwise the Set of explicitly-allowed
+// template names (empty Set = sees none). Default is "nothing shared".
+function myWatiAllowedTemplates() {
   if (!currentUser || isAdmin(currentUser.email)) return null;
   const myLower = String(currentUser.email || "").toLowerCase();
   if (myLower) {
     for (const m of Object.values(teamMembersCache || {})) {
       if (m?.email && String(m.email).toLowerCase() === myLower) {
         const wt = m.watiTemplates || {};
-        const hidden = new Set();
+        const allowed = new Set();
         for (const [name, vis] of Object.entries(wt)) {
-          if (vis === false) hidden.add(name);
+          if (vis === true) allowed.add(name);
         }
-        return hidden.size ? hidden : null;
+        return allowed;
       }
     }
   }
-  return null;
+  return new Set(); // non-admin not in the roster → opt-in default = sees none
 }
 
 function myTeamTags() {
@@ -9806,11 +9807,12 @@ function renderWatiTemplateOptions() {
   // v1.315: show ALL approved templates. The old "≤1 variable" gate is gone —
   // the fill-in panel below now collects every variable, so multi-variable
   // templates are selectable and sendable.
-  // v1.323: hide templates an admin has switched off for this member.
-  const hidden = myWatiHiddenTemplates();
+  // v1.324: opt-in — show only templates an admin granted this member
+  // (allowed === null means admin / unrestricted → show all).
+  const allowed = myWatiAllowedTemplates();
   const approved = (watiTemplatesCache || [])
     .filter((t) => (!t.status || t.status === "APPROVED"))
-    .filter((t) => !hidden || !hidden.has(t.name));
+    .filter((t) => !allowed || allowed.has(t.name));
   const current = watiTemplateSelect.value;
   if (!approved.length) {
     watiTemplateSelect.innerHTML = `<option value="">No Wati templates ready</option>`;
@@ -12059,7 +12061,7 @@ function renderWatiTemplatesAdminList() {
   if (!body) return;
   const tpls = [...(watiTemplatesCache || [])].sort((a, b) => (a.name || "").localeCompare(b.name || ""));
   // Columns = non-admin teammates with an email. Admins always see every
-  // template (myWatiHiddenTemplates returns null for them), so they're not
+  // template (myWatiAllowedTemplates returns null for them), so they're not
   // shown as columns.
   const members = Object.entries(teamMembersCache || {})
     .map(([key, m]) => ({ key, name: (m && (m.name || m.email)) || key, email: (m && m.email) || "" }))
@@ -12075,9 +12077,9 @@ function renderWatiTemplatesAdminList() {
     return;
   }
 
-  // A template is visible to a member unless explicitly switched off
-  // (config/teamMembers/{key}/watiTemplates/{name} === false).
-  const isVisible = (key, name) => (((teamMembersCache[key] || {}).watiTemplates || {})[name] !== false);
+  // v1.324: opt-in — a member can use a template only if it's explicitly
+  // granted (config/teamMembers/{key}/watiTemplates/{name} === true).
+  const isVisible = (key, name) => (((teamMembersCache[key] || {}).watiTemplates || {})[name] === true);
 
   const head = `<thead><tr>
       <th class="wt-corner">Template</th>
@@ -12132,7 +12134,7 @@ function renderWatiTemplatesAdminList() {
         return;
       }
       try {
-        await set(ref(db, `${ROOT}/config/teamMembers/${key}/watiTemplates/${name}`), cb.checked ? null : false);
+        await set(ref(db, `${ROOT}/config/teamMembers/${key}/watiTemplates/${name}`), cb.checked ? true : null);
       } catch (e) {
         cb.checked = !cb.checked; // revert optimistic toggle on failure
         alert("Couldn't save: " + (e && e.message ? e.message : e));

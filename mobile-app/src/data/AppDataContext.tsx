@@ -119,10 +119,11 @@ interface AppDataValue {
   // admin-controlled in the desktop Team modal. Both true unless an admin
   // turned one off for this member.
   channelAccess: { periskope: boolean; wati: boolean };
-  // v1.323: Wati templates an admin has hidden from this member (by name).
-  // Empty = sees every template. Filters the Wati template picker so the
-  // phone enforces the same per-member visibility as the web composer.
-  watiTemplateHidden: Set<string>;
+  // v1.324: Wati templates this member is allowed to use (opt-in). null =
+  // unrestricted (admin) → sees all; otherwise the Set of granted names
+  // (empty = none). Filters the Wati picker so the phone enforces the same
+  // per-member visibility as the web composer.
+  watiTemplateAllowed: Set<string> | null;
   // v1.223: team tags the current user is a member of (empty = no
   // narrowing). Drives the team-visibility filter in ChatsScreen.
   myTeamTags: Set<string> | null;
@@ -191,7 +192,7 @@ const AppDataContext = createContext<AppDataValue | null>(null);
 export const isDailyGroup = _isDailyGroup;
 
 export function AppDataProvider({ children }: { children: React.ReactNode }) {
-  const { user } = useAuth();
+  const { user, isAdmin } = useAuth();
 
   // chatsIndex is the meta-only mirror at /commonComm/chatsIndex/{chatKey} —
   // the worker and web app dual-write to it whenever they touch a chat's meta
@@ -698,25 +699,26 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     return { periskope: true, wati: true };
   }, [teamMembers, user?.email]);
 
-  // v1.323: Wati templates an admin has hidden from this member (set in the
-  // desktop Wati Templates grid). A template is hidden only when
-  // teamMembers[myEmail].watiTemplates[name] === false; absent = visible.
-  // Empty Set = sees every template (back-compat / admins / no record).
-  const watiTemplateHidden = useMemo<Set<string>>(() => {
+  // v1.324: Wati templates this member is ALLOWED to use (opt-in) — granted by
+  // an admin in the desktop Wati Templates grid. A template is usable only when
+  // teamMembers[myEmail].watiTemplates[name] === true; absent = hidden.
+  // null = unrestricted (admin) → sees every template. Empty Set = sees none.
+  const watiTemplateAllowed = useMemo<Set<string> | null>(() => {
+    if (isAdmin) return null; // admins always see every template
     const myEmail = (user?.email || "").toLowerCase();
-    if (!myEmail) return new Set();
+    if (!myEmail) return null;
     for (const m of Object.values(teamMembers || {})) {
       if (m?.email && m.email.toLowerCase() === myEmail) {
-        const hidden = new Set<string>();
+        const allowed = new Set<string>();
         const wt = m.watiTemplates || {};
         for (const [name, vis] of Object.entries(wt)) {
-          if (vis === false) hidden.add(name);
+          if (vis === true) allowed.add(name);
         }
-        return hidden;
+        return allowed;
       }
     }
-    return new Set();
-  }, [teamMembers, user?.email]);
+    return new Set(); // non-admin not in the roster → sees none
+  }, [teamMembers, user?.email, isAdmin]);
 
   // v1.223: derive team-tag membership from the same teamMembers record.
   // Empty Set = no team narrowing (full visibility — back-compat). Admin
@@ -785,7 +787,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       dataReady,
       isLimited,
       channelAccess,
-      watiTemplateHidden,
+      watiTemplateAllowed,
       myTeamTags,
       myGrants,
       grantChatAccess,
@@ -817,7 +819,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       dataReady,
       isLimited,
       channelAccess,
-      watiTemplateHidden,
+      watiTemplateAllowed,
       myTeamTags,
       myGrants,
     ],

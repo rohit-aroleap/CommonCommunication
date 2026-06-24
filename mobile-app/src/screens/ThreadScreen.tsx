@@ -193,7 +193,7 @@ export function ThreadScreen({ route, navigation }: Props) {
     bumpSendActivity,
     templates,
     channelAccess,
-    watiTemplateHidden,
+    watiTemplateAllowed,
   } = useAppData();
 
   // v1.188: orphan-free teamUsers for assignee pickers. See lib/teamFilter
@@ -816,12 +816,13 @@ export function ThreadScreen({ route, navigation }: Props) {
     if (channel !== "wati") return;
     const visible = watiTemplates.filter(
       (t) =>
-        (!t.status || t.status === "APPROVED") && !watiTemplateHidden.has(t.name),
+        (!t.status || t.status === "APPROVED") &&
+        (watiTemplateAllowed === null || watiTemplateAllowed.has(t.name)),
     );
     setWatiTemplateName((cur) =>
       cur && visible.some((t) => t.name === cur) ? cur : visible[0]?.name || "",
     );
-  }, [channel, watiTemplates, watiTemplateHidden]);
+  }, [channel, watiTemplates, watiTemplateAllowed]);
 
   // v1.316: Wati has no webhook, so the thread won't update on its own. Poll
   // every 15s while the Wati tab is open so incoming replies (and sends from
@@ -1011,10 +1012,10 @@ export function ThreadScreen({ route, navigation }: Props) {
         if (!res.ok || !j?.ok) throw new Error(j?.detail || j?.error || `HTTP ${res.status}`);
         setComposer("");
       } else if (watiTemplateName) {
-        // v1.323: hard stop if an admin hid this template from the member
-        // after they selected it. The picker filter normally prevents this,
-        // but guard the send path too so a hidden template can never go out.
-        if (watiTemplateHidden.has(watiTemplateName)) {
+        // v1.324: hard stop if this template isn't granted to the member
+        // (opt-in). The picker filter normally prevents selecting one, but
+        // guard the send path too so a non-granted template can never go out.
+        if (watiTemplateAllowed !== null && !watiTemplateAllowed.has(watiTemplateName)) {
           Alert.alert("Template unavailable", "This template is no longer available to you.");
           return;
         }
@@ -1061,7 +1062,7 @@ export function ThreadScreen({ route, navigation }: Props) {
     } finally {
       setWatiSending(false);
     }
-  }, [canUseWati, phone, watiSending, user, composer, watiSession.isOpen, watiTemplateName, headerName, watiTemplates, watiParams, watiTemplateHidden]);
+  }, [canUseWati, phone, watiSending, user, composer, watiSession.isOpen, watiTemplateName, headerName, watiTemplates, watiParams, watiTemplateAllowed]);
 
   const scheduleDeliveryReconcile = useCallback((targetChatId: string) => {
     if (!targetChatId) return;
@@ -2449,7 +2450,8 @@ export function ThreadScreen({ route, navigation }: Props) {
                 .filter(
                   (t) =>
                     (!t.status || t.status === "APPROVED") &&
-                    !watiTemplateHidden.has(t.name),
+                    (watiTemplateAllowed === null ||
+                      watiTemplateAllowed.has(t.name)),
                 )
                 .map((t) => (
                   <TouchableOpacity

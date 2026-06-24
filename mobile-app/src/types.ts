@@ -209,9 +209,9 @@ export interface TeamMember {
   // v1.319: per-member channel (tab) access, set in the desktop Team modal.
   // A channel is visible unless explicitly false; absent = both visible.
   channels?: { periskope?: boolean; wati?: boolean };
-  // v1.323: per-member Wati template visibility, set in the desktop Wati
-  // Templates grid. templateName → false hides it from this member; absent
-  // = visible (default). Enforced in the Wati template picker.
+  // v1.324: per-member Wati template grants (opt-in), set in the desktop Wati
+  // Templates grid. templateName → true means this member may use it; absent
+  // = not shared (default hidden). Enforced in the Wati template picker.
   watiTemplates?: Record<string, boolean>;
 }
 
