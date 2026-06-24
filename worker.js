@@ -84,6 +84,9 @@ export default {
       if (url.pathname === "/wati/send-session" && request.method === "POST") {
         return cors(env, await handleWatiSendSession(request, env));
       }
+      if (url.pathname === "/wati/webhook" && request.method === "POST") {
+        return cors(env, await handleWatiWebhook(request, env));
+      }
       if (url.pathname === "/webhook" && request.method === "POST") {
         return cors(env, await handleWebhook(request, env));
       }
@@ -917,6 +920,65 @@ async function writeWatiActivity(env, phone, info) {
     fbPatch(env, `${ROOT}/watiChats/${phone}/meta`, meta),
     fbPatch(env, `${ROOT}/watiChatsIndex/${phone}`, meta),
   ]);
+}
+
+// v1.332: Wati INBOUND webhook. Wati exposes no signature/secret mechanism, so
+// we authenticate with a secret token baked into the URL (?token=...). On an
+// inbound customer message we update the Wati activity index in real time so
+// the mobile chat list's "Wati" sort surfaces the reply instantly — no thread
+// open / poll needed. Must return 200 quickly (Wati retries up to ~144× over
+// 24h if it doesn't get a 200), and stays idempotent (writeWatiActivity just
+// overwrites the latest activity, so retries are harmless).
+async function handleWatiWebhook(request, env) {
+  const url = new URL(request.url);
+  const token = url.searchParams.get("token") || request.headers.get("x-wati-token") || "";
+  if (!env.WATI_WEBHOOK_SECRET || token !== env.WATI_WEBHOOK_SECRET) {
+    return json({ ok: false, error: "unauthorized" }, 401);
+  }
+
+  let payload = {};
+  try { payload = await request.json(); } catch (_) { payload = {}; }
+
+  // Log raw payloads so we can confirm this tenant's exact shape and extend
+  // later (e.g. store the message body or push a notification).
+  const debugKey = Date.now() + "_" + Math.random().toString(36).slice(2, 8);
+  await fbPut(env, `${ROOT}/_debug/watiWebhook/${debugKey}`, { payload, receivedAt: Date.now() }).catch(() => {});
+
+  // Wati posts the message object at the top level; tolerate a `data` wrapper.
+  const m = (payload && payload.data && typeof payload.data === "object" && payload.data.eventType)
+    ? payload.data
+    : payload;
+  const eventType = String(m?.eventType || "");
+  // Inbound = a "message" event not owned by us, or a brand-new-contact event
+  // (which carries no `owner` field). Everything else (status updates, our own
+  // outbound echoes) is acknowledged and ignored.
+  const isInbound =
+    (eventType === "message" && m && m.owner !== true) ||
+    eventType === "newContactMessageReceived";
+  if (!isInbound) return json({ ok: true, ignored: eventType || "non-inbound" });
+
+  const phone = normalizePhone(m.waId || m.whatsappNumber || "");
+  if (!phone) return json({ ok: true, skipped: "no waId" });
+
+  // Defensive: only accept events addressed to our Wati line (when configured).
+  const ourLine = String(env.WATI_FROM_NUMBER || "").replace(/\D/g, "");
+  const lineGot = String(m.channelPhoneNumber || "").replace(/\D/g, "");
+  if (ourLine && lineGot && lineGot !== ourLine) {
+    await fbPut(env, `${ROOT}/_debug/watiWebhook_rejected/${debugKey}`, {
+      reason: "line_mismatch", expected: ourLine, got: lineGot, receivedAt: Date.now(),
+    }).catch(() => {});
+    return json({ ok: true, rejected: "line_mismatch" });
+  }
+
+  const ts = parseTs(m.timestamp || m.created || m.createdAt);
+  const text = String(m.text || "").trim()
+    || (eventType === "newContactMessageReceived" ? "(new Wati message)" : "(message)");
+  await writeWatiActivity(env, phone, {
+    lastMsgAt: ts,
+    lastMsgPreview: text,
+    lastMsgDirection: "in",
+  });
+  return json({ ok: true, phone, eventType });
 }
 
 async function handleWatiMessages(request, env) {
