@@ -122,6 +122,34 @@ try {
 
 type Props = NativeStackScreenProps<RootStackParamList, "Thread">;
 
+// v1.318: Wati template fill-in helpers (mirror the web composer).
+// A variable is treated as the customer name if it's positional {{1}} or
+// literally {{name}} — that one gets pre-filled with the customer's name.
+function watiIsNameParam(name: string): boolean {
+  return name === "1" || /name/i.test(name);
+}
+function initWatiParams(
+  tpl: WatiTemplate | undefined,
+  customerName: string,
+): Record<string, string> {
+  const init: Record<string, string> = {};
+  for (const p of tpl?.params || []) {
+    init[p.name] = watiIsNameParam(p.name) ? customerName : "";
+  }
+  return init;
+}
+function renderWatiTemplateBody(
+  bodyText: string | undefined,
+  params: Record<string, string>,
+): string {
+  let body = String(bodyText || "");
+  for (const [k, v] of Object.entries(params)) {
+    // Param names are [a-zA-Z0-9_] only — safe to inline in the regex.
+    body = body.replace(new RegExp("\\{\\{\\s*" + k + "\\s*\\}\\}", "g"), v || `{{${k}}}`);
+  }
+  return body;
+}
+
 export function ThreadScreen({ route, navigation }: Props) {
   const { chatKey, initialTitle, anchorMsgKey } = route.params;
   const { user } = useAuth();
@@ -230,6 +258,8 @@ export function ThreadScreen({ route, navigation }: Props) {
   const [watiSession, setWatiSession] = useState<WatiSession>({ isOpen: false });
   const [watiLoading, setWatiLoading] = useState(false);
   const [watiSending, setWatiSending] = useState(false);
+  // v1.318: per-variable values for the selected Wati template (name->value).
+  const [watiParams, setWatiParams] = useState<Record<string, string>>({});
   const [composer, setComposer] = useState("");
   useEffect(() => {
     if (!canUseWati && channel === "wati") setChannel("periskope");
@@ -742,7 +772,7 @@ export function ThreadScreen({ route, navigation }: Props) {
         ]);
         if (cancelled) return;
         setWatiTemplates(tpls);
-        const readyTemplates = tpls.filter((t) => (!t.status || t.status === "APPROVED") && (t.paramCount || 0) <= 1);
+        const readyTemplates = tpls.filter((t) => !t.status || t.status === "APPROVED");
         setWatiTemplateName((cur) => cur || readyTemplates[0]?.name || "");
         setWatiSession(msgRes.session);
         const list = (msgRes.messages || []).map((m) => ({ ...m, id: m.id })) as Message[];
@@ -785,6 +815,13 @@ export function ThreadScreen({ route, navigation }: Props) {
       clearInterval(timer);
     };
   }, [channel, canUseWati, phone]);
+
+  // v1.318: when the selected template changes, reset the fill-in fields —
+  // pre-fill the name variable with the customer's name, others empty.
+  useEffect(() => {
+    const tpl = watiTemplates.find((t) => t.name === watiTemplateName);
+    setWatiParams(initWatiParams(tpl, headerName));
+  }, [watiTemplateName, watiTemplates, headerName]);
 
   // Deduplicate by inner unique id — see lib/messageDedup for the rationale.
   // dedupMessages returns ascending (oldest → newest) to match the webapp's
@@ -941,10 +978,23 @@ export function ThreadScreen({ route, navigation }: Props) {
         if (!res.ok || !j?.ok) throw new Error(j?.detail || j?.error || `HTTP ${res.status}`);
         setComposer("");
       } else if (watiTemplateName) {
+        // v1.318: gather the per-variable values from the fill-in fields and
+        // require every variable to be filled before sending.
+        const tpl = watiTemplates.find((t) => t.name === watiTemplateName);
+        const params = tpl?.params || [];
+        const missing = params.filter((p) => !String(watiParams[p.name] || "").trim());
+        if (missing.length) {
+          Alert.alert(
+            "Fill in the template",
+            `Please fill in all ${params.length} field${params.length === 1 ? "" : "s"} before sending.`,
+          );
+          return;
+        }
         const res = await sendWatiTemplate({
           phone,
           templateName: watiTemplateName,
-          parameters: { "1": headerName },
+          parameters: watiParams,
+          renderedText: renderWatiTemplateBody(tpl?.bodyText, watiParams),
           sentByUid,
           sentByName,
         });
@@ -957,6 +1007,7 @@ export function ThreadScreen({ route, navigation }: Props) {
             return next;
           });
         }
+        setWatiParams(initWatiParams(tpl, headerName)); // reset for the next send
       } else {
         return;
       }
@@ -970,7 +1021,7 @@ export function ThreadScreen({ route, navigation }: Props) {
     } finally {
       setWatiSending(false);
     }
-  }, [canUseWati, phone, watiSending, user, composer, watiSession.isOpen, watiTemplateName, headerName]);
+  }, [canUseWati, phone, watiSending, user, composer, watiSession.isOpen, watiTemplateName, headerName, watiTemplates, watiParams]);
 
   const scheduleDeliveryReconcile = useCallback((targetChatId: string) => {
     if (!targetChatId) return;
@@ -2353,7 +2404,7 @@ export function ThreadScreen({ route, navigation }: Props) {
               style={styles.watiTplScroll}
             >
               {watiTemplates
-                .filter((t) => (!t.status || t.status === "APPROVED") && (t.paramCount || 0) <= 1)
+                .filter((t) => !t.status || t.status === "APPROVED")
                 .map((t) => (
                   <TouchableOpacity
                     key={t.name}
@@ -2376,6 +2427,39 @@ export function ThreadScreen({ route, navigation }: Props) {
                   </TouchableOpacity>
                 ))}
             </ScrollView>
+            {/* v1.318: per-variable fill-in fields for the selected template
+                (mirrors the web composer). Name pre-filled; others show the
+                template's sample value as a placeholder. Live preview below. */}
+            {(() => {
+              const tpl = watiTemplates.find((t) => t.name === watiTemplateName);
+              const params = tpl?.params || [];
+              if (!params.length) return null;
+              return (
+                <View style={styles.watiFields}>
+                  {params.map((p) => (
+                    <View key={p.name}>
+                      <Text style={styles.watiFieldLabel}>{`{{${p.name}}}`}</Text>
+                      <TextInput
+                        style={styles.watiFieldInput}
+                        value={watiParams[p.name] ?? ""}
+                        onChangeText={(v) =>
+                          setWatiParams((prev) => ({ ...prev, [p.name]: v }))
+                        }
+                        placeholder={
+                          watiIsNameParam(p.name)
+                            ? "Customer name"
+                            : p.sample || `Value for {{${p.name}}}`
+                        }
+                        placeholderTextColor="rgba(255,255,255,0.5)"
+                      />
+                    </View>
+                  ))}
+                  <Text style={styles.watiPreview}>
+                    {renderWatiTemplateBody(tpl?.bodyText, watiParams)}
+                  </Text>
+                </View>
+              );
+            })()}
           </View>
         )}
         {audioMod && channel === "periskope" && (
@@ -3424,6 +3508,33 @@ function makeStyles(colors: Colors) {
   },
   watiTplChipTxtActive: {
     color: colors.greenDark,
+  },
+  // v1.318: per-variable fill-in fields, sitting on the green composer surface.
+  watiFields: {
+    gap: 6,
+    marginTop: 2,
+  },
+  watiFieldLabel: {
+    color: "rgba(255,255,255,0.85)",
+    fontSize: 11,
+    fontWeight: "600",
+    marginBottom: 2,
+  },
+  watiFieldInput: {
+    backgroundColor: "white",
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    fontSize: 14,
+    color: "#111b21",
+  },
+  watiPreview: {
+    backgroundColor: "rgba(255,255,255,0.12)",
+    borderRadius: 6,
+    padding: 8,
+    color: "white",
+    fontSize: 13,
+    marginTop: 2,
   },
   // Slash-command template picker (v1.126). Anchored above the composer,
   // dark surface so it pops against the message list. Capped at ~240px so

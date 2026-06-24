@@ -64,6 +64,9 @@ export interface WatiTemplate {
   language?: string;
   bodyText?: string;
   paramCount?: number;
+  // Ordered body variables ({{1}}/{{2}} positional or {{name}} named) with
+  // the template's sample value (used as input placeholder in the fill-in UI).
+  params?: { name: string; sample: string }[];
 }
 
 export interface WatiSession {
@@ -117,6 +120,7 @@ export async function sendWatiTemplate(body: {
   phone: string;
   templateName: string;
   parameters?: Record<string, string>;
+  renderedText?: string;
   sentByUid?: string;
   sentByName?: string;
 }): Promise<Response> {
