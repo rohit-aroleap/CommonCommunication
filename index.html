@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.327</title>
+<title>CommonCommunication v1.328</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -1576,6 +1576,13 @@
   /* v1.326: the "Auto" marker column — tinted + divided off from the teammate columns */
   .wt-grid .wt-autocol { background: var(--header); border-right: 2px solid var(--border); }
   .wt-grid thead th.wt-autocol { color: var(--muted); }
+  /* v1.328: drag handle + drop indicators for manual reordering */
+  .wt-grid .wt-drag { cursor: grab; color: var(--muted); font-size: 14px; line-height: 1;
+    user-select: none; padding: 0 2px; flex-shrink: 0; }
+  .wt-grid .wt-drag:hover { color: var(--text); }
+  .wt-grid tr.wt-dragging { opacity: .45; }
+  .wt-grid tr.wt-drop-before td { box-shadow: inset 0 3px 0 var(--green); }
+  .wt-grid tr.wt-drop-after td { box-shadow: inset 0 -3px 0 var(--green); }
 
   /* ---------- Misc ---------- */
   .config-warn {
@@ -2991,7 +2998,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.327";
+const APP_VERSION = "v1.328";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -3077,6 +3084,9 @@ let watiTemplatesCache = [];
 let watiTemplateTags = {};        // v1.325: templateName -> team tag (sales/installation/...) — admin grid
 let watiTemplateAuto = {};        // v1.326: templateName -> true if sent automatically (marker only, no effect)
 let watiOpenDetails = new Set();  // v1.327: template names whose preview row is expanded (survives re-render)
+let watiTemplateOrder = {};       // v1.328: templateName -> manual order index within its team group (drag to reorder)
+let _watiDragName = null;         // v1.328: in-flight drag state (module scope so a mid-drag re-render can't strand it)
+let _watiDragGrp = null;          //         the dragged template's team group index (number)
 let watiMessagesCache = [];
 let watiSession = { isOpen: false };
 let watiLoading = false;
@@ -12084,6 +12094,49 @@ const WATI_TEAM_TAGS = [
   { key: "others", label: "Others" },
 ];
 
+// v1.328: a template's team group index (tagged templates first in
+// WATI_TEAM_TAGS order, untagged last) and its manual order within that group.
+function watiTagOrder(name) {
+  const i = WATI_TEAM_TAGS.findIndex((x) => x.key === watiTemplateTags[name]);
+  return i === -1 ? WATI_TEAM_TAGS.length : i;
+}
+function watiManualOrder(name) {
+  const v = watiTemplateOrder[name];
+  return typeof v === "number" ? v : Infinity; // un-dragged → after dragged, by name
+}
+// Sort by team group, then manual drag order within the group, then name.
+function watiTemplateSortCmp(a, b) {
+  const dg = watiTagOrder(a) - watiTagOrder(b);
+  if (dg !== 0) return dg;
+  const oa = watiManualOrder(a), ob = watiManualOrder(b);
+  if (oa !== ob) return oa - ob; // both-Infinity is skipped (Infinity!==Infinity is false), so no NaN
+  return a.localeCompare(b);
+}
+
+// v1.328: drop `dragName` next to `targetName` within the same team group,
+// reindex that group's manual order (0..n-1), persist as one batched update,
+// then re-render so the new flow order shows immediately.
+function reorderWatiTemplate(dragName, targetName, before, grp) {
+  if (!dragName || dragName === targetName) return;
+  const groupNames = [...(watiTemplatesCache || [])]
+    .map((t) => t.name)
+    .filter((nm) => watiTagOrder(nm) === grp)
+    .sort(watiTemplateSortCmp);
+  const without = groupNames.filter((nm) => nm !== dragName);
+  const ti = without.indexOf(targetName);
+  if (ti === -1) return;
+  without.splice(before ? ti : ti + 1, 0, dragName);
+  const updates = {};
+  without.forEach((nm, idx) => {
+    watiTemplateOrder[nm] = idx;
+    updates[`config/watiTemplateOrder/${nm}`] = idx;
+  });
+  renderWatiTemplatesAdminList(); // optimistic
+  update(ref(db, ROOT), updates).catch((e) => {
+    alert("Couldn't save order: " + (e && e.message ? e.message : e));
+  });
+}
+
 function renderWatiTemplatesAdminList() {
   const body = $("watiTplListBody");
   if (!body) return;
@@ -12118,17 +12171,8 @@ function renderWatiTemplatesAdminList() {
   // +2 = the sticky Template column and the Auto column.
   const span = members.length + 2;
 
-  // v1.325: order index for a template's team tag — tagged templates first in
-  // WATI_TEAM_TAGS order, untagged last.
-  const orderOf = (name) => {
-    const i = WATI_TEAM_TAGS.findIndex((x) => x.key === watiTemplateTags[name]);
-    return i === -1 ? WATI_TEAM_TAGS.length : i;
-  };
-  // Arrange by team, then alphabetically within each team.
-  const sorted = tpls.slice().sort((a, b) => {
-    const d = orderOf(a.name) - orderOf(b.name);
-    return d !== 0 ? d : (a.name || "").localeCompare(b.name || "");
-  });
+  // v1.328: arrange by team group, then manual drag order within the group.
+  const sorted = tpls.slice().sort((a, b) => watiTemplateSortCmp(a.name, b.name));
 
   const tagOptions = (sel) =>
     `<option value="">— team —</option>` +
@@ -12137,7 +12181,7 @@ function renderWatiTemplatesAdminList() {
   let rowsHtml = "";
   let lastGroup = null;
   sorted.forEach((t, i) => {
-    const grp = orderOf(t.name);
+    const grp = watiTagOrder(t.name);
     if (grp !== lastGroup) {
       lastGroup = grp;
       const label = grp < WATI_TEAM_TAGS.length ? WATI_TEAM_TAGS[grp].label : "Untagged";
@@ -12150,9 +12194,10 @@ function renderWatiTemplatesAdminList() {
     }).join("");
     const open = watiOpenDetails.has(t.name);
     rowsHtml += `
-      <tr class="wt-trow">
+      <tr class="wt-trow" data-tpl="${escapeHtml(t.name)}" data-grp="${grp}">
         <td class="wt-firstcol">
           <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+            <span class="wt-drag" draggable="true" data-tpl="${escapeHtml(t.name)}" title="Drag to reorder within this team">⠿</span>
             <span class="wt-name" data-i="${i}" data-tpl="${escapeHtml(t.name)}" title="Click to preview the message &amp; set its team">${escapeHtml(t.name)}</span>
             ${watiStatusBadge(t.status)}
           </div>
@@ -12253,6 +12298,53 @@ function renderWatiTemplatesAdminList() {
       }
     };
   });
+
+  // v1.328: drag-to-reorder. The grip handle starts the drag; rows are drop
+  // targets. Reordering is constrained to the same team group (to move a
+  // template to another team, use its Team dropdown). On drop we reindex the
+  // group's manual order and re-render.
+  const clearDropMarks = () =>
+    body.querySelectorAll(".wt-drop-before, .wt-drop-after")
+      .forEach((el) => el.classList.remove("wt-drop-before", "wt-drop-after"));
+  body.querySelectorAll(".wt-drag").forEach((h) => {
+    h.ondragstart = (e) => {
+      const row = h.closest("tr.wt-trow");
+      _watiDragName = h.dataset.tpl;
+      _watiDragGrp = row ? Number(row.dataset.grp) : null;
+      if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = "move";
+        try { e.dataTransfer.setData("text/plain", _watiDragName); } catch (_) {}
+      }
+      if (row) row.classList.add("wt-dragging");
+    };
+    h.ondragend = () => {
+      _watiDragName = null; _watiDragGrp = null;
+      body.querySelectorAll(".wt-dragging").forEach((el) => el.classList.remove("wt-dragging"));
+      clearDropMarks();
+    };
+  });
+  body.querySelectorAll("tr.wt-trow").forEach((row) => {
+    const sameGroup = () => _watiDragName != null && Number(row.dataset.grp) === _watiDragGrp;
+    row.ondragover = (e) => {
+      if (!sameGroup()) return;            // only allow drops within the same team
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+      const r = row.getBoundingClientRect();
+      const before = e.clientY < r.top + r.height / 2;
+      clearDropMarks();                    // keep a single indicator → no flicker
+      row.classList.add(before ? "wt-drop-before" : "wt-drop-after");
+    };
+    row.ondrop = (e) => {
+      if (!sameGroup()) return;
+      e.preventDefault();
+      const r = row.getBoundingClientRect();
+      const before = e.clientY < r.top + r.height / 2;
+      const targetName = row.dataset.tpl;
+      const dragName = _watiDragName, grp = _watiDragGrp;
+      clearDropMarks();
+      reorderWatiTemplate(dragName, targetName, before, grp);
+    };
+  });
 }
 
 async function openWatiTemplatesModal() {
@@ -12269,12 +12361,14 @@ async function openWatiTemplatesModal() {
     // v1.325/v1.326: load the per-template team tags + auto markers so the grid
     // can group by team and show which templates are sent automatically.
     try {
-      const [tagSnap, autoSnap] = await Promise.all([
+      const [tagSnap, autoSnap, orderSnap] = await Promise.all([
         get(ref(db, `${ROOT}/config/watiTemplateTags`)),
         get(ref(db, `${ROOT}/config/watiTemplateAuto`)),
+        get(ref(db, `${ROOT}/config/watiTemplateOrder`)),
       ]);
       watiTemplateTags = tagSnap.val() || {};
       watiTemplateAuto = autoSnap.val() || {};
+      watiTemplateOrder = orderSnap.val() || {};
     } catch (_) { /* keep whatever we had; grouping just falls back to untagged */ }
     renderWatiTemplatesAdminList();
   } catch (e) {
