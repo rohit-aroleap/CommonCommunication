@@ -2463,8 +2463,8 @@ export function ThreadScreen({ route, navigation }: Props) {
                         onChangeText={(v) =>
                           setWatiParams((prev) => ({ ...prev, [p.name]: v }))
                         }
-                        placeholder={p.sample || `Value for {{${p.name}}}`}
-                        placeholderTextColor="rgba(255,255,255,0.5)"
+                        placeholder={p.sample || `e.g. ${p.name}`}
+                        placeholderTextColor="#8696a0"
                       />
                     </View>
                   ))}
