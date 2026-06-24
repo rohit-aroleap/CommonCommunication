@@ -789,8 +789,9 @@ export function ThreadScreen({ route, navigation }: Props) {
         ]);
         if (cancelled) return;
         setWatiTemplates(tpls);
-        const readyTemplates = tpls.filter((t) => !t.status || t.status === "APPROVED");
-        setWatiTemplateName((cur) => cur || readyTemplates[0]?.name || "");
+        // v1.331: do NOT auto-select a template — start collapsed so the
+        // conversation is visible. The clamp effect below only clears a
+        // selection that's no longer valid; it never auto-picks.
         setWatiSession(msgRes.session);
         const list = (msgRes.messages || []).map((m) => ({ ...m, id: m.id })) as Message[];
         list.sort((a, b) => (b.ts || 0) - (a.ts || 0));
@@ -819,8 +820,10 @@ export function ThreadScreen({ route, navigation }: Props) {
         (!t.status || t.status === "APPROVED") &&
         (watiTemplateAllowed === null || watiTemplateAllowed.has(t.name)),
     );
+    // v1.331: only clear a selection that's no longer valid — never auto-pick,
+    // so the panel stays collapsed until the user taps a template.
     setWatiTemplateName((cur) =>
-      cur && visible.some((t) => t.name === cur) ? cur : visible[0]?.name || "",
+      cur && visible.some((t) => t.name === cur) ? cur : "",
     );
   }, [channel, watiTemplates, watiTemplateAllowed]);
 
@@ -2460,7 +2463,9 @@ export function ThreadScreen({ route, navigation }: Props) {
                       styles.watiTplChip,
                       watiTemplateName === t.name && styles.watiTplChipActive,
                     ]}
-                    onPress={() => setWatiTemplateName(t.name)}
+                    onPress={() =>
+                      setWatiTemplateName((cur) => (cur === t.name ? "" : t.name))
+                    }
                     activeOpacity={0.85}
                   >
                     <Text
@@ -2479,9 +2484,10 @@ export function ThreadScreen({ route, navigation }: Props) {
                 (mirrors the web composer). Name pre-filled; others show the
                 template's sample value as a placeholder. Live preview below. */}
             {(() => {
+              if (!watiTemplateName) return null; // collapsed until a template is tapped
               const tpl = watiTemplates.find((t) => t.name === watiTemplateName);
-              const params = tpl?.params || [];
-              if (!params.length) return null;
+              if (!tpl) return null;
+              const params = tpl.params || [];
               return (
                 <View style={styles.watiFields}>
                   {params.map((p) => (

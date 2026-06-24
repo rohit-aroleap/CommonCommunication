@@ -11,7 +11,7 @@ import * as Updates from "expo-updates";
 //
 // Bump in lockstep with index.html's "v1.xxx" strings on every commit that
 // touches user-visible behavior.
-export const APP_VERSION = "v1.330";
+export const APP_VERSION = "v1.331";
 
 // Source of truth for the user-visible version string.
 //
