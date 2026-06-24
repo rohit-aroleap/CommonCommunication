@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.325</title>
+<title>CommonCommunication v1.326</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -1570,6 +1570,9 @@
   .wt-grid select.wt-tag { margin-top: 5px; max-width: 160px; font-size: 11px;
     padding: 2px 4px; border: 1px solid var(--border); border-radius: 5px;
     background: var(--panel); color: var(--text); cursor: pointer; }
+  /* v1.326: the "Auto" marker column — tinted + divided off from the teammate columns */
+  .wt-grid .wt-autocol { background: var(--header); border-right: 2px solid var(--border); }
+  .wt-grid thead th.wt-autocol { color: var(--muted); }
 
   /* ---------- Misc ---------- */
   .config-warn {
@@ -2985,7 +2988,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.325";
+const APP_VERSION = "v1.326";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -3069,6 +3072,7 @@ let dmRows = [];                  // last computed list for re-render
 let currentView = "chats";        // "chats" | "team" — sidebar toggle
 let watiTemplatesCache = [];
 let watiTemplateTags = {};        // v1.325: templateName -> team tag (sales/installation/...) — admin grid
+let watiTemplateAuto = {};        // v1.326: templateName -> true if sent automatically (marker only, no effect)
 let watiMessagesCache = [];
 let watiSession = { isOpen: false };
 let watiLoading = false;
@@ -12103,10 +12107,12 @@ function renderWatiTemplatesAdminList() {
 
   const head = `<thead><tr>
       <th class="wt-corner">Template</th>
+      <th class="wt-mh wt-autocol" title="Marks templates that are sent automatically (label only — has no effect)">Auto</th>
       ${members.map((m) => `<th class="wt-mh" title="${escapeHtml(m.email)}"><span>${escapeHtml(m.name)}</span></th>`).join("")}
     </tr></thead>`;
 
-  const span = members.length + 1;
+  // +2 = the sticky Template column and the Auto column.
+  const span = members.length + 2;
 
   // v1.325: order index for a template's team tag — tagged templates first in
   // WATI_TEAM_TAGS order, untagged last.
@@ -12147,6 +12153,7 @@ function renderWatiTemplatesAdminList() {
           </div>
           <select class="wt-tag" data-tpl="${escapeHtml(t.name)}" title="Team — pick one to group this template">${tagOptions(watiTemplateTags[t.name])}</select>
         </td>
+        <td class="wt-cell wt-autocol"><input type="checkbox" class="wt-auto-cb" data-tpl="${escapeHtml(t.name)}" ${watiTemplateAuto[t.name] === true ? "checked" : ""} title="Sent automatically (marker only)"></td>
         ${cells}
       </tr>
       <tr class="wt-detailrow" data-i="${i}" style="display:none;">
@@ -12168,8 +12175,9 @@ function renderWatiTemplatesAdminList() {
   });
 
   // Per-cell visibility toggle → write to Firebase. v1.324 opt-in: checked =
-  // granted (write true), unchecked = revoke (delete the key).
-  body.querySelectorAll('input[type="checkbox"][data-tpl]').forEach((cb) => {
+  // granted (write true), unchecked = revoke (delete the key). Scope to
+  // [data-key] so the Auto column's checkboxes (data-tpl only) aren't caught.
+  body.querySelectorAll('input[type="checkbox"][data-key]').forEach((cb) => {
     cb.onchange = async () => {
       const name = cb.dataset.tpl;
       const key = cb.dataset.key;
@@ -12208,6 +12216,26 @@ function renderWatiTemplatesAdminList() {
       }
     };
   });
+
+  // v1.326: "Auto" marker toggle → record which templates are sent
+  // automatically. Marker only — nothing reads this to gate or trigger sends.
+  body.querySelectorAll("input.wt-auto-cb").forEach((cb) => {
+    cb.onchange = async () => {
+      const name = cb.dataset.tpl;
+      if (!name || /[.#$\[\]\/]/.test(name)) {
+        cb.checked = !cb.checked;
+        return;
+      }
+      if (cb.checked) watiTemplateAuto[name] = true; else delete watiTemplateAuto[name];
+      try {
+        await set(ref(db, `${ROOT}/config/watiTemplateAuto/${name}`), cb.checked ? true : null);
+      } catch (e) {
+        cb.checked = !cb.checked; // revert optimistic toggle on failure
+        if (cb.checked) watiTemplateAuto[name] = true; else delete watiTemplateAuto[name];
+        alert("Couldn't save: " + (e && e.message ? e.message : e));
+      }
+    };
+  });
 }
 
 async function openWatiTemplatesModal() {
@@ -12220,10 +12248,15 @@ async function openWatiTemplatesModal() {
   if (body) body.innerHTML = `<div style="padding:24px; text-align:center; color:var(--muted);">Loading templates…</div>`;
   try {
     await loadWatiTemplates(true);
-    // v1.325: load the per-template team tags so the grid can group + order by team.
+    // v1.325/v1.326: load the per-template team tags + auto markers so the grid
+    // can group by team and show which templates are sent automatically.
     try {
-      const tagSnap = await get(ref(db, `${ROOT}/config/watiTemplateTags`));
+      const [tagSnap, autoSnap] = await Promise.all([
+        get(ref(db, `${ROOT}/config/watiTemplateTags`)),
+        get(ref(db, `${ROOT}/config/watiTemplateAuto`)),
+      ]);
       watiTemplateTags = tagSnap.val() || {};
+      watiTemplateAuto = autoSnap.val() || {};
     } catch (_) { /* keep whatever we had; grouping just falls back to untagged */ }
     renderWatiTemplatesAdminList();
   } catch (e) {
