@@ -193,6 +193,7 @@ export function ThreadScreen({ route, navigation }: Props) {
     bumpSendActivity,
     templates,
     channelAccess,
+    watiTemplateHidden,
   } = useAppData();
 
   // v1.188: orphan-free teamUsers for assignee pickers. See lib/teamFilter
@@ -806,6 +807,22 @@ export function ThreadScreen({ route, navigation }: Props) {
     };
   }, [channel, canUseWati, phone, watiTemplates]);
 
+  // v1.323: keep the selected Wati template valid as visibility changes.
+  // Cheap (no network) — runs when the hidden set / template list changes:
+  // if the current pick is hidden or gone, fall back to the first visible
+  // template (or none). Done outside loadWati so a teammate-config change
+  // never triggers a thread reload.
+  useEffect(() => {
+    if (channel !== "wati") return;
+    const visible = watiTemplates.filter(
+      (t) =>
+        (!t.status || t.status === "APPROVED") && !watiTemplateHidden.has(t.name),
+    );
+    setWatiTemplateName((cur) =>
+      cur && visible.some((t) => t.name === cur) ? cur : visible[0]?.name || "",
+    );
+  }, [channel, watiTemplates, watiTemplateHidden]);
+
   // v1.316: Wati has no webhook, so the thread won't update on its own. Poll
   // every 15s while the Wati tab is open so incoming replies (and sends from
   // other devices) appear without leaving and reopening the chat. Silent
@@ -994,6 +1011,13 @@ export function ThreadScreen({ route, navigation }: Props) {
         if (!res.ok || !j?.ok) throw new Error(j?.detail || j?.error || `HTTP ${res.status}`);
         setComposer("");
       } else if (watiTemplateName) {
+        // v1.323: hard stop if an admin hid this template from the member
+        // after they selected it. The picker filter normally prevents this,
+        // but guard the send path too so a hidden template can never go out.
+        if (watiTemplateHidden.has(watiTemplateName)) {
+          Alert.alert("Template unavailable", "This template is no longer available to you.");
+          return;
+        }
         // v1.318: gather the per-variable values from the fill-in fields and
         // require every variable to be filled before sending.
         const tpl = watiTemplates.find((t) => t.name === watiTemplateName);
@@ -1037,7 +1061,7 @@ export function ThreadScreen({ route, navigation }: Props) {
     } finally {
       setWatiSending(false);
     }
-  }, [canUseWati, phone, watiSending, user, composer, watiSession.isOpen, watiTemplateName, headerName, watiTemplates, watiParams]);
+  }, [canUseWati, phone, watiSending, user, composer, watiSession.isOpen, watiTemplateName, headerName, watiTemplates, watiParams, watiTemplateHidden]);
 
   const scheduleDeliveryReconcile = useCallback((targetChatId: string) => {
     if (!targetChatId) return;
@@ -2422,7 +2446,11 @@ export function ThreadScreen({ route, navigation }: Props) {
               style={styles.watiTplScroll}
             >
               {watiTemplates
-                .filter((t) => !t.status || t.status === "APPROVED")
+                .filter(
+                  (t) =>
+                    (!t.status || t.status === "APPROVED") &&
+                    !watiTemplateHidden.has(t.name),
+                )
                 .map((t) => (
                   <TouchableOpacity
                     key={t.name}

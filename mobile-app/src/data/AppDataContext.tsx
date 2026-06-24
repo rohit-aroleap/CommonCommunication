@@ -119,6 +119,10 @@ interface AppDataValue {
   // admin-controlled in the desktop Team modal. Both true unless an admin
   // turned one off for this member.
   channelAccess: { periskope: boolean; wati: boolean };
+  // v1.323: Wati templates an admin has hidden from this member (by name).
+  // Empty = sees every template. Filters the Wati template picker so the
+  // phone enforces the same per-member visibility as the web composer.
+  watiTemplateHidden: Set<string>;
   // v1.223: team tags the current user is a member of (empty = no
   // narrowing). Drives the team-visibility filter in ChatsScreen.
   myTeamTags: Set<string> | null;
@@ -694,6 +698,26 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     return { periskope: true, wati: true };
   }, [teamMembers, user?.email]);
 
+  // v1.323: Wati templates an admin has hidden from this member (set in the
+  // desktop Wati Templates grid). A template is hidden only when
+  // teamMembers[myEmail].watiTemplates[name] === false; absent = visible.
+  // Empty Set = sees every template (back-compat / admins / no record).
+  const watiTemplateHidden = useMemo<Set<string>>(() => {
+    const myEmail = (user?.email || "").toLowerCase();
+    if (!myEmail) return new Set();
+    for (const m of Object.values(teamMembers || {})) {
+      if (m?.email && m.email.toLowerCase() === myEmail) {
+        const hidden = new Set<string>();
+        const wt = m.watiTemplates || {};
+        for (const [name, vis] of Object.entries(wt)) {
+          if (vis === false) hidden.add(name);
+        }
+        return hidden;
+      }
+    }
+    return new Set();
+  }, [teamMembers, user?.email]);
+
   // v1.223: derive team-tag membership from the same teamMembers record.
   // Empty Set = no team narrowing (full visibility — back-compat). Admin
   // membership is NOT checked here because we don't have isAdmin on
@@ -761,6 +785,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       dataReady,
       isLimited,
       channelAccess,
+      watiTemplateHidden,
       myTeamTags,
       myGrants,
       grantChatAccess,
@@ -792,6 +817,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       dataReady,
       isLimited,
       channelAccess,
+      watiTemplateHidden,
       myTeamTags,
       myGrants,
     ],

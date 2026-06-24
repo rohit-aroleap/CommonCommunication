@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.322</title>
+<title>CommonCommunication v1.323</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -1542,6 +1542,27 @@
   .modal .btn-primary { background: var(--green); color: white; }
   .modal .btn-secondary { background: var(--header); color: var(--text); }
 
+  /* v1.323: Wati template visibility matrix. Sticky header row (teammates)
+     and sticky first column (template name) so both stay anchored while the
+     grid scrolls in either direction. */
+  .wt-grid { border-collapse: separate; border-spacing: 0; font-size: 12px; width: max-content; }
+  .wt-grid th, .wt-grid td { border-bottom: 1px solid var(--border); padding: 7px 9px; }
+  .wt-grid thead th { position: sticky; top: 0; z-index: 2; background: var(--header);
+    font-weight: 700; font-size: 11px; color: var(--muted); }
+  .wt-grid .wt-firstcol, .wt-grid .wt-corner { position: sticky; left: 0; z-index: 1;
+    background: var(--panel); text-align: left; min-width: 210px; max-width: 280px; }
+  .wt-grid .wt-corner { z-index: 3; background: var(--header); }
+  .wt-grid .wt-mh { text-align: center; max-width: 112px; }
+  .wt-grid .wt-mh span { display: inline-block; max-width: 100px; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+  .wt-grid .wt-cell { text-align: center; }
+  .wt-grid .wt-name { font-weight: 600; cursor: pointer; color: var(--text); }
+  .wt-grid .wt-name:hover { text-decoration: underline; }
+  .wt-grid tbody tr.wt-trow:hover td { background: var(--hover); }
+  .wt-grid tbody tr.wt-trow:hover .wt-firstcol { background: var(--hover); }
+  .wt-grid .wt-detailrow td { background: var(--header); }
+  .wt-grid input[type="checkbox"] { width: 17px; height: 17px; cursor: pointer; accent-color: var(--green); }
+
   /* ---------- Misc ---------- */
   .config-warn {
     background: #fff7d6; border-bottom: 1px solid #f0e3a0;
@@ -2638,15 +2659,17 @@
      .msg-search-result / .msg-search-empty are reused for the inline
      row styling so we kept their definitions in the stylesheet. -->
 
-<!-- v1.322: Wati templates viewer — read-only list of every Wati template
-     with its approval status; click a row to see the message body. -->
+<!-- v1.323: Wati templates visibility grid — rows are templates (name +
+     approval status), columns are teammates. Tick a cell to let that teammate
+     use that template; untick to hide it from them. Everything is visible by
+     default. Click a template name to preview its message body. -->
 <div class="modal-back" id="watiTemplatesModal">
-  <div class="modal" style="width:640px; max-width:96vw; max-height:88vh; display:flex; flex-direction:column;">
+  <div class="modal" style="width:1000px; max-width:96vw; max-height:88vh; display:flex; flex-direction:column;">
     <h3>Wati templates</h3>
     <div style="font-size:12px; color:var(--muted); margin-bottom:12px;">
-      Every WhatsApp template on the Wati line, with its approval status. Click a template to see its message. New templates are created &amp; submitted in the Wati dashboard.
+      Tick which Wati templates each teammate can use. Everything is visible by default — untick a box to hide that template from that person. Click a template name to preview its message. Admins always see every template; new templates are created in the Wati dashboard.
     </div>
-    <div id="watiTplListBody" style="flex:1; overflow-y:auto; min-height:0;"></div>
+    <div id="watiTplListBody" style="flex:1; overflow:auto; min-height:0;"></div>
     <div class="actions" style="margin-top:12px;">
       <button class="btn secondary" id="watiTplModalClose">Close</button>
     </div>
@@ -2953,7 +2976,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.322";
+const APP_VERSION = "v1.323";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -3624,6 +3647,29 @@ function myChannelAccess() {
 // they have no team narrowing (= full visibility). Admin always returns
 // null. Reading the teams array off the same teamMembers record we
 // already use for `limited` so admin UI writes hit one consistent path.
+// v1.323: which Wati templates are HIDDEN from the signed-in member — set by
+// an admin in the Wati Templates grid. Returns a Set of hidden template names,
+// or null when the member sees every template (admin, or no team record, or
+// nothing hidden). Mirrors myChannelAccess(): a template is visible unless
+// config/teamMembers/{key}/watiTemplates/{name} === false.
+function myWatiHiddenTemplates() {
+  if (!currentUser || isAdmin(currentUser.email)) return null;
+  const myLower = String(currentUser.email || "").toLowerCase();
+  if (myLower) {
+    for (const m of Object.values(teamMembersCache || {})) {
+      if (m?.email && String(m.email).toLowerCase() === myLower) {
+        const wt = m.watiTemplates || {};
+        const hidden = new Set();
+        for (const [name, vis] of Object.entries(wt)) {
+          if (vis === false) hidden.add(name);
+        }
+        return hidden.size ? hidden : null;
+      }
+    }
+  }
+  return null;
+}
+
 function myTeamTags() {
   if (!currentUser) return null;
   if (isAdmin(currentUser.email)) return null;
@@ -5113,6 +5159,7 @@ function listenTeamMembers() {
     // member's Periskope/Wati access, reflect it in the open thread now.
     refreshChannelUi();
     updateWatiTemplatesBtn(); // v1.322: re-gate the Wati Templates button too
+    renderWatiTemplateOptions(); // v1.323: re-apply per-member template visibility
     // Live-refresh the open Team modal so newly-added phones appear immediately.
     if (teamModal.classList.contains("visible")) renderAllowedList();
   });
@@ -9636,11 +9683,12 @@ function isWatiEligibleThread() {
   return !(meta.chatType === "group" || String(meta.chatId || "").endsWith("@g.us"));
 }
 
-// v1.322: the Wati Templates topbar button is only meaningful for members
-// who can use the Wati line, so hide it for Periskope-only members. Admins
-// (and members with no channel record) always have Wati access.
+// v1.323: the Wati Templates panel is now an ADMIN tool — it writes per-member
+// template visibility into config/teamMembers (the same place the Team modal
+// writes). So gate the button to admins, exactly like the Team button. (In
+// v1.322 it was a read-only viewer shown to anyone with Wati access.)
 function updateWatiTemplatesBtn() {
-  if (watiTemplatesBtn) watiTemplatesBtn.style.display = myChannelAccess().wati ? "" : "none";
+  if (watiTemplatesBtn) watiTemplatesBtn.style.display = (currentUser && isAdmin(currentUser.email)) ? "" : "none";
 }
 
 function refreshChannelUi() {
@@ -9758,7 +9806,11 @@ function renderWatiTemplateOptions() {
   // v1.315: show ALL approved templates. The old "≤1 variable" gate is gone —
   // the fill-in panel below now collects every variable, so multi-variable
   // templates are selectable and sendable.
-  const approved = (watiTemplatesCache || []).filter((t) => (!t.status || t.status === "APPROVED"));
+  // v1.323: hide templates an admin has switched off for this member.
+  const hidden = myWatiHiddenTemplates();
+  const approved = (watiTemplatesCache || [])
+    .filter((t) => (!t.status || t.status === "APPROVED"))
+    .filter((t) => !hidden || !hidden.has(t.name));
   const current = watiTemplateSelect.value;
   if (!approved.length) {
     watiTemplateSelect.innerHTML = `<option value="">No Wati templates ready</option>`;
@@ -12006,38 +12058,94 @@ function renderWatiTemplatesAdminList() {
   const body = $("watiTplListBody");
   if (!body) return;
   const tpls = [...(watiTemplatesCache || [])].sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  // Columns = non-admin teammates with an email. Admins always see every
+  // template (myWatiHiddenTemplates returns null for them), so they're not
+  // shown as columns.
+  const members = Object.entries(teamMembersCache || {})
+    .map(([key, m]) => ({ key, name: (m && (m.name || m.email)) || key, email: (m && m.email) || "" }))
+    .filter((m) => m.email && !isAdmin(m.email))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
   if (!tpls.length) {
     body.innerHTML = `<div style="padding:24px; text-align:center; color:var(--muted);">No Wati templates found.</div>`;
     return;
   }
-  body.innerHTML = tpls.map((t, i) => {
+  if (!members.length) {
+    body.innerHTML = `<div style="padding:24px; text-align:center; color:var(--muted);">No teammates to configure yet. Add trainers in the Team panel, then choose which templates each can use here.</div>`;
+    return;
+  }
+
+  // A template is visible to a member unless explicitly switched off
+  // (config/teamMembers/{key}/watiTemplates/{name} === false).
+  const isVisible = (key, name) => (((teamMembersCache[key] || {}).watiTemplates || {})[name] !== false);
+
+  const head = `<thead><tr>
+      <th class="wt-corner">Template</th>
+      ${members.map((m) => `<th class="wt-mh" title="${escapeHtml(m.email)}"><span>${escapeHtml(m.name)}</span></th>`).join("")}
+    </tr></thead>`;
+
+  const span = members.length + 1;
+  const rows = tpls.map((t, i) => {
     const n = (t.params || []).length;
+    const cells = members.map((m) => {
+      const checked = isVisible(m.key, t.name) ? "checked" : "";
+      return `<td class="wt-cell"><input type="checkbox" data-tpl="${escapeHtml(t.name)}" data-key="${escapeHtml(m.key)}" ${checked}></td>`;
+    }).join("");
     return `
-    <div style="border-bottom:1px solid var(--border);">
-      <div class="wt-head" data-i="${i}" style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:11px 4px; cursor:pointer;">
-        <span style="font-weight:600; font-size:13px; word-break:break-word;">${escapeHtml(t.name || "(unnamed)")}</span>
-        <span style="display:flex; gap:8px; align-items:center; flex-shrink:0;">${watiStatusBadge(t.status)}<span class="wt-caret" style="color:var(--muted); font-size:12px; transition:transform .15s;">▶</span></span>
-      </div>
-      <div class="wt-detail" data-i="${i}" style="display:none; padding:2px 4px 14px;">
-        <div style="color:var(--muted); font-size:11px; margin-bottom:7px;">${escapeHtml(t.category || "—")} · ${escapeHtml(t.language || "—")} · ${n} variable${n === 1 ? "" : "s"}</div>
-        <div style="white-space:pre-wrap; word-break:break-word; background:var(--header); border-radius:8px; padding:9px 11px; font-size:13px; line-height:1.45;">${escapeHtml(t.bodyText || "(no body text)")}</div>
-      </div>
-    </div>`;
+      <tr class="wt-trow">
+        <td class="wt-firstcol">
+          <span class="wt-name" data-i="${i}">${escapeHtml(t.name)}</span>
+          <span style="margin-left:6px;">${watiStatusBadge(t.status)}</span>
+        </td>
+        ${cells}
+      </tr>
+      <tr class="wt-detailrow" data-i="${i}" style="display:none;">
+        <td colspan="${span}">
+          <div style="color:var(--muted); font-size:11px; margin-bottom:6px;">${escapeHtml(t.category || "—")} · ${escapeHtml(t.language || "—")} · ${n} variable${n === 1 ? "" : "s"}</div>
+          <div style="white-space:pre-wrap; word-break:break-word; max-width:560px; background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:9px 11px; font-size:13px; line-height:1.45;">${escapeHtml(t.bodyText || "(no body text)")}</div>
+        </td>
+      </tr>`;
   }).join("");
-  body.querySelectorAll(".wt-head").forEach((h) => {
-    h.onclick = () => {
-      const d = body.querySelector(`.wt-detail[data-i="${h.dataset.i}"]`);
-      const caret = h.querySelector(".wt-caret");
-      if (!d) return;
-      const open = d.style.display !== "none";
-      d.style.display = open ? "none" : "block";
-      if (caret) caret.style.transform = open ? "none" : "rotate(90deg)";
+
+  body.innerHTML = `<table class="wt-grid">${head}<tbody>${rows}</tbody></table>`;
+
+  // Click a template name to preview / hide its message body.
+  body.querySelectorAll(".wt-name").forEach((nameEl) => {
+    nameEl.onclick = () => {
+      const d = body.querySelector(`.wt-detailrow[data-i="${nameEl.dataset.i}"]`);
+      if (d) d.style.display = d.style.display === "none" ? "table-row" : "none";
+    };
+  });
+
+  // Per-cell visibility toggle → write to Firebase. Checked = visible (delete
+  // the override); unchecked = hidden (write false). Mirrors the channel chips.
+  body.querySelectorAll('input[type="checkbox"][data-tpl]').forEach((cb) => {
+    cb.onchange = async () => {
+      const name = cb.dataset.tpl;
+      const key = cb.dataset.key;
+      // Guard the Firebase path: template names should be key-safe (Meta only
+      // allows ^[a-z0-9_]+$) and key is the already-sanitized emailKey. Bail if
+      // either is missing or unsafe rather than write a malformed path.
+      if (!name || !key || /[.#$\[\]\/]/.test(name)) {
+        cb.checked = !cb.checked;
+        alert("Can't save: this template name isn't a valid key.");
+        return;
+      }
+      try {
+        await set(ref(db, `${ROOT}/config/teamMembers/${key}/watiTemplates/${name}`), cb.checked ? null : false);
+      } catch (e) {
+        cb.checked = !cb.checked; // revert optimistic toggle on failure
+        alert("Couldn't save: " + (e && e.message ? e.message : e));
+      }
     };
   });
 }
 
 async function openWatiTemplatesModal() {
   if (!watiTemplatesModal) return;
+  // v1.323: defence in depth — this panel writes per-member config, so only
+  // admins may open it (the button is already admin-gated).
+  if (!currentUser || !isAdmin(currentUser.email)) return;
   watiTemplatesModal.classList.add("visible");
   const body = $("watiTplListBody");
   if (body) body.innerHTML = `<div style="padding:24px; text-align:center; color:var(--muted);">Loading templates…</div>`;
