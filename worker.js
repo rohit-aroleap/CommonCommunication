@@ -923,18 +923,7 @@ async function handleWatiMessages(request, env) {
   if (!res.ok) {
     return json({ ok: false, error: "wati_messages_failed", detail: watiError(j, res.status) }, 502);
   }
-  // Wati's getMessages nests the message array under `messages.items` (with
-  // paging metadata as sibling keys). Reading `j.messages` directly gave the
-  // wrapper OBJECT, which isn't an array — so EVERY API message (incoming
-  // replies AND the real outgoing `finalText`) was silently dropped and only
-  // the local placeholder echoes showed. Unwrap items; keep the older bare-
-  // array / items / data shapes as fallbacks.
-  const raw = Array.isArray(j?.messages?.items)
-    ? j.messages.items
-    : Array.isArray(j?.messages)
-      ? j.messages
-      : (j?.items || j?.data || []);
-  const apiMessages = normalizeWatiMessages(raw, phone);
+  const apiMessages = normalizeWatiMessages(extractWatiMessageArray(j), phone);
 
   const local = await fbGet(env, `${ROOT}/watiChats/${phone}/messages`);
   // Drop a local optimistic OUTBOUND echo once the Wati API has caught up to
@@ -1151,8 +1140,21 @@ async function fetchRecentWatiMessages(cfg, phone, limit = 50) {
   });
   const j = await safeJson(res);
   if (!res.ok) return { error: "wati_messages_failed", detail: watiError(j, res.status) };
-  const raw = j?.messages || j?.items || j?.data || [];
+  const raw = extractWatiMessageArray(j);
   return { messages: normalizeWatiMessages(raw, phone) };
+}
+
+// Wati's getMessages nests the message array under `messages.items` (paging
+// metadata sits as sibling keys). Reading `j.messages` directly returns that
+// wrapper OBJECT — not an array — so messages get silently dropped. Unwrap
+// items; keep older bare-array / items / data shapes as fallbacks. Used by
+// BOTH the thread fetch and the 24h-window send check, which MUST agree.
+function extractWatiMessageArray(j) {
+  return Array.isArray(j?.messages?.items)
+    ? j.messages.items
+    : Array.isArray(j?.messages)
+      ? j.messages
+      : (j?.items || j?.data || []);
 }
 
 function normalizeWatiMessages(raw, phone) {
