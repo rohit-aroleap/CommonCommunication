@@ -181,6 +181,7 @@ export function ThreadScreen({ route, navigation }: Props) {
     markChatSeen,
     bumpSendActivity,
     templates,
+    channelAccess,
   } = useAppData();
 
   // v1.188: orphan-free teamUsers for assignee pickers. See lib/teamFilter
@@ -212,7 +213,8 @@ export function ThreadScreen({ route, navigation }: Props) {
     !isDm &&
     (meta.chatType === "group" ||
       String(meta.chatId || "").endsWith("@g.us"));
-  const canUseWati = !isDm && !isGroup;
+  // v1.319: gate Wati by the member's admin-set channel access.
+  const canUseWati = !isDm && !isGroup && channelAccess.wati;
   const chatId = isDm ? "" : meta.chatId || chatKeyToChatId(chatKey);
   const phone = isDm ? "" : meta.phone || chatId.split("@")[0];
 
@@ -263,7 +265,10 @@ export function ThreadScreen({ route, navigation }: Props) {
   const [composer, setComposer] = useState("");
   useEffect(() => {
     if (!canUseWati && channel === "wati") setChannel("periskope");
-  }, [canUseWati, channel]);
+    // v1.319: member with Periskope disabled defaults to the Wati tab.
+    else if (!channelAccess.periskope && canUseWati && channel === "periskope")
+      setChannel("wati");
+  }, [canUseWati, channel, channelAccess.periskope]);
   useEffect(() => {
     setWatiMessages([]);
     setWatiSession({ isOpen: false });
@@ -2170,7 +2175,9 @@ export function ThreadScreen({ route, navigation }: Props) {
       behavior={Platform.OS === "ios" ? "padding" : undefined}
       keyboardVerticalOffset={Platform.OS === "ios" ? 80 : 0}
     >
-      {canUseWati && (
+      {/* v1.319: tab row only when the member has BOTH channels; with one
+          disabled the single channel shows with no tabs (less confusion). */}
+      {canUseWati && channelAccess.periskope && (
         <View style={styles.channelTabs}>
           <TouchableOpacity
             style={[styles.channelTab, channel === "periskope" && styles.channelTabActive]}

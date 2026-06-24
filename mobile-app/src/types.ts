@@ -206,6 +206,9 @@ export interface TeamMember {
   // a teammate assigns them a ticket which unlocks the customer for the
   // ticket's lifetime. Toggled via the desktop Team modal checkbox.
   limited?: boolean;
+  // v1.319: per-member channel (tab) access, set in the desktop Team modal.
+  // A channel is visible unless explicitly false; absent = both visible.
+  channels?: { periskope?: boolean; wati?: boolean };
 }
 
 // v1.196: per-user manual customer-access grants for limited trainers.

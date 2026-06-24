@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.318</title>
+<title>CommonCommunication v1.319</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2937,7 +2937,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.318";
+const APP_VERSION = "v1.319";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -3584,6 +3584,23 @@ function isLimitedUser() {
   }
   return false;
 }
+// v1.319: which channels (tabs) the signed-in member may see — admin-controlled
+// in the Team modal. A channel is ON unless explicitly disabled at
+// config/teamMembers/{key}/channels/{channel} === false. Admins (and anyone
+// with no team record) always see both. Gates the Periskope / Wati tabs.
+function myChannelAccess() {
+  if (!currentUser || isAdmin(currentUser.email)) return { periskope: true, wati: true };
+  const myLower = String(currentUser.email || "").toLowerCase();
+  if (myLower) {
+    for (const m of Object.values(teamMembersCache || {})) {
+      if (m?.email && String(m.email).toLowerCase() === myLower) {
+        const ch = m.channels || {};
+        return { periskope: ch.periskope !== false, wati: ch.wati !== false };
+      }
+    }
+  }
+  return { periskope: true, wati: true };
+}
 // v1.243: returns the current user's team tags as a Set, or null when
 // they have no team narrowing (= full visibility). Admin always returns
 // null. Reading the teams array off the same teamMembers record we
@@ -3807,6 +3824,14 @@ function renderAllowedList() {
       const on = memberTeams.has(id);
       return `<button class="team-chip ${on ? "on" : ""}" data-key="${escapeHtml(key)}" data-team="${escapeHtml(id)}" title="${escapeHtml(label)}">${escapeHtml(label)}</button>`;
     }).join("");
+    // v1.319: per-member channel (tab) access. A channel is ON unless
+    // explicitly disabled. Reuses .team-chip styling; distinguished by the
+    // data-channel attribute so its click handler is separate.
+    const memberCh = member.channels || {};
+    const channelChips = [["periskope", "Periskope"], ["wati", "Wati"]].map(([id, label]) => {
+      const on = memberCh[id] !== false;
+      return `<button class="team-chip ${on ? "on" : ""}" data-key="${escapeHtml(key)}" data-channel="${escapeHtml(id)}" title="${escapeHtml(label)} tab — visible to this member (both on by default)">${escapeHtml(label)}</button>`;
+    }).join("");
     const phonesHtml = phonePills ||
       `<span class="phones-empty">No phones mapped</span>`;
     return `<div class="team-member-row">
@@ -3825,6 +3850,10 @@ function renderAllowedList() {
       </div>
       <div class="team-chip-row" title="Teams: trainer sees only customers whose Ferra tag belongs to one of these teams. Empty = sees everyone.">
         ${teamChips}
+      </div>
+      <div class="team-chip-row" title="Channels: which tabs (Periskope / Wati) this member sees in their app. Both on by default; turn one off so they only see that tab.">
+        <span style="font-size:11px; color:var(--muted); align-self:center; margin-right:2px;">Tabs:</span>
+        ${channelChips}
       </div>
       <div class="body">
         ${phonesHtml}
@@ -3863,7 +3892,7 @@ function renderAllowedList() {
   // the key so the resulting object stays compact (no orphan `false`
   // values). Other tabs see the update via the existing teamMembers
   // listener and refresh the visibility filter automatically.
-  allowedListEl.querySelectorAll(".team-chip").forEach((btn) => {
+  allowedListEl.querySelectorAll(".team-chip[data-team]").forEach((btn) => {
     btn.onclick = async () => {
       const key = btn.dataset.key;
       const team = btn.dataset.team;
@@ -3876,6 +3905,30 @@ function renderAllowedList() {
       await set(
         ref(db, `${ROOT}/config/teamMembers/${key}/teams/${team}`),
         turningOn ? true : null,
+      );
+    };
+  });
+  // v1.319: channel (tab) chips. Toggle Periskope / Wati visibility for this
+  // member. Stored at config/teamMembers/{key}/channels/{channel}: write
+  // `false` to disable, `null` (delete) to re-enable (default = both on).
+  // Guarded so a member can't be left with zero channels.
+  allowedListEl.querySelectorAll(".team-chip[data-channel]").forEach((btn) => {
+    btn.onclick = async () => {
+      const key = btn.dataset.key;
+      const channel = btn.dataset.channel;
+      const turningOn = !btn.classList.contains("on");
+      if (!turningOn) {
+        const ch = (teamMembersCache[key] || {}).channels || {};
+        const other = channel === "wati" ? "periskope" : "wati";
+        if (ch[other] === false) {
+          alert("At least one channel must stay enabled for this member.");
+          return;
+        }
+      }
+      btn.classList.toggle("on", turningOn);
+      await set(
+        ref(db, `${ROOT}/config/teamMembers/${key}/channels/${channel}`),
+        turningOn ? null : false,
       );
     };
   });
@@ -5037,6 +5090,9 @@ function listenTeamMembers() {
     rebuildDmRows();
     // Customer list filtering and the team picker both depend on this.
     renderChatList(lastChatRows);
+    // v1.319: re-gate the channel tabs live — if the admin changed this
+    // member's Periskope/Wati access, reflect it in the open thread now.
+    refreshChannelUi();
     // Live-refresh the open Team modal so newly-added phones appear immediately.
     if (teamModal.classList.contains("visible")) renderAllowedList();
   });
@@ -9555,14 +9611,22 @@ function showThreadHeaderCustomerTools() {
 
 function isWatiEligibleThread() {
   if (!currentChatId || isDmKey(currentChatId)) return false;
+  if (!myChannelAccess().wati) return false; // v1.319: member lacks Wati access
   const meta = chatsCache[currentChatId] || {};
   return !(meta.chatType === "group" || String(meta.chatId || "").endsWith("@g.us"));
 }
 
 function refreshChannelUi() {
-  const canWati = isWatiEligibleThread();
+  // v1.319: gate the Periskope / Wati tabs by the member's channel access.
+  const access = myChannelAccess();
+  const canWati = isWatiEligibleThread(); // already includes access.wati
+  const canPeriskope = access.periskope;
+  // Keep currentChannel on something the member can actually see.
   if (!canWati) currentChannel = "periskope";
-  if (channelTabs) channelTabs.style.display = canWati ? "flex" : "none";
+  else if (!canPeriskope) currentChannel = "wati";
+  // Show the tab row only when BOTH channels are available on this chat;
+  // otherwise the single available channel shows with no tabs (less confusion).
+  if (channelTabs) channelTabs.style.display = (canWati && canPeriskope) ? "flex" : "none";
   if (periskopeTab) periskopeTab.classList.toggle("active", currentChannel === "periskope");
   if (watiTab) watiTab.classList.toggle("active", currentChannel === "wati");
   if (ticketsBanner) ticketsBanner.style.display = currentChannel === "wati" ? "none" : ticketsBanner.style.display;

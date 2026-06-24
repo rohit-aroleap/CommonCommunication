@@ -115,6 +115,10 @@ interface AppDataValue {
   //               older than 14 days no longer surface the chat.
   //   grantChatAccess(chatKey): writes a grant for the current user.
   isLimited: boolean;
+  // v1.319: which channels (tabs) this member sees — Periskope / Wati,
+  // admin-controlled in the desktop Team modal. Both true unless an admin
+  // turned one off for this member.
+  channelAccess: { periskope: boolean; wati: boolean };
   // v1.223: team tags the current user is a member of (empty = no
   // narrowing). Drives the team-visibility filter in ChatsScreen.
   myTeamTags: Set<string> | null;
@@ -673,6 +677,23 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     return false;
   }, [teamMembers, user?.email]);
 
+  // v1.319: which channels (tabs) the current user may see. A channel is ON
+  // unless explicitly disabled at teamMembers[myEmail].channels.{channel}.
+  // No record / no channels = both (admins included — they have no record
+  // restriction). Mirrors isLimited.
+  const channelAccess = useMemo(() => {
+    const myEmail = (user?.email || "").toLowerCase();
+    if (myEmail) {
+      for (const m of Object.values(teamMembers || {})) {
+        if (m?.email && m.email.toLowerCase() === myEmail) {
+          const ch = m.channels || {};
+          return { periskope: ch.periskope !== false, wati: ch.wati !== false };
+        }
+      }
+    }
+    return { periskope: true, wati: true };
+  }, [teamMembers, user?.email]);
+
   // v1.223: derive team-tag membership from the same teamMembers record.
   // Empty Set = no team narrowing (full visibility — back-compat). Admin
   // membership is NOT checked here because we don't have isAdmin on
@@ -739,6 +760,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       templates,
       dataReady,
       isLimited,
+      channelAccess,
       myTeamTags,
       myGrants,
       grantChatAccess,
@@ -769,6 +791,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       templates,
       dataReady,
       isLimited,
+      channelAccess,
       myTeamTags,
       myGrants,
     ],
