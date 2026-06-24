@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.326</title>
+<title>CommonCommunication v1.327</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -1561,14 +1561,17 @@
   .wt-grid tbody tr.wt-trow:hover td { background: var(--hover); }
   .wt-grid tbody tr.wt-trow:hover .wt-firstcol { background: var(--hover); }
   .wt-grid .wt-detailrow td { background: var(--header); }
+  /* v1.327: keep the expanded preview (team dropdown + body) pinned to the left
+     so it stays visible no matter how far the grid is scrolled horizontally. */
+  .wt-grid .wt-detailbox { position: sticky; left: 0; display: inline-block; max-width: 600px; }
   .wt-grid input[type="checkbox"] { width: 17px; height: 17px; cursor: pointer; accent-color: var(--green); }
   /* v1.325: team group headers + per-template tag dropdown */
   .wt-grid .wt-grouprow td { background: var(--active); padding: 0; border-bottom: 1px solid var(--border); }
   .wt-grid .wt-grouplabel { position: sticky; left: 0; display: inline-block;
     font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
     color: var(--green-dark); padding: 7px 9px; }
-  .wt-grid select.wt-tag { margin-top: 5px; max-width: 160px; font-size: 11px;
-    padding: 2px 4px; border: 1px solid var(--border); border-radius: 5px;
+  .wt-grid select.wt-tag { max-width: 180px; font-size: 12px;
+    padding: 3px 6px; border: 1px solid var(--border); border-radius: 5px;
     background: var(--panel); color: var(--text); cursor: pointer; }
   /* v1.326: the "Auto" marker column — tinted + divided off from the teammate columns */
   .wt-grid .wt-autocol { background: var(--header); border-right: 2px solid var(--border); }
@@ -2988,7 +2991,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.326";
+const APP_VERSION = "v1.327";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -3073,6 +3076,7 @@ let currentView = "chats";        // "chats" | "team" — sidebar toggle
 let watiTemplatesCache = [];
 let watiTemplateTags = {};        // v1.325: templateName -> team tag (sales/installation/...) — admin grid
 let watiTemplateAuto = {};        // v1.326: templateName -> true if sent automatically (marker only, no effect)
+let watiOpenDetails = new Set();  // v1.327: template names whose preview row is expanded (survives re-render)
 let watiMessagesCache = [];
 let watiSession = { isOpen: false };
 let watiLoading = false;
@@ -12144,33 +12148,43 @@ function renderWatiTemplatesAdminList() {
       const checked = isVisible(m.key, t.name) ? "checked" : "";
       return `<td class="wt-cell"><input type="checkbox" data-tpl="${escapeHtml(t.name)}" data-key="${escapeHtml(m.key)}" ${checked}></td>`;
     }).join("");
+    const open = watiOpenDetails.has(t.name);
     rowsHtml += `
       <tr class="wt-trow">
         <td class="wt-firstcol">
           <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-            <span class="wt-name" data-i="${i}">${escapeHtml(t.name)}</span>
+            <span class="wt-name" data-i="${i}" data-tpl="${escapeHtml(t.name)}" title="Click to preview the message &amp; set its team">${escapeHtml(t.name)}</span>
             ${watiStatusBadge(t.status)}
           </div>
-          <select class="wt-tag" data-tpl="${escapeHtml(t.name)}" title="Team — pick one to group this template">${tagOptions(watiTemplateTags[t.name])}</select>
         </td>
         <td class="wt-cell wt-autocol"><input type="checkbox" class="wt-auto-cb" data-tpl="${escapeHtml(t.name)}" ${watiTemplateAuto[t.name] === true ? "checked" : ""} title="Sent automatically (marker only)"></td>
         ${cells}
       </tr>
-      <tr class="wt-detailrow" data-i="${i}" style="display:none;">
+      <tr class="wt-detailrow" data-i="${i}" style="display:${open ? "table-row" : "none"};">
         <td colspan="${span}">
-          <div style="color:var(--muted); font-size:11px; margin-bottom:6px;">${escapeHtml(t.category || "—")} · ${escapeHtml(t.language || "—")} · ${n} variable${n === 1 ? "" : "s"}</div>
-          <div style="white-space:pre-wrap; word-break:break-word; max-width:560px; background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:9px 11px; font-size:13px; line-height:1.45;">${escapeHtml(t.bodyText || "(no body text)")}</div>
+          <div class="wt-detailbox">
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px; flex-wrap:wrap;">
+              <span style="font-size:11px; color:var(--muted); font-weight:700; text-transform:uppercase; letter-spacing:.03em;">Team</span>
+              <select class="wt-tag" data-tpl="${escapeHtml(t.name)}" title="Pick a team to group this template">${tagOptions(watiTemplateTags[t.name])}</select>
+            </div>
+            <div style="color:var(--muted); font-size:11px; margin-bottom:6px;">${escapeHtml(t.category || "—")} · ${escapeHtml(t.language || "—")} · ${n} variable${n === 1 ? "" : "s"}</div>
+            <div style="white-space:pre-wrap; word-break:break-word; background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:9px 11px; font-size:13px; line-height:1.45;">${escapeHtml(t.bodyText || "(no body text)")}</div>
+          </div>
         </td>
       </tr>`;
   });
 
   body.innerHTML = `<table class="wt-grid">${head}<tbody>${rowsHtml}</tbody></table>`;
 
-  // Click a template name to preview / hide its message body.
+  // Click a template name to preview / hide its message body (+ team dropdown).
   body.querySelectorAll(".wt-name").forEach((nameEl) => {
     nameEl.onclick = () => {
       const d = body.querySelector(`.wt-detailrow[data-i="${nameEl.dataset.i}"]`);
-      if (d) d.style.display = d.style.display === "none" ? "table-row" : "none";
+      if (!d) return;
+      const willOpen = d.style.display === "none";
+      d.style.display = willOpen ? "table-row" : "none";
+      const name = nameEl.dataset.tpl;
+      if (name) { if (willOpen) watiOpenDetails.add(name); else watiOpenDetails.delete(name); }
     };
   });
 
@@ -12206,7 +12220,10 @@ function renderWatiTemplatesAdminList() {
       if (!name || /[.#$\[\]\/]/.test(name)) return;
       const prev = watiTemplateTags[name];
       if (tag) watiTemplateTags[name] = tag; else delete watiTemplateTags[name];
+      watiOpenDetails.add(name); // keep this template's preview open as it moves
       renderWatiTemplatesAdminList(); // optimistic re-sort into the new group
+      const moved = body.querySelector(`.wt-name[data-tpl="${name}"]`);
+      if (moved && moved.scrollIntoView) moved.scrollIntoView({ block: "nearest" });
       try {
         await set(ref(db, `${ROOT}/config/watiTemplateTags/${name}`), tag || null);
       } catch (e) {
@@ -12243,6 +12260,7 @@ async function openWatiTemplatesModal() {
   // v1.323: defence in depth — this panel writes per-member config, so only
   // admins may open it (the button is already admin-gated).
   if (!currentUser || !isAdmin(currentUser.email)) return;
+  watiOpenDetails = new Set(); // v1.327: start with all previews collapsed
   watiTemplatesModal.classList.add("visible");
   const body = $("watiTplListBody");
   if (body) body.innerHTML = `<div style="padding:24px; text-align:center; color:var(--muted);">Loading templates…</div>`;
