@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.321</title>
+<title>CommonCommunication v1.322</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2270,6 +2270,7 @@
            having to rip the .compact selectors out one by one. -->
       <button class="logout" id="ticketsBtn" style="margin-right:6px;" title="All tickets">🎫 All tickets</button>
       <button class="logout" id="templatesBtn" style="display:none; margin-right:6px;" title="Manage quick reply templates">📋 Templates</button>
+      <button class="logout" id="watiTemplatesBtn" style="display:none; margin-right:6px;" title="Wati templates & their approval status">📄 Wati Templates</button>
       <button class="logout" id="namesBtn" style="display:none; margin-right:6px;" title="Name unknown contacts">📝 Names</button>
       <button class="logout" id="backfillBtn" style="display:none; margin-right:6px;" title="Import chat history from Periskope">📥 Backfill</button>
       <!-- v1.203: repurposed from "🚨 Triage all" → "🧠 AI Inbox"
@@ -2637,6 +2638,21 @@
      .msg-search-result / .msg-search-empty are reused for the inline
      row styling so we kept their definitions in the stylesheet. -->
 
+<!-- v1.322: Wati templates viewer — read-only list of every Wati template
+     with its approval status; click a row to see the message body. -->
+<div class="modal-back" id="watiTemplatesModal">
+  <div class="modal" style="width:640px; max-width:96vw; max-height:88vh; display:flex; flex-direction:column;">
+    <h3>Wati templates</h3>
+    <div style="font-size:12px; color:var(--muted); margin-bottom:12px;">
+      Every WhatsApp template on the Wati line, with its approval status. Click a template to see its message. New templates are created &amp; submitted in the Wati dashboard.
+    </div>
+    <div id="watiTplListBody" style="flex:1; overflow-y:auto; min-height:0;"></div>
+    <div class="actions" style="margin-top:12px;">
+      <button class="btn secondary" id="watiTplModalClose">Close</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-back" id="ticketsModal">
   <div class="modal" style="width:920px; max-width:96vw; height:680px; max-height:88vh; display:flex; flex-direction:column;">
     <h3 style="margin-bottom:6px;">All tickets</h3>
@@ -2937,7 +2953,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.321";
+const APP_VERSION = "v1.322";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -3044,6 +3060,8 @@ const threadActive = $("threadActive");
 const threadContent = $("threadContent");
 const ticketsBtn = $("ticketsBtn");
 const templatesBtn = $("templatesBtn");
+const watiTemplatesBtn = $("watiTemplatesBtn");
+const watiTemplatesModal = $("watiTemplatesModal");
 const templatesModal = $("templatesModal");
 const tplList = $("tplList");
 const tplNameInput = $("tplNameInput");
@@ -3511,6 +3529,7 @@ onAuthStateChanged(auth, async (user) => {
     // pinging an admin. Writes still go to /config/templates and are
     // visible to all (same path as before).
     templatesBtn.style.display = "";
+    updateWatiTemplatesBtn(); // v1.322: show for members with Wati access
     ferraRefreshBtn.style.display = isAdmin(user.email) ? "" : "none";
     listenFerraData();
     await update(ref(db, `${ROOT}/users/${user.uid}`), {
@@ -5093,6 +5112,7 @@ function listenTeamMembers() {
     // v1.319: re-gate the channel tabs live — if the admin changed this
     // member's Periskope/Wati access, reflect it in the open thread now.
     refreshChannelUi();
+    updateWatiTemplatesBtn(); // v1.322: re-gate the Wati Templates button too
     // Live-refresh the open Team modal so newly-added phones appear immediately.
     if (teamModal.classList.contains("visible")) renderAllowedList();
   });
@@ -9616,6 +9636,13 @@ function isWatiEligibleThread() {
   return !(meta.chatType === "group" || String(meta.chatId || "").endsWith("@g.us"));
 }
 
+// v1.322: the Wati Templates topbar button is only meaningful for members
+// who can use the Wati line, so hide it for Periskope-only members. Admins
+// (and members with no channel record) always have Wati access.
+function updateWatiTemplatesBtn() {
+  if (watiTemplatesBtn) watiTemplatesBtn.style.display = myChannelAccess().wati ? "" : "none";
+}
+
 function refreshChannelUi() {
   // v1.319: gate the Periskope / Wati tabs by the member's channel access.
   const access = myChannelAccess();
@@ -9713,8 +9740,10 @@ function watiPhoneForCurrentChat() {
   return String(meta.phone || (meta.chatId || currentChatId || "").split("@")[0]).replace(/\D/g, "");
 }
 
-async function loadWatiTemplates() {
-  if (watiTemplatesCache.length) return watiTemplatesCache;
+async function loadWatiTemplates(force = false) {
+  // v1.322: force=true bypasses the cache so the Wati Templates viewer always
+  // shows current approval status (which changes server-side, not in the app).
+  if (!force && watiTemplatesCache.length) return watiTemplatesCache;
   if (!WORKER_URL) throw new Error("Worker URL not configured");
   const res = await fetch(`${WORKER_URL}/wati/templates`);
   const j = await res.json().catch(() => ({}));
@@ -11959,6 +11988,72 @@ templatesBtn.onclick = () => {
   templatesModal.classList.add("visible");
 };
 tplClose.onclick = () => templatesModal.classList.remove("visible");
+
+// ── Wati templates viewer (v1.322) ───────────────────────────────────────
+// Read-only list of every Wati template with its approval status. Click a
+// row to reveal the message body + category/language/variable count. New
+// templates are created in the Wati dashboard, not here.
+function watiStatusBadge(status) {
+  const s = String(status || "").toUpperCase();
+  let bg = "#e5e7eb", fg = "#374151", label = s || "UNKNOWN";
+  if (s === "APPROVED") { bg = "#dcfce7"; fg = "#166534"; label = "Approved"; }
+  else if (s === "PENDING" || s === "IN_REVIEW" || s === "SUBMITTED") { bg = "#fef9c3"; fg = "#854d0e"; label = "Pending"; }
+  else if (s === "REJECTED" || s === "FAILED") { bg = "#fee2e2"; fg = "#991b1b"; label = s === "FAILED" ? "Failed" : "Rejected"; }
+  return `<span style="background:${bg}; color:${fg}; padding:2px 9px; border-radius:11px; font-size:11px; font-weight:700; white-space:nowrap;">${escapeHtml(label)}</span>`;
+}
+
+function renderWatiTemplatesAdminList() {
+  const body = $("watiTplListBody");
+  if (!body) return;
+  const tpls = [...(watiTemplatesCache || [])].sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  if (!tpls.length) {
+    body.innerHTML = `<div style="padding:24px; text-align:center; color:var(--muted);">No Wati templates found.</div>`;
+    return;
+  }
+  body.innerHTML = tpls.map((t, i) => {
+    const n = (t.params || []).length;
+    return `
+    <div style="border-bottom:1px solid var(--border);">
+      <div class="wt-head" data-i="${i}" style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:11px 4px; cursor:pointer;">
+        <span style="font-weight:600; font-size:13px; word-break:break-word;">${escapeHtml(t.name || "(unnamed)")}</span>
+        <span style="display:flex; gap:8px; align-items:center; flex-shrink:0;">${watiStatusBadge(t.status)}<span class="wt-caret" style="color:var(--muted); font-size:12px; transition:transform .15s;">▶</span></span>
+      </div>
+      <div class="wt-detail" data-i="${i}" style="display:none; padding:2px 4px 14px;">
+        <div style="color:var(--muted); font-size:11px; margin-bottom:7px;">${escapeHtml(t.category || "—")} · ${escapeHtml(t.language || "—")} · ${n} variable${n === 1 ? "" : "s"}</div>
+        <div style="white-space:pre-wrap; word-break:break-word; background:var(--header); border-radius:8px; padding:9px 11px; font-size:13px; line-height:1.45;">${escapeHtml(t.bodyText || "(no body text)")}</div>
+      </div>
+    </div>`;
+  }).join("");
+  body.querySelectorAll(".wt-head").forEach((h) => {
+    h.onclick = () => {
+      const d = body.querySelector(`.wt-detail[data-i="${h.dataset.i}"]`);
+      const caret = h.querySelector(".wt-caret");
+      if (!d) return;
+      const open = d.style.display !== "none";
+      d.style.display = open ? "none" : "block";
+      if (caret) caret.style.transform = open ? "none" : "rotate(90deg)";
+    };
+  });
+}
+
+async function openWatiTemplatesModal() {
+  if (!watiTemplatesModal) return;
+  watiTemplatesModal.classList.add("visible");
+  const body = $("watiTplListBody");
+  if (body) body.innerHTML = `<div style="padding:24px; text-align:center; color:var(--muted);">Loading templates…</div>`;
+  try {
+    await loadWatiTemplates(true);
+    renderWatiTemplatesAdminList();
+  } catch (e) {
+    if (body) body.innerHTML = `<div style="padding:24px; text-align:center; color:#d9534f;">Couldn't load templates: ${escapeHtml(String(e && e.message ? e.message : e))}</div>`;
+  }
+}
+
+if (watiTemplatesBtn) watiTemplatesBtn.onclick = openWatiTemplatesModal;
+{
+  const watiTplClose = $("watiTplModalClose");
+  if (watiTplClose) watiTplClose.onclick = () => watiTemplatesModal.classList.remove("visible");
+}
 tplSave.onclick = async () => {
   const name = tplNameInput.value.trim();
   const text = tplTextInput.value.trim();
