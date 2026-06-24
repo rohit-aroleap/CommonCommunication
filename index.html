@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.314</title>
+<title>CommonCommunication v1.315</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -1258,6 +1258,33 @@
   }
   .wati-star-btn:hover { background: var(--hover); }
   .wati-star-btn.starred { color: #f5b50a; border-color: #f5b50a; }
+  /* v1.315: per-variable fill-in panel for multi-variable Wati templates. */
+  .wati-param-panel {
+    display: none; flex-direction: column; gap: 6px;
+    flex-shrink: 0; padding: 8px 16px;
+    background: var(--header); border-top: 1px solid var(--border);
+  }
+  .wati-param-panel .wpp-title {
+    font-size: 11px; font-weight: 700; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .3px;
+  }
+  .wati-param-panel .wpp-fields { display: flex; flex-wrap: wrap; gap: 8px; }
+  .wati-param-panel .wpp-field {
+    display: flex; flex-direction: column; gap: 2px; flex: 1 1 160px; min-width: 140px;
+  }
+  .wati-param-panel .wpp-label {
+    font-size: 10px; color: var(--muted); font-family: ui-monospace, Menlo, monospace;
+  }
+  .wati-param-panel .wpp-input {
+    height: 32px; border: 1px solid var(--border); border-radius: 6px;
+    padding: 0 8px; font-size: 13px; font-family: inherit; background: #fff;
+  }
+  .wati-param-panel .wpp-input:focus { outline: none; border-color: var(--green); }
+  .wati-param-panel .wpp-preview {
+    background: var(--bubble-out); border-radius: 8px; padding: 8px 10px;
+    font-size: 13px; white-space: pre-wrap; color: var(--text);
+    max-height: 140px; overflow-y: auto;
+  }
   .wati-session-hint {
     color: var(--muted);
     font-size: 12px;
@@ -2451,6 +2478,7 @@
           <button class="wati-star-btn" id="watiTemplateStarBtn" title="Star this template — your starred templates jump to the top of the list">☆</button>
           <span class="wati-session-hint" id="watiSessionHint">Loading Wati...</span>
         </div>
+        <div class="wati-param-panel" id="watiParamPanel"></div>
         <div class="composer">
           <button class="emoji-btn" id="emojiBtn" title="Insert emoji">😀</button>
           <!-- v1.183 formatting hint. Hover for cheat sheet; click pops the
@@ -2909,7 +2937,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.314";
+const APP_VERSION = "v1.315";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -3037,6 +3065,7 @@ const channelTabs = $("channelTabs");
 const periskopeTab = $("periskopeTab");
 const watiTab = $("watiTab");
 const watiComposerPanel = $("watiComposerPanel");
+const watiParamPanel = $("watiParamPanel");
 const watiTemplateSelect = $("watiTemplateSelect");
 const watiTemplateStarBtn = $("watiTemplateStarBtn");
 const watiSessionHint = $("watiSessionHint");
@@ -9543,6 +9572,7 @@ function refreshChannelUi() {
 
   const watiMode = currentChannel === "wati";
   if (watiComposerPanel) watiComposerPanel.style.display = watiMode ? "flex" : "none";
+  renderWatiParamPanel();
   for (const el of [fmtHintBtn, attachBtn, suggestReplyBtn, voiceNoteBtn, $("voiceComposerBtn")]) {
     if (el) el.style.display = watiMode ? "none" : "";
   }
@@ -9612,7 +9642,7 @@ if (watiTemplateStarBtn) watiTemplateStarBtn.onclick = () => {
   const name = watiTemplateSelect?.value || "";
   if (name) toggleWatiTemplateStar(name);
 };
-if (watiTemplateSelect) watiTemplateSelect.addEventListener("change", updateWatiStarBtn);
+if (watiTemplateSelect) watiTemplateSelect.addEventListener("change", () => { updateWatiStarBtn(); renderWatiParamPanel(); });
 
 function watiPhoneForCurrentChat() {
   const meta = chatsCache[currentChatId] || {};
@@ -9632,11 +9662,15 @@ async function loadWatiTemplates() {
 
 function renderWatiTemplateOptions() {
   if (!watiTemplateSelect) return;
-  const approved = (watiTemplatesCache || []).filter((t) => (!t.status || t.status === "APPROVED") && (Number(t.paramCount) || 0) <= 1);
+  // v1.315: show ALL approved templates. The old "≤1 variable" gate is gone —
+  // the fill-in panel below now collects every variable, so multi-variable
+  // templates are selectable and sendable.
+  const approved = (watiTemplatesCache || []).filter((t) => (!t.status || t.status === "APPROVED"));
   const current = watiTemplateSelect.value;
   if (!approved.length) {
     watiTemplateSelect.innerHTML = `<option value="">No Wati templates ready</option>`;
     updateWatiStarBtn();
+    renderWatiParamPanel();
     return;
   }
   // v1.314: per-user starred templates float to the top under a "★ Starred"
@@ -9652,6 +9686,81 @@ function renderWatiTemplateOptions() {
   watiTemplateSelect.innerHTML = html;
   if (current && approved.some((t) => t.name === current)) watiTemplateSelect.value = current;
   updateWatiStarBtn();
+  renderWatiParamPanel();
+}
+
+// v1.315: render the per-variable fill-in panel for the selected template.
+// One input per body variable, the "name" variable pre-filled with the
+// customer's name, others empty with the template's sample value as a
+// placeholder hint. Live preview shows the message that will actually send.
+function watiCustomerName() {
+  const meta = chatsCache[currentChatId] || {};
+  return String(threadName?.textContent || meta.contactName || meta.displayName || meta.phone || "")
+    .replace(/^🔒\s*/, "").trim();
+}
+function watiSelectedTemplate() {
+  return (watiTemplatesCache || []).find((t) => t.name === (watiTemplateSelect?.value || "")) || null;
+}
+function isWatiNameParam(p) {
+  return p.name === "1" || /name/i.test(p.name);
+}
+let _watiPanelFor = null; // template the panel is currently rendered for
+function renderWatiParamPanel() {
+  if (!watiParamPanel) return;
+  const tpl = watiSelectedTemplate();
+  const params = (currentChannel === "wati" && tpl) ? (tpl.params || []) : [];
+  if (!params.length) {
+    watiParamPanel.style.display = "none";
+    watiParamPanel.innerHTML = "";
+    _watiPanelFor = null;
+    return;
+  }
+  // Preserve what the user has already typed across re-renders of the SAME
+  // template (refreshChannelUi / the 15s poll re-render the panel — without
+  // this they'd wipe a half-entered day/time). Reset only on template change.
+  const sameTemplate = _watiPanelFor === tpl.name;
+  const existing = sameTemplate ? watiParamValues() : {};
+  _watiPanelFor = tpl.name;
+  const cust = watiCustomerName();
+  watiParamPanel.innerHTML = `
+    <div class="wpp-title">Fill in the template${params.length > 1 ? ` — ${params.length} fields` : ""}</div>
+    <div class="wpp-fields">
+      ${params.map((p) => {
+        const prefill = isWatiNameParam(p) ? cust : "";
+        const val = (p.name in existing) ? existing[p.name] : prefill;
+        const hint = isWatiNameParam(p) ? "Customer name" : (p.sample || `Value for {{${p.name}}}`);
+        return `<label class="wpp-field">
+          <span class="wpp-label">{{${escapeHtml(p.name)}}}</span>
+          <input class="wpp-input" data-pname="${escapeHtml(p.name)}" type="text"
+            placeholder="${escapeHtml(hint)}" value="${escapeHtml(val)}" />
+        </label>`;
+      }).join("")}
+    </div>
+    <div class="wpp-preview" id="watiParamPreview"></div>`;
+  watiParamPanel.style.display = "flex";
+  watiParamPanel.querySelectorAll(".wpp-input").forEach((inp) =>
+    inp.addEventListener("input", updateWatiParamPreview));
+  updateWatiParamPreview();
+}
+function watiParamValues() {
+  const map = {};
+  if (watiParamPanel) watiParamPanel.querySelectorAll(".wpp-input").forEach((inp) => {
+    map[inp.dataset.pname] = inp.value;
+  });
+  return map;
+}
+function watiRenderBody(tpl, values) {
+  let body = String(tpl?.bodyText || "");
+  for (const [k, v] of Object.entries(values || {})) {
+    // Param names are [a-zA-Z0-9_] only (no regex-special chars).
+    body = body.replace(new RegExp("\\{\\{\\s*" + k + "\\s*\\}\\}", "g"), v || `{{${k}}}`);
+  }
+  return body;
+}
+function updateWatiParamPreview() {
+  const prev = $("watiParamPreview");
+  const tpl = watiSelectedTemplate();
+  if (prev && tpl) prev.textContent = watiRenderBody(tpl, watiParamValues());
 }
 
 // Per-user Wati template stars. Stored under userState/{uid}/watiTemplateStars
@@ -12950,19 +13059,25 @@ async function doSendWati() {
     return;
   }
 
+  // v1.315: a template send (no free text) gathers the fill-in panel values
+  // and requires every variable to be filled before sending.
+  const tpl = (watiTemplatesCache || []).find((t) => t.name === templateName);
+  const isTemplateSend = !text;
+  const paramValues = isTemplateSend ? watiParamValues() : {};
+  if (isTemplateSend && tpl) {
+    const missing = (tpl.params || []).filter((p) => !String(paramValues[p.name] || "").trim());
+    if (missing.length) {
+      alert(`Please fill in all template fields before sending (${missing.length} still empty).`);
+      return;
+    }
+  }
+
   _sendInFlight = true;
   if (sendBtn) sendBtn.disabled = true;
   try {
-    const meta = chatsCache[currentChatId] || {};
-    const customerName = (threadName?.textContent || meta.contactName || meta.displayName || meta.phone || phone || "").replace(/^🔒\s*/, "");
-    // Render the template's real body (params substituted) from the cached
-    // template definition, so the optimistic echo shows the actual message
-    // instead of a "[Wati template: dnp]" placeholder. Templates are gated to
-    // <=1 param (the customer name → {{1}}).
-    const tpl = (watiTemplatesCache || []).find((t) => t.name === templateName);
-    const renderedText = tpl?.bodyText
-      ? String(tpl.bodyText).replace(/\{\{\s*1\s*\}\}/g, customerName)
-      : "";
+    // Render the real body with the filled-in variables so the chat echo
+    // shows the actual message (the Wati API copy replaces it on next fetch).
+    const renderedText = isTemplateSend ? watiRenderBody(tpl, paramValues) : "";
     const payload = text
       ? {
           phone,
@@ -12973,7 +13088,7 @@ async function doSendWati() {
       : {
           phone,
           templateName,
-          parameters: { "1": customerName },
+          parameters: paramValues,
           renderedText,
           sentByUid: currentUser.uid,
           sentByName: currentUser.displayName || currentUser.email || "",
@@ -12992,6 +13107,7 @@ async function doSendWati() {
     }
     composerInput.value = "";
     composerInput.style.height = "auto";
+    _watiPanelFor = null; // reset the fill-in panel for the next message
     await loadWatiThread(false);
   } catch (e) {
     alert("Wati send failed: " + String(e?.message || e));

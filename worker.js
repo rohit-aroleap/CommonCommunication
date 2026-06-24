@@ -1082,13 +1082,39 @@ function watiHeaders(cfg) {
 function normalizeWatiTemplate(t) {
   const name = t?.name || t?.elementName || "";
   const bodyText = extractWatiTemplateBody(t);
+  // Ordered list of the body's variables ({{1}}/{{2}} positional or {{word}}
+  // named, first-seen order), each with the template's sample value (used as
+  // an input placeholder in the composer fill-in UI). Sample values come from
+  // the template's customParams; field names vary by API version so look
+  // defensively. paramCount counts BOTH positional and named (the old
+  // countTemplateParams only saw numeric ones).
+  const rawSamples = t?.customParams || t?.CustomParams || [];
+  const sampleByName = {};
+  if (Array.isArray(rawSamples)) {
+    for (const p of rawSamples) {
+      const pn = p?.ParamName ?? p?.paramName ?? p?.name;
+      const pv = p?.ParamValue ?? p?.paramValue ?? p?.value;
+      if (pn != null) sampleByName[String(pn)] = pv == null ? "" : String(pv);
+    }
+  }
+  const seen = new Set();
+  const params = [];
+  const re = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g;
+  let m;
+  while ((m = re.exec(bodyText))) {
+    const key = m[1];
+    if (seen.has(key)) continue;
+    seen.add(key);
+    params.push({ name: key, sample: sampleByName[key] || "" });
+  }
   return {
     name,
     status: String(t?.status || "").toUpperCase(),
     category: t?.category || "",
     language: t?.language || "",
     bodyText,
-    paramCount: countTemplateParams(bodyText),
+    paramCount: params.length,
+    params,
   };
 }
 
