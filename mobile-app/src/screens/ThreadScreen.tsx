@@ -122,20 +122,31 @@ try {
 
 type Props = NativeStackScreenProps<RootStackParamList, "Thread">;
 
-// v1.318: Wati template fill-in helpers (mirror the web composer).
-// A variable is treated as the customer name if it's positional {{1}} or
-// literally {{name}} — that one gets pre-filled with the customer's name.
-function watiIsNameParam(name: string): boolean {
-  return name === "1" || /name/i.test(name);
+// v1.318/v1.320: Wati template fill-in helpers (mirror the web composer).
+// Does this sample value look like a person's name (vs a time/date/day/number)?
+function watiSampleLooksLikeName(s: string | undefined): boolean {
+  const v = String(s || "").trim();
+  if (!v || /\d/.test(v)) return false;
+  if (/\b(am|pm)\b/i.test(v)) return false;
+  if (/^(mon|tue|wed|thu|fri|sat|sun|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(v))
+    return false;
+  return /^[A-Za-z][A-Za-z .'-]{0,40}$/.test(v);
+}
+// A variable is the customer-name slot only if it's literally {{name}} OR it's
+// the FIRST variable whose sample looks like a person's name. We no longer
+// assume {{1}} is always the name — e.g. installation_time_unavailable {{1}}
+// is a time, so it shows its sample ("6 PM") instead of being pre-filled.
+function watiParamIsName(p: { name: string; sample: string }, i: number): boolean {
+  return /name/i.test(p.name) || (i === 0 && watiSampleLooksLikeName(p.sample));
 }
 function initWatiParams(
   tpl: WatiTemplate | undefined,
   customerName: string,
 ): Record<string, string> {
   const init: Record<string, string> = {};
-  for (const p of tpl?.params || []) {
-    init[p.name] = watiIsNameParam(p.name) ? customerName : "";
-  }
+  (tpl?.params || []).forEach((p, i) => {
+    init[p.name] = watiParamIsName(p, i) ? customerName : "";
+  });
   return init;
 }
 function renderWatiTemplateBody(
@@ -2452,11 +2463,7 @@ export function ThreadScreen({ route, navigation }: Props) {
                         onChangeText={(v) =>
                           setWatiParams((prev) => ({ ...prev, [p.name]: v }))
                         }
-                        placeholder={
-                          watiIsNameParam(p.name)
-                            ? "Customer name"
-                            : p.sample || `Value for {{${p.name}}}`
-                        }
+                        placeholder={p.sample || `Value for {{${p.name}}}`}
                         placeholderTextColor="rgba(255,255,255,0.5)"
                       />
                     </View>

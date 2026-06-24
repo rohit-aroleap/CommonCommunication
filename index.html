@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.319</title>
+<title>CommonCommunication v1.320</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2937,7 +2937,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.319";
+const APP_VERSION = "v1.320";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -9765,8 +9765,22 @@ function watiCustomerName() {
 function watiSelectedTemplate() {
   return (watiTemplatesCache || []).find((t) => t.name === (watiTemplateSelect?.value || "")) || null;
 }
-function isWatiNameParam(p) {
-  return p.name === "1" || /name/i.test(p.name);
+// Does this sample value look like a person's name (vs a time/date/day/number)?
+// Used to decide whether to pre-fill a positional variable with the customer's
+// name — conservative: anything with a digit, AM/PM, or a weekday/month is not.
+function watiSampleLooksLikeName(s) {
+  s = String(s || "").trim();
+  if (!s || /\d/.test(s)) return false;
+  if (/\b(am|pm)\b/i.test(s)) return false;
+  if (/^(mon|tue|wed|thu|fri|sat|sun|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(s)) return false;
+  return /^[A-Za-z][A-Za-z .'-]{0,40}$/.test(s);
+}
+// v1.320: a variable is the customer-name slot only if it's literally {{name}}
+// OR it's the FIRST variable AND its sample looks like a person's name. We no
+// longer assume {{1}} is always the name — e.g. installation_time_unavailable
+// {{1}} is a time, so it shows its sample ("6 PM"), not "Customer name".
+function isWatiNameParam(p, i) {
+  return /name/i.test(p.name) || (i === 0 && watiSampleLooksLikeName(p.sample));
 }
 let _watiPanelFor = null; // template the panel is currently rendered for
 function renderWatiParamPanel() {
@@ -9789,10 +9803,10 @@ function renderWatiParamPanel() {
   watiParamPanel.innerHTML = `
     <div class="wpp-title">Fill in the template${params.length > 1 ? ` — ${params.length} fields` : ""}</div>
     <div class="wpp-fields">
-      ${params.map((p) => {
-        const prefill = isWatiNameParam(p) ? cust : "";
+      ${params.map((p, i) => {
+        const prefill = isWatiNameParam(p, i) ? cust : "";
         const val = (p.name in existing) ? existing[p.name] : prefill;
-        const hint = isWatiNameParam(p) ? "Customer name" : (p.sample || `Value for {{${p.name}}}`);
+        const hint = p.sample || `Value for {{${p.name}}}`;
         return `<label class="wpp-field">
           <span class="wpp-label">{{${escapeHtml(p.name)}}}</span>
           <input class="wpp-input" data-pname="${escapeHtml(p.name)}" type="text"
