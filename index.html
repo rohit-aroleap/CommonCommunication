@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.313</title>
+<title>CommonCommunication v1.314</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -1245,6 +1245,19 @@
     font-size: 13px;
     padding: 0 10px;
   }
+  .wati-star-btn {
+    flex-shrink: 0;
+    width: 36px; height: 36px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #fff;
+    cursor: pointer;
+    font-size: 17px; line-height: 1;
+    color: #b9a300;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .wati-star-btn:hover { background: var(--hover); }
+  .wati-star-btn.starred { color: #f5b50a; border-color: #f5b50a; }
   .wati-session-hint {
     color: var(--muted);
     font-size: 12px;
@@ -2435,6 +2448,7 @@
         <div class="composer-reply-bar" id="composerReplyBar"></div>
         <div class="wati-composer-panel" id="watiComposerPanel">
           <select class="wati-template-select" id="watiTemplateSelect" title="Wati template"></select>
+          <button class="wati-star-btn" id="watiTemplateStarBtn" title="Star this template — your starred templates jump to the top of the list">☆</button>
           <span class="wati-session-hint" id="watiSessionHint">Loading Wati...</span>
         </div>
         <div class="composer">
@@ -2895,7 +2909,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.313";
+const APP_VERSION = "v1.314";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -2959,6 +2973,7 @@ let teamUsers = {};               // uid -> { name, email, photoURL }
 let _openPopover = null;          // current ticket popover DOM element
 let myLastSeen = {};              // chatKey -> ts (ms): when I last opened the chat
 let myFavorites = {};             // chatKey -> true: per-user favorites/pins
+let myWatiTemplateStars = {};     // templateName -> true: per-user Wati template stars
 let mySendActivity = {};          // chatKey -> { count, lastAt }: my recent sends (for Pin? suggest)
 // v1.196: limited-trainer manual customer-access grants. chatKey → { grantedAt: number }.
 // Populated by listenMyGrants() once the user is authed. Chat list applies a 14-day
@@ -3023,6 +3038,7 @@ const periskopeTab = $("periskopeTab");
 const watiTab = $("watiTab");
 const watiComposerPanel = $("watiComposerPanel");
 const watiTemplateSelect = $("watiTemplateSelect");
+const watiTemplateStarBtn = $("watiTemplateStarBtn");
 const watiSessionHint = $("watiSessionHint");
 // v1.269: scroll-to-top auto-paginate. When the trainer scrolls within
 // 80px of the top of the thread, bump the page window and re-attach
@@ -3482,6 +3498,7 @@ onAuthStateChanged(auth, async (user) => {
     listenTickets();
     listenMyLastSeen();
     listenMyFavorites();
+    listenMyWatiTemplateStars();
     listenMySendActivity();
     listenMyGrants();
     listenTemplates();
@@ -9590,6 +9607,12 @@ async function setChannel(next) {
 
 if (periskopeTab) periskopeTab.onclick = () => setChannel("periskope");
 if (watiTab) watiTab.onclick = () => setChannel("wati");
+// Star/unstar the currently-selected Wati template; reflect ★/☆ on selection.
+if (watiTemplateStarBtn) watiTemplateStarBtn.onclick = () => {
+  const name = watiTemplateSelect?.value || "";
+  if (name) toggleWatiTemplateStar(name);
+};
+if (watiTemplateSelect) watiTemplateSelect.addEventListener("change", updateWatiStarBtn);
 
 function watiPhoneForCurrentChat() {
   const meta = chatsCache[currentChatId] || {};
@@ -9610,12 +9633,60 @@ async function loadWatiTemplates() {
 function renderWatiTemplateOptions() {
   if (!watiTemplateSelect) return;
   const approved = (watiTemplatesCache || []).filter((t) => (!t.status || t.status === "APPROVED") && (Number(t.paramCount) || 0) <= 1);
-  const source = approved;
   const current = watiTemplateSelect.value;
-  watiTemplateSelect.innerHTML = source.length
-    ? source.map((t) => `<option value="${escapeHtml(t.name)}">${escapeHtml(t.name)}</option>`).join("")
-    : `<option value="">No Wati templates ready</option>`;
-  if (current && source.some((t) => t.name === current)) watiTemplateSelect.value = current;
+  if (!approved.length) {
+    watiTemplateSelect.innerHTML = `<option value="">No Wati templates ready</option>`;
+    updateWatiStarBtn();
+    return;
+  }
+  // v1.314: per-user starred templates float to the top under a "★ Starred"
+  // group so each trainer pins the templates for their role (sales,
+  // onboarding, …) and skips scanning the whole list every time.
+  const byName = (a, b) => a.name.localeCompare(b.name);
+  const starred = approved.filter((t) => myWatiTemplateStars[t.name]).sort(byName);
+  const rest = approved.filter((t) => !myWatiTemplateStars[t.name]).sort(byName);
+  const opt = (t) => `<option value="${escapeHtml(t.name)}">${myWatiTemplateStars[t.name] ? "★ " : ""}${escapeHtml(t.name)}</option>`;
+  let html = "";
+  if (starred.length) html += `<optgroup label="★ Starred">${starred.map(opt).join("")}</optgroup>`;
+  html += `<optgroup label="${starred.length ? "All templates" : "Templates"}">${rest.map(opt).join("")}</optgroup>`;
+  watiTemplateSelect.innerHTML = html;
+  if (current && approved.some((t) => t.name === current)) watiTemplateSelect.value = current;
+  updateWatiStarBtn();
+}
+
+// Per-user Wati template stars. Stored under userState/{uid}/watiTemplateStars
+// (mirrors chat favorites). Wati template names are Meta-constrained to
+// lowercase letters/digits/underscores, so they're always valid Firebase keys.
+function listenMyWatiTemplateStars() {
+  if (!currentUser) return;
+  onValue(ref(db, `${ROOT}/userState/${currentUser.uid}/watiTemplateStars`), (snap) => {
+    myWatiTemplateStars = snap.val() || {};
+    renderWatiTemplateOptions();
+  });
+}
+function toggleWatiTemplateStar(name) {
+  if (!currentUser || !name) return;
+  const path = `${ROOT}/userState/${currentUser.uid}/watiTemplateStars/${name}`;
+  if (myWatiTemplateStars[name]) {
+    delete myWatiTemplateStars[name];           // optimistic
+    remove(ref(db, path)).catch(() => {});
+  } else {
+    myWatiTemplateStars[name] = true;           // optimistic
+    set(ref(db, path), true).catch(() => {});
+  }
+  renderWatiTemplateOptions();
+}
+function updateWatiStarBtn() {
+  if (!watiTemplateStarBtn) return;
+  const name = watiTemplateSelect?.value || "";
+  const starred = !!(name && myWatiTemplateStars[name]);
+  watiTemplateStarBtn.textContent = starred ? "★" : "☆";
+  watiTemplateStarBtn.classList.toggle("starred", starred);
+  watiTemplateStarBtn.title = !name
+    ? "Pick a template to star it"
+    : starred
+      ? `Unstar "${name}"`
+      : `Star "${name}" — it'll jump to the top of your template list`;
 }
 
 async function loadWatiThread(clearBeforeLoad = true) {
