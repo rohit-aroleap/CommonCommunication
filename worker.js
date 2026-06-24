@@ -923,11 +923,31 @@ async function handleWatiMessages(request, env) {
   if (!res.ok) {
     return json({ ok: false, error: "wati_messages_failed", detail: watiError(j, res.status) }, 502);
   }
-  const raw = j?.messages || j?.items || j?.data || [];
+  // Wati's getMessages nests the message array under `messages.items` (with
+  // paging metadata as sibling keys). Reading `j.messages` directly gave the
+  // wrapper OBJECT, which isn't an array — so EVERY API message (incoming
+  // replies AND the real outgoing `finalText`) was silently dropped and only
+  // the local placeholder echoes showed. Unwrap items; keep the older bare-
+  // array / items / data shapes as fallbacks.
+  const raw = Array.isArray(j?.messages?.items)
+    ? j.messages.items
+    : Array.isArray(j?.messages)
+      ? j.messages
+      : (j?.items || j?.data || []);
   const apiMessages = normalizeWatiMessages(raw, phone);
 
   const local = await fbGet(env, `${ROOT}/watiChats/${phone}/messages`);
-  const localMessages = Object.entries(local || {}).map(([id, m]) => ({ id, ...(m || {}) }));
+  // Drop a local optimistic OUTBOUND echo once the Wati API has caught up to
+  // it (a real outbound message within 3 min). Otherwise the locally-stored
+  // record (which may carry placeholder/preview text) duplicates the API's
+  // authoritative copy that carries the real rendered finalText.
+  const apiOutTs = apiMessages.filter((m) => m.direction === "out" && m.ts).map((m) => m.ts);
+  const localMessages = Object.entries(local || {})
+    .map(([id, m]) => ({ id, ...(m || {}) }))
+    .filter((m) => {
+      if (m.direction !== "out") return true;
+      return !apiOutTs.some((t) => Math.abs(t - (m.ts || 0)) < 3 * 60 * 1000);
+    });
   const byId = new Map();
   for (const m of [...localMessages, ...apiMessages]) {
     const id = m.watiMessageId || m.id || `${m.ts}_${m.direction}_${String(m.text || "").slice(0, 20)}`;
@@ -967,7 +987,11 @@ async function handleWatiSendTemplate(request, env) {
   const explicitInvalid = receiver && receiver.isValidWhatsAppNumber === false;
   const ok = res.ok && j?.result === true && !explicitInvalid;
   const ts = Date.now();
-  const text = watiTemplatePreview(templateName, parameters);
+  // Prefer the fully-rendered body the client computed from the template's
+  // bodyText (params substituted) so the optimistic echo shows the REAL
+  // message instead of a "[Wati template: dnp]" placeholder. The Wati API's
+  // own copy (finalText) replaces this echo on the next fetch anyway.
+  const text = String(body.renderedText || "").trim() || watiTemplatePreview(templateName, parameters);
   const record = {
     channel: "wati",
     direction: "out",
@@ -1152,10 +1176,17 @@ function watiSessionWindow(messages) {
 
 function normalizeWatiMessage(m, phone, idx) {
   if (!m || typeof m !== "object") return null;
-  const outbound = m.owner === true || m.direction === "outbound" || /sent/i.test(String(m.eventType || ""));
+  // Outbound signals: owner=true (business), direction=outbound, or an
+  // eventType that denotes a business-sent message. Template/broadcast sends
+  // come back as eventType "broadcastMessage" (and have no `owner` field), so
+  // match /broadcast/ too — otherwise they'd be misread as incoming.
+  const ev = String(m.eventType || "");
+  const outbound = m.owner === true || m.direction === "outbound" || /sent|broadcast/i.test(ev);
   const templateName = m.template?.name || m.templateName || m.template_name || "";
-  const text = m.text || m.message || m.finalText || m.body || (templateName ? `[Wati template: ${templateName}]` : "");
-  const ts = parseTs(m.createdAt || m.created_at || m.timestamp || m.localMessageTime || m.time);
+  // finalText carries the fully-rendered template body (params substituted) —
+  // prefer it so outgoing templates show the real message, not a placeholder.
+  const text = m.text || m.finalText || m.message || m.body || (templateName ? `[Wati template: ${templateName}]` : "");
+  const ts = parseTs(m.created || m.createdAt || m.created_at || m.timestamp || m.localMessageTime || m.time);
   return {
     id: `wati_${m.id || m.messageId || m.whatsappMessageId || idx}`,
     watiMessageId: String(m.id || m.messageId || m.whatsappMessageId || ""),
@@ -1170,7 +1201,7 @@ function normalizeWatiMessage(m, phone, idx) {
 }
 
 function watiStatus(m) {
-  const s = String(m.status || m.eventType || "").toLowerCase();
+  const s = String(m.statusString || m.status || m.eventType || "").toLowerCase();
   if (/read/.test(s)) return "read";
   if (/deliver/.test(s)) return "delivered";
   if (/fail|error|reject/.test(s)) return "failed";

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.312</title>
+<title>CommonCommunication v1.313</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2895,7 +2895,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.312";
+const APP_VERSION = "v1.313";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -9443,6 +9443,7 @@ function openChat(chatKey) {
   currentChannel = "periskope";
   watiMessagesCache = [];
   watiSession = { isOpen: false };
+  stopWatiPolling();
   // Reset note edit state when switching chats so a half-typed note from one
   // chat doesn't appear in another. Notes are collapsed by default — count is
   // visible in the bar; click the chevron / bar to expand.
@@ -9551,6 +9552,21 @@ function refreshChannelUi() {
   }
 }
 
+// v1.313: Wati has no webhook, so incoming replies only arrive when we pull
+// /wati/messages. While the Wati tab is open, re-fetch the thread in place
+// every 15s so replies surface live. Stopped on tab-switch / chat-change /
+// when the browser tab is hidden.
+let _watiPollTimer = null;
+function stopWatiPolling() {
+  if (_watiPollTimer) { clearInterval(_watiPollTimer); _watiPollTimer = null; }
+}
+function startWatiPolling() {
+  stopWatiPolling();
+  _watiPollTimer = setInterval(() => {
+    if (currentChannel === "wati" && !watiLoading && !document.hidden) loadWatiThread(false);
+  }, 15000);
+}
+
 async function setChannel(next) {
   if (next === currentChannel) return;
   if (next === "wati" && !isWatiEligibleThread()) return;
@@ -9564,7 +9580,9 @@ async function setChannel(next) {
   refreshChannelUi();
   if (currentChannel === "wati") {
     await loadWatiThread();
+    startWatiPolling();
   } else {
+    stopWatiPolling();
     renderMessages(_lastRenderedMsgs || []);
     renderTicketsBanner();
   }
@@ -12866,6 +12884,14 @@ async function doSendWati() {
   try {
     const meta = chatsCache[currentChatId] || {};
     const customerName = (threadName?.textContent || meta.contactName || meta.displayName || meta.phone || phone || "").replace(/^🔒\s*/, "");
+    // Render the template's real body (params substituted) from the cached
+    // template definition, so the optimistic echo shows the actual message
+    // instead of a "[Wati template: dnp]" placeholder. Templates are gated to
+    // <=1 param (the customer name → {{1}}).
+    const tpl = (watiTemplatesCache || []).find((t) => t.name === templateName);
+    const renderedText = tpl?.bodyText
+      ? String(tpl.bodyText).replace(/\{\{\s*1\s*\}\}/g, customerName)
+      : "";
     const payload = text
       ? {
           phone,
@@ -12877,6 +12903,7 @@ async function doSendWati() {
           phone,
           templateName,
           parameters: { "1": customerName },
+          renderedText,
           sentByUid: currentUser.uid,
           sentByName: currentUser.displayName || currentUser.email || "",
         };
