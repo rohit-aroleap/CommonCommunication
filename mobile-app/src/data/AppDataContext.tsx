@@ -124,6 +124,9 @@ interface AppDataValue {
   // (empty = none). Filters the Wati picker so the phone enforces the same
   // per-member visibility as the web composer.
   watiTemplateAllowed: Set<string> | null;
+  // v1.330: phone -> last Wati activity (ms). Lets the chat list sort by Wati
+  // recency when the list-level Wati toggle is selected.
+  watiActivityByPhone: Record<string, number>;
   // v1.223: team tags the current user is a member of (empty = no
   // narrowing). Drives the team-visibility filter in ChatsScreen.
   myTeamTags: Set<string> | null;
@@ -200,6 +203,9 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
   // every snapshot. Each value is the meta object directly (no `meta` wrapper
   // like the old /chats payload had).
   const [chatsIndex, setChatsIndex] = useState<Record<string, ChatMeta>>({});
+  // v1.330: per-phone last Wati activity (from /watiChatsIndex) so the chat
+  // list can sort by Wati recency when the Wati toggle is on. phone -> ms.
+  const [watiActivityByPhone, setWatiActivityByPhone] = useState<Record<string, number>>({});
   const [tickets, setTickets] = useState<Record<string, Ticket>>({});
   const [teamUsers, setTeamUsers] = useState<Record<string, TeamUser>>({});
   const [teamMembers, setTeamMembers] = useState<Record<string, TeamMember>>({});
@@ -390,6 +396,20 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
           const v = (s.val() || {}) as Record<string, ContactInfo>;
           setContacts(v);
           cacheSet(uid, "contacts", v);
+        }),
+      );
+      // v1.330: lightweight Wati activity index — phone -> last Wati msg time.
+      // Drives the chat list's "Wati" sort toggle without pulling full Wati
+      // message histories.
+      unsubs.push(
+        onValue(ref(db, `${ROOT}/watiChatsIndex`), (s) => {
+          const raw = (s.val() || {}) as Record<string, { lastMsgAt?: number }>;
+          const map: Record<string, number> = {};
+          for (const [phone, meta] of Object.entries(raw)) {
+            if (meta && typeof meta.lastMsgAt === "number") map[phone] = meta.lastMsgAt;
+          }
+          setWatiActivityByPhone(map);
+          cacheSet(uid, "watiActivityByPhone", map);
         }),
       );
       unsubs.push(
@@ -788,6 +808,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       isLimited,
       channelAccess,
       watiTemplateAllowed,
+      watiActivityByPhone,
       myTeamTags,
       myGrants,
       grantChatAccess,
@@ -820,6 +841,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       isLimited,
       channelAccess,
       watiTemplateAllowed,
+      watiActivityByPhone,
       myTeamTags,
       myGrants,
     ],

@@ -900,6 +900,25 @@ async function handleWatiTemplates(env) {
   return json({ ok: true, templates, from: cfg.from || null });
 }
 
+// v1.330: keep a lightweight per-phone Wati activity index the mobile chat
+// list subscribes to (without pulling full message histories) so it can sort
+// conversations by Wati recency. Writes the same shape to /watiChats/{phone}/meta
+// (kept for back-compat) and the flat /watiChatsIndex/{phone}.
+async function writeWatiActivity(env, phone, info) {
+  if (!phone || !info || !info.lastMsgAt) return;
+  const meta = {
+    phone,
+    lastMsgAt: info.lastMsgAt,
+    lastMsgPreview: String(info.lastMsgPreview || "").slice(0, 120),
+    lastMsgDirection: info.lastMsgDirection || null,
+  };
+  if (info.lastMsgStatus !== undefined) meta.lastMsgStatus = info.lastMsgStatus;
+  await Promise.all([
+    fbPatch(env, `${ROOT}/watiChats/${phone}/meta`, meta),
+    fbPatch(env, `${ROOT}/watiChatsIndex/${phone}`, meta),
+  ]);
+}
+
 async function handleWatiMessages(request, env) {
   const url = new URL(request.url);
   const phone = normalizePhone(url.searchParams.get("phone") || "");
@@ -945,6 +964,17 @@ async function handleWatiMessages(request, env) {
   }
   const messages = [...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0));
   const session = watiSessionWindow(messages);
+  // v1.330: record this phone's latest Wati activity (in OR out) in the index
+  // so the chat list can sort by Wati recency. This is how inbound replies get
+  // reflected — when a thread is opened/polled — since Wati has no webhook.
+  const latest = messages.length ? messages[messages.length - 1] : null;
+  if (latest && latest.ts) {
+    await writeWatiActivity(env, phone, {
+      lastMsgAt: latest.ts,
+      lastMsgPreview: latest.text,
+      lastMsgDirection: latest.direction,
+    }).catch(() => {});
+  }
   return json({ ok: true, phone, messages, session });
 }
 
@@ -995,10 +1025,9 @@ async function handleWatiSendTemplate(request, env) {
     error: ok ? null : watiError(j, res.status),
   };
   const pushed = await fbPush(env, `${ROOT}/watiChats/${phone}/messages`, record);
-  await fbPatch(env, `${ROOT}/watiChats/${phone}/meta`, {
-    phone,
+  await writeWatiActivity(env, phone, {
     lastMsgAt: ts,
-    lastMsgPreview: text.slice(0, 120),
+    lastMsgPreview: text,
     lastMsgDirection: "out",
     lastMsgStatus: ok ? "sent" : "failed",
   });
@@ -1052,10 +1081,9 @@ async function handleWatiSendSession(request, env) {
     error: ok ? null : watiError(j, res.status),
   };
   const pushed = await fbPush(env, `${ROOT}/watiChats/${phone}/messages`, record);
-  await fbPatch(env, `${ROOT}/watiChats/${phone}/meta`, {
-    phone,
+  await writeWatiActivity(env, phone, {
     lastMsgAt: ts,
-    lastMsgPreview: message.slice(0, 120),
+    lastMsgPreview: message,
     lastMsgDirection: "out",
     lastMsgStatus: ok ? "sent" : "failed",
   });
@@ -1115,6 +1143,10 @@ function normalizeWatiTemplate(t) {
     bodyText,
     paramCount: params.length,
     params,
+    // Surface Wati's own last-updated timestamp (field name varies by API
+    // version) so callers can show template freshness. Raw value passed
+    // through; format on the client.
+    lastUpdated: t?.lastModified ?? t?.lastUpdated ?? t?.modifiedOn ?? t?.updatedOn ?? t?.updatedAt ?? t?.createdOn ?? t?.created ?? null,
   };
 }
 

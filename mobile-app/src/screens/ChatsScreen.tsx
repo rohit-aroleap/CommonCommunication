@@ -61,6 +61,8 @@ export function ChatsScreen() {
     myTeamTags,
     myGrants,
     grantChatAccess,
+    channelAccess,
+    watiActivityByPhone,
   } = useAppData();
   const { user } = useAuth();
 
@@ -68,6 +70,27 @@ export function ChatsScreen() {
   const [stageFilter, setStageFilter] = useState("");
   const [search, setSearch] = useState("");
   const [favoritesOnly, setFavoritesOnly] = useState(false);
+  // v1.330: list-level Periskope/Wati sort toggle. "wati" re-orders the list
+  // by Wati activity. Only meaningful for members with Wati access.
+  const [chatListChannel, setChatListChannel] = useState<"periskope" | "wati">(
+    "periskope",
+  );
+  const watiMode = chatListChannel === "wati" && channelAccess.wati;
+  // Wati activity keyed by last-10 digits so it matches a chat row's phone
+  // regardless of country-code / formatting differences.
+  const watiActivityByTen = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const [phone, ts] of Object.entries(watiActivityByPhone || {})) {
+      const k = String(phone).replace(/\D/g, "").slice(-10);
+      if (k && (!m[k] || ts > m[k])) m[k] = ts;
+    }
+    return m;
+  }, [watiActivityByPhone]);
+  const watiActivityFor = useCallback(
+    (phone: string) =>
+      watiActivityByTen[String(phone || "").replace(/\D/g, "").slice(-10)] || 0,
+    [watiActivityByTen],
+  );
   // v1.274: daily-cohort registry — powers the "no group" pill on rows.
   const { assignedPhoneKeys: cohortAssignedKeys, loaded: cohortsLoaded } =
     useCohorts();
@@ -310,6 +333,14 @@ export function ChatsScreen() {
         isDailyGroup(x.row) ? x.row.lastTextMsgAt || 0 : x.row.lastMsgAt || 0;
       rows = [...rows].sort((a, b) => activityAt(b) - activityAt(a));
     }
+    // v1.330: with the Wati toggle on, surface Wati conversations at the top
+    // ordered by Wati recency. Stable sort → chats with no Wati activity keep
+    // their Periskope-activity order beneath the Wati ones.
+    if (watiMode) {
+      rows = [...rows].sort(
+        (a, b) => watiActivityFor(b.row.phone) - watiActivityFor(a.row.phone),
+      );
+    }
     return rows;
   }, [
     enriched,
@@ -322,6 +353,8 @@ export function ChatsScreen() {
     visibleChatKeysForLimited,
     visibleChatKeysForTeams,
     textOnlyMode,
+    watiMode,
+    watiActivityFor,
   ]);
 
   // Partition: chats with my open ticket anchor the very top, then
@@ -333,6 +366,14 @@ export function ChatsScreen() {
     | { kind: "divider"; key: string };
 
   const listData = useMemo<ListItem[]>(() => {
+    // v1.330: Wati mode shows a pure Wati-recency list — no ticket/favorite
+    // pinning — so the people we're actively messaging on Wati lead the list.
+    if (watiMode) {
+      const base = favoritesOnly
+        ? filtered.filter((r) => myFavorites[r.row.chatKey])
+        : filtered;
+      return base.map((r) => ({ kind: "row", key: r.row.chatKey, item: r }));
+    }
     const tickets: typeof filtered = [];
     const favorites: typeof filtered = [];
     const rest: typeof filtered = [];
@@ -361,7 +402,7 @@ export function ChatsScreen() {
       items.push({ kind: "row", key: r.row.chatKey, item: r });
     }
     return items;
-  }, [filtered, myFavorites, myTicketChatKeys, favoritesOnly]);
+  }, [filtered, myFavorites, myTicketChatKeys, favoritesOnly, watiMode]);
 
   // v1.163: edges={[]} — was edges={["top"]} which double-counted the
   // status-bar inset on Android. The React Navigation Stack header
@@ -381,6 +422,9 @@ export function ChatsScreen() {
         onChangeStage={setStageFilter}
         onChangeSearch={setSearch}
         onChangeFavoritesOnly={setFavoritesOnly}
+        channel={chatListChannel}
+        showChannelToggle={channelAccess.wati}
+        onChangeChannel={setChatListChannel}
       />
       {hasGroqKey === false && (
         <View style={styles.noKeyBanner}>

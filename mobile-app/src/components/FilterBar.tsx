@@ -33,6 +33,11 @@ interface Props {
   onChangeStage: (v: string) => void;
   onChangeSearch: (v: string) => void;
   onChangeFavoritesOnly: (v: boolean) => void;
+  // v1.330: list-level Periskope/Wati toggle. When shown, switching to Wati
+  // re-orders the chat list by Wati activity. Hidden for Periskope-only members.
+  channel: "periskope" | "wati";
+  showChannelToggle: boolean;
+  onChangeChannel: (c: "periskope" | "wati") => void;
 }
 
 const STAGE_OPTIONS = [
@@ -55,6 +60,9 @@ export function FilterBar({
   onChangeStage,
   onChangeSearch,
   onChangeFavoritesOnly,
+  channel,
+  showChannelToggle,
+  onChangeChannel,
 }: Props) {
   const { colors } = useTheme();
   const styles = useStyles(makeStyles);
@@ -97,6 +105,28 @@ export function FilterBar({
 
   return (
     <View style={styles.bar}>
+      {showChannelToggle && (
+        <View style={styles.channelSeg}>
+          <TouchableOpacity
+            style={[styles.channelSegBtn, channel === "periskope" && styles.channelSegBtnActive]}
+            onPress={() => onChangeChannel("periskope")}
+            activeOpacity={0.85}
+          >
+            <Text style={[styles.channelSegTxt, channel === "periskope" && styles.channelSegTxtActive]}>
+              Trainer 1
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.channelSegBtn, channel === "wati" && styles.channelSegBtnActive]}
+            onPress={() => onChangeChannel("wati")}
+            activeOpacity={0.85}
+          >
+            <Text style={[styles.channelSegTxt, channel === "wati" && styles.channelSegTxtActive]}>
+              Wati
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
       <View style={styles.searchWrap}>
         <Text style={styles.searchIcn}>🔍</Text>
         <TextInput
@@ -298,6 +328,22 @@ function makeStyles(colors: Colors) {
     },
     favChipTxt: { fontSize: 13, color: colors.text },
     favChipTxtOn: { color: "#8a6500", fontWeight: "500" },
+
+    // v1.330: Periskope/Wati segmented toggle above the search bar.
+    channelSeg: { flexDirection: "row", gap: 6 },
+    channelSegBtn: {
+      flex: 1,
+      alignItems: "center",
+      justifyContent: "center",
+      paddingVertical: 8,
+      borderRadius: 8,
+      backgroundColor: colors.bg,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    channelSegBtnActive: { backgroundColor: colors.green, borderColor: colors.green },
+    channelSegTxt: { fontSize: 13, fontWeight: "700", color: colors.muted },
+    channelSegTxtActive: { color: "white" },
 
     sheetBack: {
       flex: 1,
