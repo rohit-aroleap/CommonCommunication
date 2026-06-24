@@ -801,7 +801,14 @@ export function ThreadScreen({ route, navigation }: Props) {
   const hideMedia =
     isDailyWorkoutGroup && (dailyTextOnly || route.params.textOnly === true);
   const visible = useMemo(() => {
-    if (channel === "wati") return [...watiMessages].reverse();
+    // watiMessages is already sorted newest-first (descending) by the load /
+    // poll / send paths — which is exactly what the inverted FlatList wants
+    // (data[0] = newest, rendered at the BOTTOM). Do NOT reverse it: reversing
+    // put the OLDEST message at the bottom and pushed the newest (incl. the
+    // trainer's just-sent message) off the top of the screen, so the thread
+    // looked frozen on old messages. (Periskope reverses because dedupMessages
+    // returns ascending; watiMessages does not.)
+    if (channel === "wati") return [...watiMessages];
     let src = messages;
     if (hideMedia) {
       src = messages.filter((m) => {
