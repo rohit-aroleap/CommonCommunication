@@ -760,6 +760,32 @@ export function ThreadScreen({ route, navigation }: Props) {
     };
   }, [channel, canUseWati, phone, watiTemplates]);
 
+  // v1.316: Wati has no webhook, so the thread won't update on its own. Poll
+  // every 15s while the Wati tab is open so incoming replies (and sends from
+  // other devices) appear without leaving and reopening the chat. Silent
+  // refresh — no clear/spinner, unlike the initial load above.
+  useEffect(() => {
+    if (!canUseWati || channel !== "wati" || !phone) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const msgRes = await fetchWatiMessages(phone);
+        if (cancelled) return;
+        setWatiSession(msgRes.session);
+        const list = (msgRes.messages || []).map((m) => ({ ...m, id: m.id })) as Message[];
+        list.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+        setWatiMessages(list);
+      } catch {
+        // transient poll failure — stay quiet and try again next tick
+      }
+    };
+    const timer = setInterval(tick, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [channel, canUseWati, phone]);
+
   // Deduplicate by inner unique id — see lib/messageDedup for the rationale.
   // dedupMessages returns ascending (oldest → newest) to match the webapp's
   // top-down renderer. The inverted FlatList below needs descending so data[0]
