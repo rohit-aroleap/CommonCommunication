@@ -925,6 +925,32 @@ async function writeWatiActivity(env, phone, info) {
   ]);
 }
 
+// v1.334: drop any target uids that are Periskope-only (channels.wati === false)
+// so a Wati reply never pings a member who can't see the Wati line. Maps
+// uid → email (via /users) → teamMembers channel access. Conservative: if we
+// can't determine access (missing record / read failure), KEEP the uid rather
+// than silently swallow a notification. Admins always keep access.
+async function filterUidsByWatiAccess(env, uidSet) {
+  if (!uidSet || uidSet.size === 0) return uidSet;
+  const [users, teamMembers] = await Promise.all([
+    fbGet(env, `${ROOT}/users`).catch(() => null),
+    fbGet(env, `${ROOT}/config/teamMembers`).catch(() => null),
+  ]);
+  if (!users || !teamMembers) return uidSet; // can't tell → don't drop anyone
+  const watiByEmail = {};
+  for (const m of Object.values(teamMembers)) {
+    if (m && m.email) watiByEmail[String(m.email).toLowerCase()] = (m.channels || {}).wati !== false;
+  }
+  const out = new Set();
+  for (const uid of uidSet) {
+    const email = String(users[uid]?.email || "").toLowerCase();
+    if (!email || ADMIN_EMAILS.has(email)) { out.add(uid); continue; }
+    const access = email in watiByEmail ? watiByEmail[email] : true; // no record = allowed
+    if (access) out.add(uid);
+  }
+  return out;
+}
+
 // v1.332: Wati INBOUND webhook. Wati exposes no signature/secret mechanism, so
 // we authenticate with a secret token baked into the URL (?token=...). On an
 // inbound customer message we update the Wati activity index in real time so
@@ -981,6 +1007,26 @@ async function handleWatiWebhook(request, env) {
     lastMsgPreview: text,
     lastMsgDirection: "in",
   });
+
+  // v1.334: push-notify the trainers working this chat (open-ticket assignees +
+  // anyone who favorited it), intersected with Wati access. Fire-and-forget
+  // (like the Periskope webhook) so we still ack Wati within its window.
+  const senderName = String(m.senderName || "").trim();
+  if (typeof globalThis.queueMicrotask === "function") {
+    globalThis.queueMicrotask(() => {
+      (async () => {
+        const chatId = phoneToChatId(phone);
+        const targets = await resolvePushTargetUids(env, chatId);
+        const allowed = await filterUidsByWatiAccess(env, targets);
+        await sendPushToUids(env, allowed, {
+          title: `${senderName || phone} · Wati`,
+          body: text.slice(0, 200),
+          data: { chatKey: encodeKey(chatId), chatId, channel: "wati" },
+        });
+      })().catch((e) => console.warn("[wati-push] failed:", e));
+    });
+  }
+
   return json({ ok: true, phone, eventType });
 }
 

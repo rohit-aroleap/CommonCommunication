@@ -853,6 +853,41 @@ export function ThreadScreen({ route, navigation }: Props) {
     };
   }, [channel, canUseWati, phone]);
 
+  // v1.334: real-time inbound. Listen to this phone's Wati activity index;
+  // when it changes (an inbound reply captured by the webhook), refetch the
+  // thread immediately instead of waiting for the 15s poll. Reuses the worker's
+  // already-deduped /wati/messages — no client-side merge. Skips the initial
+  // fire (loadWati already fetched), and Firebase doesn't re-fire on identical
+  // values so the fetch's own index write can't loop.
+  useEffect(() => {
+    if (!canUseWati || channel !== "wati" || !phone) return;
+    let cancelled = false;
+    let first = true;
+    const unsub = onValue(
+      ref(db, `${ROOT}/watiChatsIndex/${phone}/lastMsgAt`),
+      async () => {
+        if (first) {
+          first = false;
+          return;
+        }
+        try {
+          const msgRes = await fetchWatiMessages(phone);
+          if (cancelled) return;
+          setWatiSession(msgRes.session);
+          const list = (msgRes.messages || []).map((m) => ({ ...m, id: m.id })) as Message[];
+          list.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+          setWatiMessages(list);
+        } catch {
+          /* transient — the 15s poll will catch up */
+        }
+      },
+    );
+    return () => {
+      cancelled = true;
+      unsub();
+    };
+  }, [channel, canUseWati, phone]);
+
   // v1.318: when the selected template changes, reset the fill-in fields —
   // pre-fill the name variable with the customer's name, others empty.
   useEffect(() => {
