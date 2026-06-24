@@ -137,6 +137,9 @@ export default {
       // sampled byte sizes of every node CommonComm reads, split by
       // "loaded on every page open" vs "lazy / per-chat", so we can see
       // where the download budget actually goes. Read-only, admin-gated.
+      if (url.pathname === "/admin/wati-webhook-log" && request.method === "GET") {
+        return cors(env, await handleWatiWebhookLog(env));
+      }
       if (url.pathname === "/admin/path-sizes" && request.method === "GET") {
         return cors(env, await handlePathSizes(env));
       }
@@ -6648,6 +6651,29 @@ function safeDetail(v) {
   if (v == null) return null;
   const s = typeof v === "string" ? v : JSON.stringify(v);
   return s.slice(0, 300);
+}
+
+// ---------- /admin/wati-webhook-log (diagnostic) ----------
+// v1.332: peek at the most recent Wati webhook hits (raw payloads logged to
+// _debug/watiWebhook) to confirm Wati is delivering and inspect the real
+// payload shape for this tenant. Read-only, admin-gated.
+async function handleWatiWebhookLog(env) {
+  const [recv, rejected] = await Promise.all([
+    fbGet(env, `${ROOT}/_debug/watiWebhook`).catch(() => null),
+    fbGet(env, `${ROOT}/_debug/watiWebhook_rejected`).catch(() => null),
+  ]);
+  const take = (obj) =>
+    Object.entries(obj || {})
+      .sort((a, b) => (a[0] < b[0] ? 1 : -1)) // keys are `${ts}_${rand}` → newest first
+      .slice(0, 10)
+      .map(([key, v]) => ({ key, ...(v || {}) }));
+  return json({
+    ok: true,
+    receivedCount: recv ? Object.keys(recv).length : 0,
+    rejectedCount: rejected ? Object.keys(rejected).length : 0,
+    recent: take(recv),
+    recentRejected: take(rejected),
+  });
 }
 
 // ---------- /admin/path-sizes (download-footprint diagnostic) ----------
