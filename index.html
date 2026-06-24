@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.324</title>
+<title>CommonCommunication v1.325</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -1562,6 +1562,14 @@
   .wt-grid tbody tr.wt-trow:hover .wt-firstcol { background: var(--hover); }
   .wt-grid .wt-detailrow td { background: var(--header); }
   .wt-grid input[type="checkbox"] { width: 17px; height: 17px; cursor: pointer; accent-color: var(--green); }
+  /* v1.325: team group headers + per-template tag dropdown */
+  .wt-grid .wt-grouprow td { background: var(--active); padding: 0; border-bottom: 1px solid var(--border); }
+  .wt-grid .wt-grouplabel { position: sticky; left: 0; display: inline-block;
+    font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--green-dark); padding: 7px 9px; }
+  .wt-grid select.wt-tag { margin-top: 5px; max-width: 160px; font-size: 11px;
+    padding: 2px 4px; border: 1px solid var(--border); border-radius: 5px;
+    background: var(--panel); color: var(--text); cursor: pointer; }
 
   /* ---------- Misc ---------- */
   .config-warn {
@@ -2977,7 +2985,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.324";
+const APP_VERSION = "v1.325";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -3060,6 +3068,7 @@ let dmsCache = {};                // pairKey -> { meta: {participants, lastMsgAt
 let dmRows = [];                  // last computed list for re-render
 let currentView = "chats";        // "chats" | "team" — sidebar toggle
 let watiTemplatesCache = [];
+let watiTemplateTags = {};        // v1.325: templateName -> team tag (sales/installation/...) — admin grid
 let watiMessagesCache = [];
 let watiSession = { isOpen: false };
 let watiLoading = false;
@@ -12056,6 +12065,17 @@ function watiStatusBadge(status) {
   return `<span style="background:${bg}; color:${fg}; padding:2px 9px; border-radius:11px; font-size:11px; font-weight:700; white-space:nowrap;">${escapeHtml(label)}</span>`;
 }
 
+// v1.325: team tags for grouping the Wati template grid. Order here IS the
+// order rows are arranged in (Sales first … Others last; untagged after that).
+const WATI_TEAM_TAGS = [
+  { key: "sales", label: "Sales" },
+  { key: "installation", label: "Installation" },
+  { key: "onboarding", label: "Onboarding" },
+  { key: "sa", label: "SA" },
+  { key: "retention", label: "Retention" },
+  { key: "others", label: "Others" },
+];
+
 function renderWatiTemplatesAdminList() {
   const body = $("watiTplListBody");
   if (!body) return;
@@ -12087,17 +12107,45 @@ function renderWatiTemplatesAdminList() {
     </tr></thead>`;
 
   const span = members.length + 1;
-  const rows = tpls.map((t, i) => {
+
+  // v1.325: order index for a template's team tag — tagged templates first in
+  // WATI_TEAM_TAGS order, untagged last.
+  const orderOf = (name) => {
+    const i = WATI_TEAM_TAGS.findIndex((x) => x.key === watiTemplateTags[name]);
+    return i === -1 ? WATI_TEAM_TAGS.length : i;
+  };
+  // Arrange by team, then alphabetically within each team.
+  const sorted = tpls.slice().sort((a, b) => {
+    const d = orderOf(a.name) - orderOf(b.name);
+    return d !== 0 ? d : (a.name || "").localeCompare(b.name || "");
+  });
+
+  const tagOptions = (sel) =>
+    `<option value="">— team —</option>` +
+    WATI_TEAM_TAGS.map((x) => `<option value="${x.key}"${sel === x.key ? " selected" : ""}>${x.label}</option>`).join("");
+
+  let rowsHtml = "";
+  let lastGroup = null;
+  sorted.forEach((t, i) => {
+    const grp = orderOf(t.name);
+    if (grp !== lastGroup) {
+      lastGroup = grp;
+      const label = grp < WATI_TEAM_TAGS.length ? WATI_TEAM_TAGS[grp].label : "Untagged";
+      rowsHtml += `<tr class="wt-grouprow"><td colspan="${span}"><div class="wt-grouplabel">${escapeHtml(label)}</div></td></tr>`;
+    }
     const n = (t.params || []).length;
     const cells = members.map((m) => {
       const checked = isVisible(m.key, t.name) ? "checked" : "";
       return `<td class="wt-cell"><input type="checkbox" data-tpl="${escapeHtml(t.name)}" data-key="${escapeHtml(m.key)}" ${checked}></td>`;
     }).join("");
-    return `
+    rowsHtml += `
       <tr class="wt-trow">
         <td class="wt-firstcol">
-          <span class="wt-name" data-i="${i}">${escapeHtml(t.name)}</span>
-          <span style="margin-left:6px;">${watiStatusBadge(t.status)}</span>
+          <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+            <span class="wt-name" data-i="${i}">${escapeHtml(t.name)}</span>
+            ${watiStatusBadge(t.status)}
+          </div>
+          <select class="wt-tag" data-tpl="${escapeHtml(t.name)}" title="Team — pick one to group this template">${tagOptions(watiTemplateTags[t.name])}</select>
         </td>
         ${cells}
       </tr>
@@ -12107,9 +12155,9 @@ function renderWatiTemplatesAdminList() {
           <div style="white-space:pre-wrap; word-break:break-word; max-width:560px; background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:9px 11px; font-size:13px; line-height:1.45;">${escapeHtml(t.bodyText || "(no body text)")}</div>
         </td>
       </tr>`;
-  }).join("");
+  });
 
-  body.innerHTML = `<table class="wt-grid">${head}<tbody>${rows}</tbody></table>`;
+  body.innerHTML = `<table class="wt-grid">${head}<tbody>${rowsHtml}</tbody></table>`;
 
   // Click a template name to preview / hide its message body.
   body.querySelectorAll(".wt-name").forEach((nameEl) => {
@@ -12119,8 +12167,8 @@ function renderWatiTemplatesAdminList() {
     };
   });
 
-  // Per-cell visibility toggle → write to Firebase. Checked = visible (delete
-  // the override); unchecked = hidden (write false). Mirrors the channel chips.
+  // Per-cell visibility toggle → write to Firebase. v1.324 opt-in: checked =
+  // granted (write true), unchecked = revoke (delete the key).
   body.querySelectorAll('input[type="checkbox"][data-tpl]').forEach((cb) => {
     cb.onchange = async () => {
       const name = cb.dataset.tpl;
@@ -12141,6 +12189,25 @@ function renderWatiTemplatesAdminList() {
       }
     };
   });
+
+  // v1.325: team-tag dropdown → write the tag and re-arrange the grid live.
+  body.querySelectorAll("select.wt-tag").forEach((sel) => {
+    sel.onchange = async () => {
+      const name = sel.dataset.tpl;
+      const tag = sel.value;
+      if (!name || /[.#$\[\]\/]/.test(name)) return;
+      const prev = watiTemplateTags[name];
+      if (tag) watiTemplateTags[name] = tag; else delete watiTemplateTags[name];
+      renderWatiTemplatesAdminList(); // optimistic re-sort into the new group
+      try {
+        await set(ref(db, `${ROOT}/config/watiTemplateTags/${name}`), tag || null);
+      } catch (e) {
+        if (prev) watiTemplateTags[name] = prev; else delete watiTemplateTags[name];
+        renderWatiTemplatesAdminList();
+        alert("Couldn't save tag: " + (e && e.message ? e.message : e));
+      }
+    };
+  });
 }
 
 async function openWatiTemplatesModal() {
@@ -12153,6 +12220,11 @@ async function openWatiTemplatesModal() {
   if (body) body.innerHTML = `<div style="padding:24px; text-align:center; color:var(--muted);">Loading templates…</div>`;
   try {
     await loadWatiTemplates(true);
+    // v1.325: load the per-template team tags so the grid can group + order by team.
+    try {
+      const tagSnap = await get(ref(db, `${ROOT}/config/watiTemplateTags`));
+      watiTemplateTags = tagSnap.val() || {};
+    } catch (_) { /* keep whatever we had; grouping just falls back to untagged */ }
     renderWatiTemplatesAdminList();
   } catch (e) {
     if (body) body.innerHTML = `<div style="padding:24px; text-align:center; color:#d9534f;">Couldn't load templates: ${escapeHtml(String(e && e.message ? e.message : e))}</div>`;
