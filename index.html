@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.336</title>
+<title>CommonCommunication v1.337</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2998,7 +2998,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.336";
+const APP_VERSION = "v1.337";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -9711,12 +9711,11 @@ function isWatiEligibleThread() {
   return !(meta.chatType === "group" || String(meta.chatId || "").endsWith("@g.us"));
 }
 
-// v1.323: the Wati Templates panel is now an ADMIN tool — it writes per-member
-// template visibility into config/teamMembers (the same place the Team modal
-// writes). So gate the button to admins, exactly like the Team button. (In
-// v1.322 it was a read-only viewer shown to anyone with Wati access.)
+// v1.337: the Wati Templates panel is available to EVERYONE (not just admins)
+// — the whole team manages the template library + arrangement + per-member
+// visibility collaboratively. (v1.323 had briefly gated it to admins.)
 function updateWatiTemplatesBtn() {
-  if (watiTemplatesBtn) watiTemplatesBtn.style.display = (currentUser && isAdmin(currentUser.email)) ? "" : "none";
+  if (watiTemplatesBtn) watiTemplatesBtn.style.display = currentUser ? "" : "none";
 }
 
 function refreshChannelUi() {
@@ -12351,10 +12350,7 @@ function renderWatiTemplatesAdminList() {
 }
 
 async function openWatiTemplatesModal() {
-  if (!watiTemplatesModal) return;
-  // v1.323: defence in depth — this panel writes per-member config, so only
-  // admins may open it (the button is already admin-gated).
-  if (!currentUser || !isAdmin(currentUser.email)) return;
+  if (!watiTemplatesModal || !currentUser) return; // v1.337: open to everyone
   watiOpenDetails = new Set(); // v1.327: start with all previews collapsed
   watiTemplatesModal.classList.add("visible");
   const body = $("watiTplListBody");
