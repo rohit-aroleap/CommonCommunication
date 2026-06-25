@@ -79,16 +79,19 @@ export function ChatsScreen() {
   // Wati activity keyed by last-10 digits so it matches a chat row's phone
   // regardless of country-code / formatting differences.
   const watiActivityByTen = useMemo(() => {
-    const m: Record<string, number> = {};
-    for (const [phone, ts] of Object.entries(watiActivityByPhone || {})) {
+    const m: Record<
+      string,
+      { lastMsgAt: number; lastMsgPreview: string; lastMsgDirection: string }
+    > = {};
+    for (const [phone, meta] of Object.entries(watiActivityByPhone || {})) {
       const k = String(phone).replace(/\D/g, "").slice(-10);
-      if (k && (!m[k] || ts > m[k])) m[k] = ts;
+      if (k && (!m[k] || meta.lastMsgAt > m[k].lastMsgAt)) m[k] = meta;
     }
     return m;
   }, [watiActivityByPhone]);
   const watiActivityFor = useCallback(
     (phone: string) =>
-      watiActivityByTen[String(phone || "").replace(/\D/g, "").slice(-10)] || 0,
+      watiActivityByTen[String(phone || "").replace(/\D/g, "").slice(-10)],
     [watiActivityByTen],
   );
   // v1.274: daily-cohort registry — powers the "no group" pill on rows.
@@ -338,7 +341,9 @@ export function ChatsScreen() {
     // their Periskope-activity order beneath the Wati ones.
     if (watiMode) {
       rows = [...rows].sort(
-        (a, b) => watiActivityFor(b.row.phone) - watiActivityFor(a.row.phone),
+        (a, b) =>
+          (watiActivityFor(b.row.phone)?.lastMsgAt || 0) -
+          (watiActivityFor(a.row.phone)?.lastMsgAt || 0),
       );
     }
     return rows;
@@ -372,7 +377,28 @@ export function ChatsScreen() {
       const base = favoritesOnly
         ? filtered.filter((r) => myFavorites[r.row.chatKey])
         : filtered;
-      return base.map((r) => ({ kind: "row", key: r.row.chatKey, item: r }));
+      return base.map((r) => {
+        const w = watiActivityFor(r.row.phone);
+        // v1.335: in Wati mode show the latest WATI message preview + time (not
+        // the Periskope/Trainer-1 one) for chats that have Wati activity.
+        const row =
+          w && w.lastMsgAt
+            ? {
+                ...r.row,
+                preview: w.lastMsgPreview || r.row.preview,
+                lastMsgAt: w.lastMsgAt,
+                direction:
+                  w.lastMsgDirection === "out"
+                    ? ("out" as const)
+                    : w.lastMsgDirection === "in"
+                      ? ("in" as const)
+                      : r.row.direction,
+                sentByName: w.lastMsgDirection === "out" ? "You" : null,
+                lastMsgStatus: undefined,
+              }
+            : r.row;
+        return { kind: "row", key: r.row.chatKey, item: { ...r, row } };
+      });
     }
     const tickets: typeof filtered = [];
     const favorites: typeof filtered = [];
@@ -402,7 +428,7 @@ export function ChatsScreen() {
       items.push({ kind: "row", key: r.row.chatKey, item: r });
     }
     return items;
-  }, [filtered, myFavorites, myTicketChatKeys, favoritesOnly, watiMode]);
+  }, [filtered, myFavorites, myTicketChatKeys, favoritesOnly, watiMode, watiActivityFor]);
 
   // v1.163: edges={[]} — was edges={["top"]} which double-counted the
   // status-bar inset on Android. The React Navigation Stack header
