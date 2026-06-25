@@ -566,6 +566,8 @@ export function ChatsScreen() {
                   // v1.292: a daily group opened from the everyday inbox
                   // (not the Daily Groups tab) shows a text-only thread.
                   textOnly: rowIsDaily && !dailyView ? true : undefined,
+                  // v1.336: open on the same channel tab the list is showing.
+                  initialChannel: watiMode ? "wati" : "periskope",
                 })
               }
               onToggleFavorite={() => toggleFavorite(r.chatKey)}

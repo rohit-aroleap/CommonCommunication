@@ -162,7 +162,7 @@ function renderWatiTemplateBody(
 }
 
 export function ThreadScreen({ route, navigation }: Props) {
-  const { chatKey, initialTitle, anchorMsgKey } = route.params;
+  const { chatKey, initialTitle, anchorMsgKey, initialChannel } = route.params;
   const { user } = useAuth();
   // v1.291: daily-workout Text-only mode (shared with the chat list).
   const [dailyTextOnly] = useDailyTextOnly();
@@ -265,7 +265,12 @@ export function ThreadScreen({ route, navigation }: Props) {
   ]);
 
   const [messages, setMessages] = useState<Message[]>([]);
-  const [channel, setChannel] = useState<"periskope" | "wati">("periskope");
+  // v1.336: open on the channel the Chats list was showing (Wati only if this
+  // chat actually supports it). The access-gating effect below corrects it if
+  // the member lacks Wati access / it's a group/DM.
+  const [channel, setChannel] = useState<"periskope" | "wati">(
+    initialChannel === "wati" && canUseWati ? "wati" : "periskope",
+  );
   const [watiMessages, setWatiMessages] = useState<Message[]>([]);
   const [watiTemplates, setWatiTemplates] = useState<WatiTemplate[]>([]);
   const [watiTemplateName, setWatiTemplateName] = useState("");

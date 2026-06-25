@@ -21,6 +21,11 @@ export type RootStackParamList = {
     initialTitle?: string;
     anchorMsgKey?: string;
     textOnly?: boolean;
+    // v1.336: which channel tab to open on. The Chats list passes its
+    // current Periskope/Wati toggle so opening a customer lands on the
+    // same channel you were viewing (falls back to Periskope if the
+    // member lacks Wati access on this chat).
+    initialChannel?: "periskope" | "wati";
     // v1.295: "Reply privately to customer" — open the member's 1:1
     // thread with a pending cross-chat reply quoting their group message.
     // The thread consumes this on mount, sets it as the reply target, and
