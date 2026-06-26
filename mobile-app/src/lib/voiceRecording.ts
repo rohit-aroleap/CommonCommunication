@@ -54,6 +54,10 @@ export function makeSaRecordingOptions(audioMod: any) {
     sampleRate: 22050,
     numberOfChannels: 1,
     bitRate: 24000,
+    // v1.338: surface live input level (dB) in the recorder status so the SA
+    // modal can draw a mic waveform — a flat line tells the trainer the mic
+    // isn't picking anything up. Negligible overhead.
+    isMeteringEnabled: true,
     android: {
       outputFormat: "mpeg4",
       audioEncoder: "aac",

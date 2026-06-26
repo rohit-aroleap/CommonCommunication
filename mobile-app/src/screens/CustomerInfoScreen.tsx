@@ -1542,6 +1542,46 @@ function sanitizeNameForFs(s: string): string {
     .slice(0, 80);
 }
 
+// v1.338: live mic waveform for the SA recorder. Polls the recorder's metering
+// (input level in dB) on its own 100ms tick and renders a rolling row of bars,
+// so the trainer can see the mic is actually picking up audio — flat bars mean
+// silence / a dead mic. Self-contained so the fast tick re-renders only these
+// bars, not the whole modal.
+const WAVE_BARS = 34;
+function MicLevelWaveform({ recorder }: { recorder: any }) {
+  const styles = useStyles(makeStyles);
+  const [levels, setLevels] = useState<number[]>(() =>
+    new Array(WAVE_BARS).fill(0),
+  );
+  useEffect(() => {
+    const id = setInterval(() => {
+      let amp = 0;
+      try {
+        const m = recorder?.getStatus?.()?.metering;
+        if (typeof m === "number" && isFinite(m)) {
+          // metering ≈ -160 dB (silence) … 0 dB (loud). Map -50…0 → 0…1.
+          amp = Math.max(0, Math.min(1, (m + 50) / 50));
+        }
+      } catch {
+        // ignore transient status-read errors
+      }
+      setLevels((prev) => {
+        const next = prev.slice(1);
+        next.push(amp);
+        return next;
+      });
+    }, 100);
+    return () => clearInterval(id);
+  }, [recorder]);
+  return (
+    <View style={styles.waveRow} accessibilityLabel="Microphone input level">
+      {levels.map((a, i) => (
+        <View key={i} style={[styles.waveBar, { height: 3 + a * 41 }]} />
+      ))}
+    </View>
+  );
+}
+
 // v1.236: Full-screen SA recording modal. Owns the expo-audio recorder
 // lifecycle — created on mount, torn down on unmount.
 //
@@ -2154,6 +2194,10 @@ function SaRecorderModal({
           </Text>
         </View>
 
+        {/* v1.338: live mic waveform — confirms the mic is actually capturing.
+            Bars stay flat if no audio is reaching the recorder. */}
+        {isRecording && <MicLevelWaveform recorder={recorder} />}
+
         {/* v1.253: screen-stays-on is app-wide now (App.tsx), so the
             recorder doesn't need to call it out specifically. Trainer is
             reminded to keep the tablet plugged in since screen-on +
@@ -2649,6 +2693,19 @@ function makeStyles(colors: Colors) {
     alignItems: "center",
     justifyContent: "center",
     gap: 24,
+  },
+  // v1.338: live mic-level waveform (rolling bars) under the timer.
+  waveRow: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    justifyContent: "center",
+    height: 46,
+    gap: 2,
+  },
+  waveBar: {
+    width: 3,
+    borderRadius: 2,
+    backgroundColor: colors.green,
   },
   saTimerCircle: {
     width: 220,
