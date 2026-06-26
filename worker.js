@@ -110,6 +110,9 @@ export default {
       if (url.pathname === "/agent/dm/send" && request.method === "POST") {
         return cors(env, await handleAgentDmSend(request, env));
       }
+      if (url.pathname === "/agent/onboarding/usage-logs" && request.method === "POST") {
+        return cors(env, await handleAgentOnboardingUsageLogs(request, env));
+      }
       // v1.271: diagnostic for "ghost teammate" investigations. Lists every
       // record under /commonComm/users alongside its admin-allowed status,
       // computed from /config/allowedEmails + /config/teamMembers + the
@@ -177,7 +180,7 @@ export default {
         return cors(env, json({
           service: "CommonCommunication Worker",
           status: "ok",
-          endpoints: ["/health", "/send (POST)", "/edit-message (POST)", "/delete-message (POST)", "/webhook (POST)", "/messages?chatId=... (GET)", "/transcribe (POST)", "/cleanup (POST)", "/register-push-token (POST)", "/ai-inbox (POST)", "/agent/dm/resolve-recipient (POST)", "/agent/dm/send (POST)"],
+          endpoints: ["/health", "/send (POST)", "/edit-message (POST)", "/delete-message (POST)", "/webhook (POST)", "/messages?chatId=... (GET)", "/transcribe (POST)", "/cleanup (POST)", "/register-push-token (POST)", "/ai-inbox (POST)", "/agent/dm/resolve-recipient (POST)", "/agent/dm/send (POST)", "/agent/onboarding/usage-logs (POST)"],
         }));
       }
       if (url.pathname === "/messages" && request.method === "GET") {
@@ -7279,6 +7282,19 @@ async function handleAgentDmResolve(request, env) {
   const resolved = await resolveCommonCommUserByEmail(env, body?.toEmail || body?.email);
   if (resolved.error) return json({ ok: false, ...resolved }, resolved.error === "invalid_email" ? 400 : 404);
   return json({ ok: true, recipient: resolved });
+}
+
+async function handleAgentOnboardingUsageLogs(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const dates = Array.isArray(body?.dates) ? body.dates : [];
+  const cleanDates = [...new Set(dates.map(d => String(d || "").trim()).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)))].slice(0, 10);
+  if (!cleanDates.length) return json({ ok: false, error: "missing dates" }, 400);
+
+  const logs = {};
+  for (const date of cleanDates) {
+    logs[date] = await fbGet(env, `onboarding/v1/usageLogs/${date}`).catch(err => ({ error: String(err?.message || err) }));
+  }
+  return json({ ok: true, dates: cleanDates, logs });
 }
 
 async function handleAgentDmSend(request, env) {
