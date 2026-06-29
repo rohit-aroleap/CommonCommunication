@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.339</title>
+<title>CommonCommunication v1.340</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -927,6 +927,24 @@
     border-bottom: none;
     background: transparent;
     padding: 8px 12px 4px;
+  }
+  /* v1.340: CGroups subscription-id badge shown on each CGroups list row. */
+  .cg-subid {
+    display: inline-block;
+    background: var(--green, #25d366);
+    color: #fff;
+    font-size: 10.5px;
+    font-weight: 700;
+    line-height: 1;
+    padding: 2px 5px;
+    border-radius: 5px;
+    margin-right: 6px;
+    vertical-align: middle;
+    letter-spacing: .3px;
+  }
+  .cg-hint {
+    padding: 10px 14px; font-size: 12px; color: var(--muted);
+    text-align: center;
   }
   .thread-empty {
     flex: 1; display: flex; align-items: center; justify-content: center;
@@ -2451,6 +2469,7 @@
       <div class="channel-tabs list-channel-tabs" id="chatChannelToggle" style="display:none;">
         <button class="channel-tab active" id="listPeriskopeTab" data-list-channel="periskope">Trainer 1</button>
         <button class="channel-tab" id="listWatiTab" data-list-channel="wati">Wati</button>
+        <button class="channel-tab" id="listCgroupsTab" data-list-channel="cgroups">CGroups</button>
       </div>
       <div class="search-row">
         <input id="searchInput" placeholder="Search chats and messages…" />
@@ -3015,7 +3034,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.339";
+const APP_VERSION = "v1.340";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -3154,8 +3173,14 @@ const watiTab = $("watiTab");
 const chatChannelToggle = $("chatChannelToggle");
 const listPeriskopeTab = $("listPeriskopeTab");
 const listWatiTab = $("listWatiTab");
+// v1.340: CGroups list channel — per-customer WhatsApp groups on +919187651332.
+const listCgroupsTab = $("listCgroupsTab");
 let chatListChannel = "periskope";
 let watiActivityByTen = {}; // last-10 phone digits -> {lastMsgAt, lastMsgPreview, lastMsgDirection}
+// CGroups read-only cache (fetched live from the worker's /cgroups-list).
+let cgroupsRows = null;       // null = not loaded yet; [] = loaded, empty
+let cgroupsLoading = false;
+let cgroupsError = null;
 const watiComposerPanel = $("watiComposerPanel");
 const watiParamPanel = $("watiParamPanel");
 const watiTemplateSelect = $("watiTemplateSelect");
@@ -8239,6 +8264,13 @@ function renderChatList(rows) {
   // v1.339: keep the Trainer 1 / Wati list toggle visibility in sync with the
   // current view + Wati access (runs on every render, incl. view switches).
   updateChatChannelToggle();
+  // v1.340: CGroups channel renders a separate, live-fetched dataset (the
+  // per-customer WhatsApp groups) — not the Periskope chat index — so it
+  // short-circuits here before any of the customer-inbox filtering below.
+  if (chatListChannel === "cgroups") {
+    renderCgroupsList();
+    return;
+  }
   const watiMode = chatListChannel === "wati" && myChannelAccess().wati;
   // Team view is its own sidebar mode — pure list of internal DMs plus a
   // "Start new DM" entry at the top. Customer filters / search don't apply
@@ -9892,26 +9924,127 @@ function listenWatiChatsIndex() {
   });
 }
 function setChatListChannel(c) {
-  chatListChannel = (c === "wati" && myChannelAccess().wati) ? "wati" : "periskope";
+  if (c === "cgroups") {
+    chatListChannel = "cgroups";
+    if (cgroupsRows === null && !cgroupsLoading) loadCgroups();
+  } else if (c === "wati" && myChannelAccess().wati) {
+    chatListChannel = "wati";
+  } else {
+    chatListChannel = "periskope";
+  }
   if (listPeriskopeTab) listPeriskopeTab.classList.toggle("active", chatListChannel === "periskope");
   if (listWatiTab) listWatiTab.classList.toggle("active", chatListChannel === "wati");
+  if (listCgroupsTab) listCgroupsTab.classList.toggle("active", chatListChannel === "cgroups");
   renderChatList(lastChatRows);
 }
-// Show the toggle only for members with Wati access, on the customer chats
-// view (not the team-DM view). Called from the top of renderChatList so it
-// always tracks the live view + access without extra wiring.
+// Show the toggle on the customer chats view (not the team-DM view). Trainer 1
+// + CGroups are visible to everyone; the Wati button is shown only to members
+// with Wati access. Called from the top of renderChatList so it always tracks
+// the live view + access without extra wiring.
 function updateChatChannelToggle() {
   if (!chatChannelToggle) return;
-  const show = myChannelAccess().wati && currentView !== "team";
+  // Wati is access-gated. CGroups lists EVERY customer group on the number, so
+  // hide it from limited trainers (whose inbox is otherwise scoped to their
+  // own assigned chats). Show the toggle only when at least one channel beyond
+  // Trainer 1 is available — otherwise a lone "Trainer 1" button is pointless.
+  const watiOk = myChannelAccess().wati;
+  const cgroupsOk = !isLimitedUser();
+  const show = currentView !== "team" && (watiOk || cgroupsOk);
   chatChannelToggle.style.display = show ? "flex" : "none";
-  if (!show && chatListChannel !== "periskope") {
+  if (listWatiTab) listWatiTab.style.display = watiOk ? "" : "none";
+  if (listCgroupsTab) listCgroupsTab.style.display = cgroupsOk ? "" : "none";
+  // If the active channel is no longer valid (left customer view, lost Wati
+  // access while on Wati, or limited while on CGroups), fall back to Trainer 1.
+  const invalid =
+    !show ||
+    (chatListChannel === "wati" && !watiOk) ||
+    (chatListChannel === "cgroups" && !cgroupsOk);
+  if (invalid && chatListChannel !== "periskope") {
     chatListChannel = "periskope";
     if (listPeriskopeTab) listPeriskopeTab.classList.add("active");
     if (listWatiTab) listWatiTab.classList.remove("active");
+    if (listCgroupsTab) listCgroupsTab.classList.remove("active");
   }
 }
 if (listPeriskopeTab) listPeriskopeTab.onclick = () => setChatListChannel("periskope");
 if (listWatiTab) listWatiTab.onclick = () => setChatListChannel("wati");
+if (listCgroupsTab) listCgroupsTab.onclick = () => setChatListChannel("cgroups");
+
+// v1.340: CGroups read-only listing. Fetches the live per-customer WhatsApp
+// groups (FERRA <subId> <name>) from the worker and renders them into the
+// chat-list area. Clicking a row opens the group thread via the normal
+// openChat path (the group's chatId is keyed the same way as any other chat).
+async function loadCgroups() {
+  if (cgroupsLoading) return;
+  cgroupsLoading = true;
+  cgroupsError = null;
+  if (chatListChannel === "cgroups") renderChatList(lastChatRows);
+  try {
+    const r = await fetch(`${WORKER_URL}/cgroups-list`);
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || "load failed");
+    cgroupsRows = Array.isArray(j.groups) ? j.groups : [];
+  } catch (e) {
+    cgroupsError = e.message || "Could not load CGroups";
+    cgroupsRows = cgroupsRows || [];
+  } finally {
+    cgroupsLoading = false;
+    if (chatListChannel === "cgroups") renderChatList(lastChatRows);
+  }
+}
+
+function renderCgroupsList() {
+  if (!chatList) return;
+  if (cgroupsLoading && (cgroupsRows === null || cgroupsRows.length === 0)) {
+    chatList.innerHTML = `<div class="cg-hint">Loading CGroups…</div>`;
+    return;
+  }
+  const all = cgroupsRows || [];
+  // Honor the shared search box (filters by name, subId, or preview).
+  const term = (searchInput?.value || "").trim().toLowerCase();
+  const rows = term
+    ? all.filter(g =>
+        (g.customerName || "").toLowerCase().includes(term) ||
+        (g.subId || "").toLowerCase().includes(term) ||
+        (g.lastMessage?.body || "").toLowerCase().includes(term))
+    : all;
+  const errHtml = cgroupsError
+    ? `<div class="cg-hint" style="color:var(--danger,#c0392b);">⚠ ${escapeHtml(cgroupsError)} — <a href="#" id="cgRetry">retry</a></div>`
+    : "";
+  const headHtml = `<div class="cg-hint">${all.length} customer group${all.length === 1 ? "" : "s"} on +91 91876 51332 · <a href="#" id="cgRefresh">refresh</a></div>`;
+  if (rows.length === 0 && !cgroupsError) {
+    chatList.innerHTML = headHtml + `<div class="empty">${term ? "No CGroups match your search." : "No customer groups yet."}</div>`;
+  } else {
+    const rowsHtml = rows.map(g => {
+      const chatKey = encodeKey(g.chatId);
+      const initial = (g.customerName || "?").replace(/^(mr|mrs|ms|dr|prof)\.?\s*/i, "").trim().charAt(0).toUpperCase() || "?";
+      const preview = (g.lastMessage?.body || "").replace(/\s+/g, " ").trim();
+      const previewWho = g.lastMessage?.fromMe ? `<span class="me">You: </span>` : "";
+      const active = chatKey === currentChatId ? " active" : "";
+      return `
+      <div class="chat-row${active}" data-key="${escapeHtml(chatKey)}">
+        <div class="avatar">${escapeHtml(initial)}</div>
+        <div class="meta">
+          <div class="top">
+            <span class="name"><span class="cg-subid">${escapeHtml(g.subId)}</span>${escapeHtml(g.customerName)}</span>
+            <span class="time">${g.updatedAt ? formatTime(new Date(g.updatedAt).getTime()) : ""}</span>
+          </div>
+          <div class="bottom">
+            <span class="preview">${previewWho}${escapeHtml(preview)}</span>
+          </div>
+        </div>
+      </div>`;
+    }).join("");
+    chatList.innerHTML = headHtml + errHtml + rowsHtml;
+  }
+  chatList.querySelectorAll(".chat-row").forEach(el => {
+    el.onclick = () => openChat(el.dataset.key);
+  });
+  const refreshLink = document.getElementById("cgRefresh");
+  if (refreshLink) refreshLink.onclick = (e) => { e.preventDefault(); cgroupsRows = null; loadCgroups(); };
+  const retryLink = document.getElementById("cgRetry");
+  if (retryLink) retryLink.onclick = (e) => { e.preventDefault(); cgroupsRows = null; loadCgroups(); };
+}
 // Star/unstar the currently-selected Wati template; reflect ★/☆ on selection.
 if (watiTemplateStarBtn) watiTemplateStarBtn.onclick = () => {
   const name = watiTemplateSelect?.value || "";

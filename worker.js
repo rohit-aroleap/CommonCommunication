@@ -385,6 +385,11 @@ export default {
       if (url.pathname === "/cohort-add" && request.method === "POST") {
         return cors(env, await handleCohortAdd(request, env, ctx));
       }
+      // v1.340: CGroups — per-customer WhatsApp groups on +919187651332.
+      // Read-only listing for the new "CGroups" sidebar tab.
+      if (url.pathname === "/cgroups-list" && request.method === "GET") {
+        return cors(env, await handleCgroupsList(env));
+      }
       // v1.280: Exotel click-to-call. Trainer taps Call on a customer chat;
       // Exotel rings the trainer's own phone first, then bridges to the
       // customer (who sees the Ferra virtual CallerId). Allowlist + the
@@ -6147,6 +6152,74 @@ async function handleExotelCall(request, env, ctx) {
     }).then(() => {}).catch(() => {}),
   );
   return json({ ok: true, callSid, ringing: fromPhone });
+}
+
+// ---------- /cgroups-list (CGroups: per-customer WhatsApp groups) ----------
+// v1.340: the CGroups framework moves each customer onto their own WhatsApp
+// GROUP (named "FERRA <subId> <Customer Name>", e.g. "FERRA 0468 Mr.Sundeep
+// Das") on +919187651332 instead of an easily-blocked 1:1 DM on the Trainer 1
+// number. This endpoint lists those customer groups (read-only) for the new
+// "CGroups" sidebar tab. The 4-digit token after "FERRA " is the customer's
+// Ferra subscription ID.
+//
+// We return ONLY groups whose name matches that exact format — NOT the
+// internal team groups ("Ferra onboarding team", "Ferra shipping" — note the
+// mixed-case "Ferra" with no digit) and NOT the daily-workout cohort groups
+// ("Daily Workout Ferra C0XX"). Requiring all-caps "FERRA" + a numeric id is
+// what cleanly separates the three.
+//
+// Source of truth is the live Periskope group list (via the gateway), so the
+// tab reflects groups created by hand today and by future provisioning,
+// without any registry to keep in sync.
+const CGROUP_NAME_RE = /^FERRA[\s-]+(\d{2,6})[\s-]+(.+?)\s*$/;
+
+async function handleCgroupsList(env) {
+  const groups = [];
+  const limit = 200;
+  let offset = 0;
+  // Periskope paginates; ~93 chats live on the number today so one page is
+  // enough, but loop defensively up to 3 pages (600 chats).
+  for (let page = 0; page < 3; page++) {
+    const res = await env.PERISKOPE_GATEWAY.fetch(
+      new Request(
+        `https://gateway/group/list?dashboard=commoncomm&limit=${limit}&offset=${offset}`,
+        { method: "GET" },
+      ),
+    );
+    const j = await safeJson(res);
+    if (!res.ok) {
+      return json({ error: "cgroups_list_failed", status: res.status, detail: j }, 502);
+    }
+    const arr = Array.isArray(j) ? j : j?.chats || j?.data || j?.result || [];
+    if (!Array.isArray(arr) || arr.length === 0) break;
+    for (const c of arr) {
+      const chatId = c.chat_id || c.id;
+      const name = String(c.chat_name || "");
+      if (!chatId || !String(chatId).endsWith("@g.us")) continue;
+      const m = CGROUP_NAME_RE.exec(name);
+      if (!m) continue;
+      const lm = c.latest_message || null;
+      groups.push({
+        chatId,
+        subId: m[1],
+        customerName: m[2],
+        groupName: name,
+        inviteLink: c.invite_link || null,
+        updatedAt: c.updated_at || null,
+        lastMessage: lm
+          ? {
+              body: typeof lm.body === "string" ? lm.body.slice(0, 240) : "",
+              fromMe: !!(lm?.id?.from_me ?? lm?.from_me),
+            }
+          : null,
+      });
+    }
+    if (arr.length < limit) break;
+    offset += limit;
+  }
+  // Newest activity first.
+  groups.sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+  return json({ ok: true, count: groups.length, groups });
 }
 
 // ---------- /cohort-list + /cohort-add (daily WhatsApp groups) ----------
