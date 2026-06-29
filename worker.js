@@ -566,7 +566,16 @@ async function handleSend(request, env) {
     return json({ error: "missing sentByUid/sentByName" }, 400);
   }
 
-  const resolvedChatId = chatId || phoneToChatId(phone);
+  let resolvedChatId = chatId || phoneToChatId(phone);
+  // Safety net (v1.341 — CGroups): clients must send the RAW chat id
+  // ("…@g.us"). If an ENCODED Firebase key leaks through ("…@g_us" — the dot
+  // replaced by "_"), the Periskope gateway rejects it as an invalid WhatsApp
+  // id. Normalize the known suffixes so no client (web or mobile) can trip on
+  // it. Raw ids never contain "_" in the @c.us / @g.us suffix, so this only
+  // ever rewrites an encoded key.
+  resolvedChatId = String(resolvedChatId || "")
+    .replace(/[@_]c_us$/i, "@c.us")
+    .replace(/[@_]g_us$/i, "@g.us");
   const resolvedPhone = phone || chatIdToPhone(resolvedChatId);
 
   // v1.272: convert base64 filedata into an R2-hosted URL. The

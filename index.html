@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.340</title>
+<title>CommonCommunication v1.341</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -3034,7 +3034,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.340";
+const APP_VERSION = "v1.341";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -5062,10 +5062,15 @@ function updateChatMeta(chatKey, fields) {
 }
 
 // ====== CHAT LIST ======
-// Reverse the encodeKey transform: "919945440322_c_us" → "919945440322@c.us".
-// Only handles chat-id-shaped keys; arbitrary keys pass through.
+// Reverse the encodeKey transform: "919945440322@c_us" → "919945440322@c.us".
+// encodeKey replaces [.#$[]/] → "_" but KEEPS "@", so a chat id "…@g.us" is
+// keyed "…@g_us" (only the dot is encoded). Reverse that suffix. The legacy
+// "…_c_us"/"…_g_us" forms (where "@" was also encoded) are tolerated for
+// safety. Only chat-id-shaped keys are touched; arbitrary keys pass through.
 function chatKeyToChatId(chatKey) {
   if (!chatKey) return "";
+  if (chatKey.endsWith("@c_us")) return chatKey.slice(0, -5) + "@c.us";
+  if (chatKey.endsWith("@g_us")) return chatKey.slice(0, -5) + "@g.us";
   if (chatKey.endsWith("_c_us")) return chatKey.slice(0, -5) + "@c.us";
   if (chatKey.endsWith("_g_us")) return chatKey.slice(0, -5) + "@g.us";
   return chatKey;
@@ -10285,14 +10290,19 @@ function listenDmMessages(pairKey) {
 async function maybeFetchGroupInfo(chatKey) {
   if (!WORKER_URL) return;
   const meta = chatsCache[chatKey] || {};
-  const isGroup = meta.chatType === "group" || String(meta.chatId || "").endsWith("@g.us");
+  // Decode the key so a group opened from the CGroups tab (not yet in
+  // chatsIndex, so meta is empty) is still recognized as a group and gets its
+  // name + members fetched — which mirrors into chatsIndex and populates the
+  // thread header. (v1.341)
+  const rawChatId = meta.chatId || chatKeyToChatId(chatKey);
+  const isGroup = meta.chatType === "group" || String(rawChatId).endsWith("@g.us");
   if (!isGroup) return;
   if (meta.groupName) return;
   try {
     await fetch(`${WORKER_URL}/fetch-chat-info`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chatId: meta.chatId || chatKey }),
+      body: JSON.stringify({ chatId: rawChatId }),
     });
   } catch (e) {
     console.warn("group info fetch failed:", e);
@@ -13636,8 +13646,12 @@ async function doSendMedia(media) {
   }
   if (!WORKER_URL) { alert("Worker URL not configured."); return; }
   const meta = chatsCache[currentChatId] || {};
-  const chatId = meta.chatId || currentChatId;
-  const phone = meta.phone || currentChatId.split("_")[0];
+  // currentChatId is the Firebase KEY (e.g. "…@g_us"); decode it to the raw
+  // chat id ("…@g.us") when meta isn't cached yet — without this, a chat opened
+  // from the CGroups tab (not yet in chatsIndex) would POST the encoded key to
+  // the gateway, which rejects it. (v1.341)
+  const chatId = meta.chatId || chatKeyToChatId(currentChatId);
+  const phone = meta.phone || String(chatId).split("@")[0];
   const caption = composerInput.value.trim();
 
   // Optimistic write — show in thread immediately as "sending"
@@ -13883,8 +13897,12 @@ async function doSend() {
   try {
 
   const meta = chatsCache[currentChatId] || {};
-  const chatId = meta.chatId || currentChatId;
-  const phone = meta.phone || currentChatId.split("_")[0];
+  // currentChatId is the Firebase KEY (e.g. "…@g_us"); decode it to the raw
+  // chat id ("…@g.us") when meta isn't cached yet — without this, a chat opened
+  // from the CGroups tab (not yet in chatsIndex) would POST the encoded key to
+  // the gateway, which rejects it. (v1.341)
+  const chatId = meta.chatId || chatKeyToChatId(currentChatId);
+  const phone = meta.phone || String(chatId).split("@")[0];
 
   // v1.132: snapshot mentions before we clear the composer. snapshotMentions
   // filters out anyone whose name was erased between picking and sending.
