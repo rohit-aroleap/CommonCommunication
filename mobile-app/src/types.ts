@@ -328,6 +328,10 @@ export interface FerraSubscription {
   currentStep?: string;
   customerPhone?: string;
   customerName?: string;
+  // v1.342: the FERRA-#### number (e.g. "FERRA-0474") from the Ferra export's
+  // customer.customerId, now mirrored onto every bySubscription record by
+  // ferra-sync. Links a CGroup ("FERRA <id> <name>") to its owner subscription.
+  customerId?: string;
   customerEmail?: string;
   memberPhones?: string[];
   memberNames?: string[];

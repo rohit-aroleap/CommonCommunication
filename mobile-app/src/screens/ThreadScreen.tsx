@@ -229,6 +229,12 @@ export function ThreadScreen({ route, navigation }: Props) {
   const canUseWati = !isDm && !isGroup && channelAccess.wati;
   const chatId = isDm ? "" : meta.chatId || chatKeyToChatId(chatKey);
   const phone = isDm ? "" : meta.phone || chatId.split("@")[0];
+  // v1.342: a CGroup ("FERRA <id> <name>") is a group, but its info screen
+  // shows the subscription owner — so the Details pill must open for it too.
+  // groupName is often empty on first open, so also accept the passed title.
+  const isCgroupThread =
+    isGroup &&
+    /^FERRA[\s-]+\d{2,6}[\s-]+/i.test(meta.groupName || initialTitle || "");
 
   const headerName = useMemo(() => {
     if (initialTitle) return initialTitle;
@@ -711,7 +717,7 @@ export function ThreadScreen({ route, navigation }: Props) {
                   <Text style={styles.headerBtnTxt}>📞</Text>
                 </TouchableOpacity>
               )}
-              {!isGroup && (
+              {(!isGroup || isCgroupThread) && (
                 <TouchableOpacity
                   accessibilityLabel="Customer details"
                   onPress={() =>
@@ -736,7 +742,7 @@ export function ThreadScreen({ route, navigation }: Props) {
             </View>
           ),
     });
-  }, [navigation, headerName, isDm, chatKey, isGroup, exotelEnabled, handleExotelCall]);
+  }, [navigation, headerName, isDm, chatKey, isGroup, isCgroupThread, exotelEnabled, handleExotelCall]);
 
   // Live messages listener (last 300). DM messages live at /dms/{pairKey}
   // and use fromUid instead of a direction field — we translate at the

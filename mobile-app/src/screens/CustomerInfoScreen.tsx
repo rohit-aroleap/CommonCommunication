@@ -29,7 +29,7 @@ import { space, useStyles, useTheme, type Colors } from "@/theme";
 import { useAppData, openTicketsForChat } from "@/data/AppDataContext";
 import { useAuth } from "@/auth/AuthContext";
 import { resolveDisplayName } from "@/lib/displayName";
-import { chatKeyToChatId } from "@/lib/encodeKey";
+import { chatKeyToChatId, encodeKey } from "@/lib/encodeKey";
 import { getFerraUserByPhone, normalizeFerraPhone } from "@/lib/ferra";
 import {
   formatPhoneDisplay,
@@ -117,6 +117,8 @@ export function CustomerInfoScreen({ route, navigation }: Props) {
     sharedCustomerDetails,
     subsByPhone,
     tickets,
+    cgroups,
+    loadCgroups,
   } = useAppData();
 
   const meta = chatMetaByKey[chatKey] ?? {};
@@ -124,7 +126,38 @@ export function CustomerInfoScreen({ route, navigation }: Props) {
     meta.chatType === "group" ||
     String(meta.chatId || "").endsWith("@g.us");
   const chatId = meta.chatId || chatKeyToChatId(chatKey);
-  const phone = meta.phone || chatId.split("@")[0];
+
+  // v1.342: CGroup owner resolution (parity with the web info drawer). A CGroup
+  // thread arrives with no Firebase meta (ChatsScreen navigates with only
+  // chatKey + initialTitle), so we match the cgroups cache by chatId, read its
+  // subId, find the subscription whose customerId matches, and use the owner's
+  // phone — then everything below renders the OWNER's card. cgroups loads lazily
+  // (only when the CGroups tab opens), so kick a fetch for cold deep-links.
+  useEffect(() => {
+    if (cgroups === null) loadCgroups();
+  }, [cgroups, loadCgroups]);
+  const cgInfo = useMemo(() => {
+    if (!isGroup) return null;
+    const row = (cgroups || []).find((g) => encodeKey(g.chatId) === chatKey);
+    if (!row) return null; // non-CGroup group (daily cohort / team) — leave null
+    const eqId = (a?: string, b?: string) => {
+      const da = String(a || "").replace(/\D/g, "");
+      const dbb = String(b || "").replace(/\D/g, "");
+      return !!da && !!dbb && (da === dbb || Number(da) === Number(dbb));
+    };
+    let ownerPhone = "";
+    for (const list of subsByPhone.values()) {
+      const hit = list.find((s) => eqId(s.customerId, row.subId));
+      if (hit) {
+        ownerPhone = String(hit.customerPhone || "").replace(/\D/g, "");
+        break;
+      }
+    }
+    return { row, ownerPhone, label: row.groupName || "FERRA " + row.subId };
+  }, [isGroup, cgroups, chatKey, subsByPhone]);
+  const cgroupOwnerPhone = cgInfo?.ownerPhone || "";
+
+  const phone = cgroupOwnerPhone || meta.phone || chatId.split("@")[0];
 
   const displayName = useMemo(
     () =>
@@ -132,7 +165,9 @@ export function CustomerInfoScreen({ route, navigation }: Props) {
         phone,
         meta.contactName || meta.displayName,
         {
-          chatType: isGroup ? "group" : "user",
+          // v1.342: once a CGroup resolves to an owner phone, render it as a
+          // user so the owner's name shows (not the group name).
+          chatType: isGroup && !cgroupOwnerPhone ? "group" : "user",
           groupName: meta.groupName,
         },
         {
@@ -147,6 +182,7 @@ export function CustomerInfoScreen({ route, navigation }: Props) {
     [
       phone,
       isGroup,
+      cgroupOwnerPhone,
       meta.contactName,
       meta.displayName,
       meta.groupName,
@@ -337,12 +373,31 @@ export function CustomerInfoScreen({ route, navigation }: Props) {
     }
   }
 
-  if (isGroup) {
+  // v1.342: non-CGroup groups (daily cohorts, internal team) keep the old
+  // empty state; a CGroup we couldn't match to a subscription yet shows a
+  // banner + hint; a resolved CGroup falls through to the owner's card below.
+  if (isGroup && !cgInfo) {
     return (
       <ScrollView style={styles.root} contentContainerStyle={styles.empty}>
         <Text style={styles.emptyTxt}>
           Customer info isn't shown for group chats — a group has many members.
         </Text>
+      </ScrollView>
+    );
+  }
+  if (isGroup && cgInfo && !cgroupOwnerPhone) {
+    return (
+      <ScrollView style={styles.root}>
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>👥 CUSTOMER GROUP</Text>
+          <Text style={styles.name} selectable>
+            {cgInfo.label}
+          </Text>
+          <Text style={styles.muted}>
+            Couldn't match this group to a subscription yet — it may still be
+            syncing. Try again shortly.
+          </Text>
+        </View>
       </ScrollView>
     );
   }
@@ -397,6 +452,17 @@ export function CustomerInfoScreen({ route, navigation }: Props) {
 
   return (
     <ScrollView style={styles.root}>
+      {/* v1.342: CGroup banner — tells the trainer this is the customer's
+          group and the card below is the subscription owner. */}
+      {cgInfo && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>👥 CUSTOMER GROUP</Text>
+          <Text style={styles.address} selectable>
+            {cgInfo.label}
+          </Text>
+          <Text style={styles.muted}>Showing the subscription owner's details.</Text>
+        </View>
+      )}
       {/* Header */}
       <View style={styles.section}>
         <Text style={styles.name} selectable>
