@@ -2,11 +2,11 @@
 // list. The filter rules (daily-groups hidden by default, status/stage
 // exclusions) match mobile.html exactly.
 
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, FlatList, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { space, useStyles, type Colors } from "@/theme";
-import { useAppData, isDailyGroup } from "@/data/AppDataContext";
+import { useAppData, isDailyGroup, type CgroupRow } from "@/data/AppDataContext";
 import { useAuth } from "@/auth/AuthContext";
 import { resolveDisplayName } from "@/lib/displayName";
 import { ChatRowItem } from "@/components/ChatRow";
@@ -21,6 +21,7 @@ import { encodeKey } from "@/lib/encodeKey";
 import { ref, set } from "firebase/database";
 import { normalizeFerraPhone } from "@/lib/ferra";
 import { shouldSuggestPin } from "@/lib/favorites";
+import { formatTime } from "@/lib/format";
 import { getDisplayVersion } from "@/lib/version";
 import { getGroqKey } from "@/lib/groqKey";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
@@ -63,6 +64,9 @@ export function ChatsScreen() {
     grantChatAccess,
     channelAccess,
     watiActivityByPhone,
+    cgroups,
+    cgroupsLoading,
+    loadCgroups,
   } = useAppData();
   const { user } = useAuth();
 
@@ -72,10 +76,21 @@ export function ChatsScreen() {
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   // v1.330: list-level Periskope/Wati sort toggle. "wati" re-orders the list
   // by Wati activity. Only meaningful for members with Wati access.
-  const [chatListChannel, setChatListChannel] = useState<"periskope" | "wati">(
-    "periskope",
-  );
+  const [chatListChannel, setChatListChannel] = useState<
+    "periskope" | "wati" | "cgroups"
+  >("periskope");
   const watiMode = chatListChannel === "wati" && channelAccess.wati;
+  // v1.341: CGroups channel — per-customer WhatsApp groups on +919187651332.
+  // Visible to any non-limited trainer (it lists EVERY customer group).
+  const cgroupsMode = chatListChannel === "cgroups" && !isLimited;
+  // Fetch the CGroups list the first time the tab is opened.
+  useEffect(() => {
+    if (cgroupsMode && cgroups === null && !cgroupsLoading) loadCgroups();
+  }, [cgroupsMode, cgroups, cgroupsLoading, loadCgroups]);
+  // A limited trainer can never be on CGroups — fall back to Trainer 1.
+  useEffect(() => {
+    if (chatListChannel === "cgroups" && isLimited) setChatListChannel("periskope");
+  }, [chatListChannel, isLimited]);
   // Wati activity keyed by last-10 digits so it matches a chat row's phone
   // regardless of country-code / formatting differences.
   const watiActivityByTen = useMemo(() => {
@@ -368,9 +383,25 @@ export function ChatsScreen() {
   // Within each bucket we keep the existing lastMsgAt sort.
   type ListItem =
     | { kind: "row"; key: string; item: (typeof enriched)[number] }
-    | { kind: "divider"; key: string };
+    | { kind: "divider"; key: string }
+    | { kind: "cgroup"; key: string; cg: CgroupRow };
 
   const listData = useMemo<ListItem[]>(() => {
+    // v1.341: CGroups mode renders the live per-customer-group list (a separate
+    // dataset, not the Periskope chat index), filtered by the search box.
+    if (cgroupsMode) {
+      const all = cgroups || [];
+      const q = search.trim().toLowerCase();
+      const rows = q
+        ? all.filter(
+            (g) =>
+              g.customerName.toLowerCase().includes(q) ||
+              g.subId.toLowerCase().includes(q) ||
+              (g.lastMessage?.body || "").toLowerCase().includes(q),
+          )
+        : all;
+      return rows.map((g) => ({ kind: "cgroup", key: g.chatId, cg: g }));
+    }
     // v1.330: Wati mode shows a pure Wati-recency list — no ticket/favorite
     // pinning — so the people we're actively messaging on Wati lead the list.
     if (watiMode) {
@@ -428,7 +459,7 @@ export function ChatsScreen() {
       items.push({ kind: "row", key: r.row.chatKey, item: r });
     }
     return items;
-  }, [filtered, myFavorites, myTicketChatKeys, favoritesOnly, watiMode, watiActivityFor]);
+  }, [filtered, myFavorites, myTicketChatKeys, favoritesOnly, watiMode, watiActivityFor, cgroupsMode, cgroups, search]);
 
   // v1.163: edges={[]} — was edges={["top"]} which double-counted the
   // status-bar inset on Android. The React Navigation Stack header
@@ -450,6 +481,7 @@ export function ChatsScreen() {
         onChangeFavoritesOnly={setFavoritesOnly}
         channel={chatListChannel}
         showChannelToggle={channelAccess.wati}
+        showCgroups={!isLimited}
         onChangeChannel={setChatListChannel}
       />
       {hasGroqKey === false && (
@@ -473,7 +505,7 @@ export function ChatsScreen() {
         </TouchableOpacity>
       )}
       {/* v1.291: Text-only toggle — only in the Daily Groups view. */}
-      {dailyView && (
+      {dailyView && !cgroupsMode && (
         <TouchableOpacity
           style={styles.textOnlyBar}
           activeOpacity={0.7}
@@ -496,6 +528,51 @@ export function ChatsScreen() {
                 <Text style={styles.dividerTxt}>More chats</Text>
                 <View style={styles.dividerLine} />
               </View>
+            );
+          }
+          // v1.341: CGroups row — a per-customer WhatsApp group. Tapping opens
+          // the group thread (chatId keyed the same way as any other chat).
+          if (item.kind === "cgroup") {
+            const g = item.cg;
+            const chatKey = encodeKey(g.chatId);
+            const cleanName = g.customerName
+              .replace(/^(mr|mrs|ms|dr|prof)\.?\s*/i, "")
+              .trim();
+            const initial = (cleanName || "?").charAt(0).toUpperCase() || "?";
+            const preview = (g.lastMessage?.body || "").replace(/\s+/g, " ").trim();
+            const when = g.updatedAt ? new Date(g.updatedAt).getTime() : undefined;
+            return (
+              <TouchableOpacity
+                style={styles.cgRow}
+                activeOpacity={0.7}
+                onPress={() =>
+                  navigation.navigate("Thread", {
+                    chatKey,
+                    initialTitle: g.groupName,
+                  })
+                }
+              >
+                <View style={styles.cgAvatar}>
+                  <Text style={styles.cgAvatarTxt}>{initial}</Text>
+                </View>
+                <View style={styles.cgBody}>
+                  <View style={styles.cgTopRow}>
+                    <View style={styles.cgNameWrap}>
+                      <Text style={styles.cgSubId}>{g.subId}</Text>
+                      <Text style={styles.cgName} numberOfLines={1}>
+                        {cleanName}
+                      </Text>
+                    </View>
+                    {when ? (
+                      <Text style={styles.cgTime}>{formatTime(when)}</Text>
+                    ) : null}
+                  </View>
+                  <Text style={styles.cgPreview} numberOfLines={1}>
+                    {g.lastMessage?.fromMe ? "You: " : ""}
+                    {preview}
+                  </Text>
+                </View>
+              </TouchableOpacity>
             );
           }
           const enrichedRow = item.item;
@@ -574,10 +651,30 @@ export function ChatsScreen() {
             />
           );
         }}
+        ListHeaderComponent={
+          cgroupsMode && (cgroups?.length ?? 0) > 0 ? (
+            <TouchableOpacity
+              style={styles.cgHeader}
+              activeOpacity={0.7}
+              onPress={() => loadCgroups(true)}
+            >
+              <Text style={styles.cgHeaderTxt}>
+                {cgroups?.length ?? 0} customer group
+                {(cgroups?.length ?? 0) === 1 ? "" : "s"} on +91 91876 51332 · ↻ refresh
+              </Text>
+            </TouchableOpacity>
+          ) : null
+        }
         ListEmptyComponent={
           <View style={styles.empty}>
             <Text style={styles.emptyTxt}>
-              {!dataReady
+              {cgroupsMode
+                ? cgroupsLoading
+                  ? "Loading CGroups…"
+                  : search.trim()
+                  ? "No CGroups match your search."
+                  : "No customer groups yet."
+                : !dataReady
                 ? "Loading chats…"
                 : favoritesOnly
                 ? "No favorites yet."
@@ -591,7 +688,7 @@ export function ChatsScreen() {
                 existing chat matches, offer a one-tap "start new chat"
                 affordance. Saves having a separate "+" button on the
                 main UI (which the desktop has but the mobile app didn't). */}
-            {searchPhoneNormalized && dataReady && (
+            {!cgroupsMode && searchPhoneNormalized && dataReady && (
               <TouchableOpacity
                 style={styles.startChatBtn}
                 onPress={startChatWithPhone}
@@ -726,5 +823,59 @@ function makeStyles(colors: Colors) {
       textTransform: "uppercase",
       letterSpacing: 0.5,
     },
+    // v1.341: CGroups list rows + header.
+    cgHeader: {
+      paddingHorizontal: space.md,
+      paddingVertical: 8,
+      backgroundColor: colors.panel,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+    },
+    cgHeaderTxt: { fontSize: 11.5, color: colors.muted, textAlign: "center" },
+    cgRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingHorizontal: space.md,
+      paddingVertical: 10,
+      backgroundColor: colors.panel,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+      gap: 12,
+    },
+    cgAvatar: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor: colors.green,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    cgAvatarTxt: { color: "white", fontSize: 18, fontWeight: "700" },
+    cgBody: { flex: 1, minWidth: 0 },
+    cgTopRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+    },
+    cgNameWrap: {
+      flexDirection: "row",
+      alignItems: "center",
+      flex: 1,
+      minWidth: 0,
+      gap: 6,
+    },
+    cgSubId: {
+      backgroundColor: colors.green,
+      color: "white",
+      fontSize: 10.5,
+      fontWeight: "700",
+      paddingHorizontal: 5,
+      paddingVertical: 2,
+      borderRadius: 5,
+      overflow: "hidden",
+    },
+    cgName: { flex: 1, fontSize: 15, fontWeight: "600", color: colors.text },
+    cgTime: { fontSize: 11, color: colors.muted, marginLeft: 6 },
+    cgPreview: { fontSize: 13, color: colors.muted, marginTop: 2 },
   });
 }

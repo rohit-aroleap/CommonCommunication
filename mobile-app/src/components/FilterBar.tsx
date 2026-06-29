@@ -35,9 +35,13 @@ interface Props {
   onChangeFavoritesOnly: (v: boolean) => void;
   // v1.330: list-level Periskope/Wati toggle. When shown, switching to Wati
   // re-orders the chat list by Wati activity. Hidden for Periskope-only members.
-  channel: "periskope" | "wati";
+  // v1.341: third "CGroups" option (per-customer WhatsApp groups). It has a
+  // DIFFERENT gate than Wati (shown to any non-limited trainer), so it carries
+  // its own showCgroups flag.
+  channel: "periskope" | "wati" | "cgroups";
   showChannelToggle: boolean;
-  onChangeChannel: (c: "periskope" | "wati") => void;
+  showCgroups: boolean;
+  onChangeChannel: (c: "periskope" | "wati" | "cgroups") => void;
 }
 
 const STAGE_OPTIONS = [
@@ -62,6 +66,7 @@ export function FilterBar({
   onChangeFavoritesOnly,
   channel,
   showChannelToggle,
+  showCgroups,
   onChangeChannel,
 }: Props) {
   const { colors } = useTheme();
@@ -105,7 +110,7 @@ export function FilterBar({
 
   return (
     <View style={styles.bar}>
-      {showChannelToggle && (
+      {(showChannelToggle || showCgroups) && (
         <View style={styles.channelSeg}>
           <TouchableOpacity
             style={[styles.channelSegBtn, channel === "periskope" && styles.channelSegBtnActive]}
@@ -116,15 +121,28 @@ export function FilterBar({
               Trainer 1
             </Text>
           </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.channelSegBtn, channel === "wati" && styles.channelSegBtnActive]}
-            onPress={() => onChangeChannel("wati")}
-            activeOpacity={0.85}
-          >
-            <Text style={[styles.channelSegTxt, channel === "wati" && styles.channelSegTxtActive]}>
-              Wati
-            </Text>
-          </TouchableOpacity>
+          {showChannelToggle && (
+            <TouchableOpacity
+              style={[styles.channelSegBtn, channel === "wati" && styles.channelSegBtnActive]}
+              onPress={() => onChangeChannel("wati")}
+              activeOpacity={0.85}
+            >
+              <Text style={[styles.channelSegTxt, channel === "wati" && styles.channelSegTxtActive]}>
+                Wati
+              </Text>
+            </TouchableOpacity>
+          )}
+          {showCgroups && (
+            <TouchableOpacity
+              style={[styles.channelSegBtn, channel === "cgroups" && styles.channelSegBtnActive]}
+              onPress={() => onChangeChannel("cgroups")}
+              activeOpacity={0.85}
+            >
+              <Text style={[styles.channelSegTxt, channel === "cgroups" && styles.channelSegTxtActive]}>
+                CGroups
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
       )}
       <View style={styles.searchWrap}>

@@ -5,6 +5,7 @@
 
 import React, {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -23,7 +24,7 @@ import {
 } from "firebase/database";
 import { db } from "@/firebase";
 import { useAuth } from "@/auth/AuthContext";
-import { ROOT } from "@/config";
+import { ROOT, WORKER_URL } from "@/config";
 import { encodeKey, chatKeyToChatId } from "@/lib/encodeKey";
 import { buildFerraIndex, type FerraIndex } from "@/lib/ferra";
 import { normalizePhone as canonicalNormalizePhone } from "@/lib/normalizePhone";
@@ -58,6 +59,18 @@ const CHATS_LIMIT = 200;
 // v1.279: DMS_LIMIT removed — the DM list now reads the lean /dmsIndex
 // mirror in full (tiny) instead of a limitToLast query over the heavy
 // /dms subtree.
+
+// v1.341: a per-customer WhatsApp group ("FERRA <subId> <name>") from the
+// worker's GET /cgroups-list. Fetched live from Periskope via the gateway —
+// NOT a Firebase index, so it's an on-demand fetch, not an onValue listener.
+export interface CgroupRow {
+  chatId: string;
+  subId: string;
+  customerName: string;
+  groupName: string;
+  updatedAt: string | null;
+  lastMessage: { body: string; fromMe: boolean } | null;
+}
 
 interface AppDataValue {
   chatRows: ChatRow[];
@@ -135,6 +148,12 @@ interface AppDataValue {
   myTeamTags: Set<string> | null;
   myGrants: Record<string, UserGrant>;
   grantChatAccess: (chatKey: string) => Promise<void>;
+  // v1.341: CGroups — per-customer WhatsApp groups on +919187651332. Read-only
+  // listing fetched live from the worker (not a Firebase index). null until the
+  // first load; loadCgroups(force) (re)fetches.
+  cgroups: CgroupRow[] | null;
+  cgroupsLoading: boolean;
+  loadCgroups: (force?: boolean) => void;
 }
 
 // v1.241: delegate to the shared canonical normalizer so teamPhones
@@ -212,6 +231,10 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
   const [watiActivityByPhone, setWatiActivityByPhone] = useState<
     Record<string, { lastMsgAt: number; lastMsgPreview: string; lastMsgDirection: string }>
   >({});
+  // v1.341: CGroups read-only listing — a live fetch from the worker, cached in
+  // memory for the session (NOT a Firebase listener; there is no cgroupsIndex).
+  const [cgroups, setCgroups] = useState<CgroupRow[] | null>(null);
+  const [cgroupsLoading, setCgroupsLoading] = useState(false);
   const [tickets, setTickets] = useState<Record<string, Ticket>>({});
   const [teamUsers, setTeamUsers] = useState<Record<string, TeamUser>>({});
   const [teamMembers, setTeamMembers] = useState<Record<string, TeamMember>>({});
@@ -794,6 +817,28 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     });
   };
 
+  // v1.341: fetch the CGroups list on demand (first time the tab opens, or on
+  // an explicit refresh). Mirrors the web's loadCgroups — a one-shot GET cached
+  // in memory for the session.
+  const loadCgroups = useCallback(
+    async (force = false) => {
+      if (cgroupsLoading) return;
+      if (cgroups !== null && !force) return;
+      setCgroupsLoading(true);
+      try {
+        const r = await fetch(`${WORKER_URL}/cgroups-list`);
+        const j = await r.json();
+        if (!j.ok) throw new Error(j.error || "load failed");
+        setCgroups(Array.isArray(j.groups) ? j.groups : []);
+      } catch {
+        setCgroups((prev) => prev ?? []);
+      } finally {
+        setCgroupsLoading(false);
+      }
+    },
+    [cgroupsLoading, cgroups],
+  );
+
   const value: AppDataValue = useMemo(
     () => ({
       chatRows,
@@ -830,6 +875,9 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       myTeamTags,
       myGrants,
       grantChatAccess,
+      cgroups,
+      cgroupsLoading,
+      loadCgroups,
     }),
     [
       chatRows,
@@ -862,6 +910,9 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       watiActivityByPhone,
       myTeamTags,
       myGrants,
+      cgroups,
+      cgroupsLoading,
+      loadCgroups,
     ],
   );
 
