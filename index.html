@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.338</title>
+<title>CommonCommunication v1.339</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -918,6 +918,15 @@
     background: #e7f7f2;
     border-color: var(--green);
     color: var(--green-dark);
+  }
+  /* v1.339: sidebar list-level Trainer 1 / Wati toggle. Reuses .channel-tab
+     button styling; drops the thread tabs' left/bottom borders and tightens
+     padding so it sits cleanly above the search box. Shown via JS. */
+  .list-channel-tabs {
+    border-left: none;
+    border-bottom: none;
+    background: transparent;
+    padding: 8px 12px 4px;
   }
   .thread-empty {
     flex: 1; display: flex; align-items: center; justify-content: center;
@@ -2435,6 +2444,14 @@
            message and renders the hits below the chat list as a
            "MESSAGES" section. The old "📄 Search messages" button and
            its modal have been removed — both flows are now unified. -->
+      <!-- v1.339: list-level Trainer 1 / Wati toggle (mirrors the phone app).
+           Selecting Wati re-orders the chat list by Wati activity and shows the
+           latest Wati message as the preview. Shown only to members with Wati
+           access + on the customer chats view. -->
+      <div class="channel-tabs list-channel-tabs" id="chatChannelToggle" style="display:none;">
+        <button class="channel-tab active" id="listPeriskopeTab" data-list-channel="periskope">Trainer 1</button>
+        <button class="channel-tab" id="listWatiTab" data-list-channel="wati">Wati</button>
+      </div>
       <div class="search-row">
         <input id="searchInput" placeholder="Search chats and messages…" />
       </div>
@@ -2998,7 +3015,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.338";
+const APP_VERSION = "v1.339";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -3133,6 +3150,12 @@ const composerReplyBar = $("composerReplyBar");
 const channelTabs = $("channelTabs");
 const periskopeTab = $("periskopeTab");
 const watiTab = $("watiTab");
+// v1.339: sidebar list-level Trainer 1 / Wati toggle (re-orders the chat list).
+const chatChannelToggle = $("chatChannelToggle");
+const listPeriskopeTab = $("listPeriskopeTab");
+const listWatiTab = $("listWatiTab");
+let chatListChannel = "periskope";
+let watiActivityByTen = {}; // last-10 phone digits -> {lastMsgAt, lastMsgPreview, lastMsgDirection}
 const watiComposerPanel = $("watiComposerPanel");
 const watiParamPanel = $("watiParamPanel");
 const watiTemplateSelect = $("watiTemplateSelect");
@@ -3598,6 +3621,7 @@ onAuthStateChanged(auth, async (user) => {
     listenMyLastSeen();
     listenMyFavorites();
     listenMyWatiTemplateStars();
+    listenWatiChatsIndex(); // v1.339: powers the list-level Wati sort toggle
     listenMySendActivity();
     listenMyGrants();
     listenTemplates();
@@ -8212,6 +8236,10 @@ function wireTeamListClicks() {
 }
 
 function renderChatList(rows) {
+  // v1.339: keep the Trainer 1 / Wati list toggle visibility in sync with the
+  // current view + Wati access (runs on every render, incl. view switches).
+  updateChatChannelToggle();
+  const watiMode = chatListChannel === "wati" && myChannelAccess().wati;
   // Team view is its own sidebar mode — pure list of internal DMs plus a
   // "Start new DM" entry at the top. Customer filters / search don't apply
   // here; that's deliberate so the two contexts don't visually bleed.
@@ -8363,12 +8391,36 @@ function renderChatList(rows) {
     return;
   }
 
+  // v1.339: in Wati mode, show each chat's latest WATI message preview + time
+  // (not the Periskope/Trainer-1 one) and rank by Wati recency. Decorate the
+  // per-render row copies — lastChatRows is untouched.
+  if (watiMode) {
+    for (const r of filtered) {
+      const w = watiActivityFor(r.phone);
+      if (w && w.lastMsgAt) {
+        r.preview = w.lastMsgPreview || r.preview;
+        r.lastMsgAt = w.lastMsgAt;
+        r.direction =
+          w.lastMsgDirection === "out" ? "out"
+          : w.lastMsgDirection === "in" ? "in"
+          : r.direction;
+        r.sentByName = w.lastMsgDirection === "out" ? "You" : null;
+        r.lastMsgStatus = undefined;
+        r._watiAt = w.lastMsgAt;
+      } else {
+        r._watiAt = 0;
+      }
+    }
+  }
+
   // Partition the filtered list so chats with my open ticket float to the
   // very top, favorites (without my ticket) sit right below them, then
   // everything else. We skip partitioning for filters whose meaning IS
   // "show me this set" (My tickets, Favorites, Daily Groups) — the user
-  // already picked a focused view.
+  // already picked a focused view. Wati mode is also a flat, recency-ordered
+  // list (no ticket/favorite pinning), mirroring the phone app.
   const partitionEligible =
+    !watiMode &&
     currentStatusFilter !== "Favorites" &&
     currentStatusFilter !== "My tickets" &&
     currentStatusFilter !== "Daily Groups";
@@ -8390,7 +8442,15 @@ function renderChatList(rows) {
   // latest TEXT (groups with no text fall to the bottom). Daily Groups is
   // never partitioned, so all rows are in restRows.
   const textOnlyMode = currentStatusFilter === "Daily Groups" && dailyTextOnly;
-  if (textOnlyMode) {
+  if (watiMode) {
+    // Wati-active chats first by Wati recency; the rest below by their normal
+    // (Periskope) activity so you can still reach anyone.
+    restRows.sort(
+      (a, b) =>
+        (b._watiAt || 0) - (a._watiAt || 0) ||
+        (b.lastMsgAt || 0) - (a.lastMsgAt || 0),
+    );
+  } else if (textOnlyMode) {
     restRows.sort((a, b) => (b.lastTextMsgAt || 0) - (a.lastTextMsgAt || 0));
   } else if (currentStatusFilter !== "Daily Groups") {
     // v1.292: everyday inbox — sort by activity time so daily groups slot
@@ -9803,6 +9863,55 @@ async function setChannel(next) {
 
 if (periskopeTab) periskopeTab.onclick = () => setChannel("periskope");
 if (watiTab) watiTab.onclick = () => setChannel("wati");
+
+// ── v1.339: sidebar list-level Trainer 1 / Wati toggle ────────────────────
+// Latest Wati activity for a chat row, matched by last-10 phone digits so it
+// tolerates country-code / formatting differences (mirrors the phone app).
+function watiActivityFor(phone) {
+  const k = String(phone || "").replace(/\D/g, "").slice(-10);
+  return k ? watiActivityByTen[k] : null;
+}
+function listenWatiChatsIndex() {
+  onValue(ref(db, `${ROOT}/watiChatsIndex`), (snap) => {
+    const raw = snap.val() || {};
+    const m = {};
+    for (const [phone, meta] of Object.entries(raw)) {
+      if (!meta || typeof meta.lastMsgAt !== "number") continue;
+      const k = String(phone).replace(/\D/g, "").slice(-10);
+      if (!k) continue;
+      if (!m[k] || meta.lastMsgAt > m[k].lastMsgAt) {
+        m[k] = {
+          lastMsgAt: meta.lastMsgAt,
+          lastMsgPreview: meta.lastMsgPreview || "",
+          lastMsgDirection: meta.lastMsgDirection || "",
+        };
+      }
+    }
+    watiActivityByTen = m;
+    if (chatListChannel === "wati") renderChatList(lastChatRows);
+  });
+}
+function setChatListChannel(c) {
+  chatListChannel = (c === "wati" && myChannelAccess().wati) ? "wati" : "periskope";
+  if (listPeriskopeTab) listPeriskopeTab.classList.toggle("active", chatListChannel === "periskope");
+  if (listWatiTab) listWatiTab.classList.toggle("active", chatListChannel === "wati");
+  renderChatList(lastChatRows);
+}
+// Show the toggle only for members with Wati access, on the customer chats
+// view (not the team-DM view). Called from the top of renderChatList so it
+// always tracks the live view + access without extra wiring.
+function updateChatChannelToggle() {
+  if (!chatChannelToggle) return;
+  const show = myChannelAccess().wati && currentView !== "team";
+  chatChannelToggle.style.display = show ? "flex" : "none";
+  if (!show && chatListChannel !== "periskope") {
+    chatListChannel = "periskope";
+    if (listPeriskopeTab) listPeriskopeTab.classList.add("active");
+    if (listWatiTab) listWatiTab.classList.remove("active");
+  }
+}
+if (listPeriskopeTab) listPeriskopeTab.onclick = () => setChatListChannel("periskope");
+if (listWatiTab) listWatiTab.onclick = () => setChatListChannel("wati");
 // Star/unstar the currently-selected Wati template; reflect ★/☆ on selection.
 if (watiTemplateStarBtn) watiTemplateStarBtn.onclick = () => {
   const name = watiTemplateSelect?.value || "";
