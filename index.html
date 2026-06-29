@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.341</title>
+<title>CommonCommunication v1.342</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -3034,7 +3034,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.341";
+const APP_VERSION = "v1.342";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -4339,6 +4339,36 @@ let sharedSubs = null;            // ferraSubscriptions/v1 — small (~50 KB)
 // — rare but possible (own subscription AND on a parent's, etc.) and
 // the UI handles that case by stacking cards.
 let subsByPhoneIdx = new Map();
+// v1.342: resolve the Ferra subscription behind an open CGroup. `subId` is the
+// FERRA-#### number parsed from the group name (digits compared leniently);
+// `memberPhonesMap` is the group's meta.memberPhones (worker-written) used as a
+// phone-based fallback. Primary match is the `customerId` field that ferra-sync
+// now writes onto every bySubscription record. Returns { sub, ownerPhone } | null.
+function resolveCgroupSubscription(subId, memberPhonesMap) {
+  const eqId = (a, b) => {
+    a = String(a || "").replace(/\D/g, "");
+    b = String(b || "").replace(/\D/g, "");
+    return !!a && !!b && (a === b || Number(a) === Number(b));
+  };
+  const bySub = sharedSubs?.bySubscription || {};
+  let sub = null;
+  if (subId) {
+    for (const k in bySub) {
+      const s = bySub[k];
+      if (s && eqId(s.customerId, subId)) { sub = { ...s, _subId: k }; break; }
+    }
+  }
+  // Fallback: match by any of the group's member phones via the Phase-E index.
+  if (!sub && memberPhonesMap) {
+    for (const p in memberPhonesMap) {
+      const list = subsByPhoneIdx.get(normalizePhone(p));
+      if (list && list.length) { sub = list[0]; break; }
+    }
+  }
+  if (!sub) return null;
+  return { sub, ownerPhone: sub.customerPhone || "" };
+}
+
 function rebuildSubsByPhone() {
   const idx = new Map();
   const bySub = sharedSubs?.bySubscription;
@@ -6180,11 +6210,39 @@ function renderInfoDrawer() {
   if (!currentChatId) return;
   const meta = chatsCache[currentChatId] || {};
   const isGroup = meta.chatType === "group" || String(meta.chatId || "").endsWith("@g.us");
+  // v1.342: a CGroup (per-customer group "FERRA <subId> <name>") gets the
+  // subscription OWNER's customer card. We resolve the owner phone here and
+  // then fall through to the normal 1:1 rendering below (which is entirely
+  // phone-based), with a "Customer group" banner prepended. Other groups
+  // (daily-workout cohorts, internal team groups) keep the old empty state.
+  let cgroupBanner = "";
+  let cgroupOwnerPhone = "";
   if (isGroup) {
-    infoBody.innerHTML = `<div class="info-empty">Customer info isn't shown for group chats — a group has many members.</div>`;
-    return;
+    // groupName is often empty right after opening from the CGroups tab (the
+    // worker mirrors it in asynchronously), so prefer the cgroupsRows cache
+    // (matched by chatId — always loaded since you reach a CGroup via that tab),
+    // then meta.groupName.
+    const cgRow = (cgroupsRows || []).find(g => encodeKey(g.chatId) === currentChatId) || null;
+    const cgName = meta.groupName || cgRow?.groupName || "";
+    const cgMatch = String(cgName).match(/^FERRA[\s-]+(\d{2,6})[\s-]+(.+?)\s*$/i);
+    const cgSubId = cgRow?.subId || (cgMatch && cgMatch[1]) || "";
+    if (cgRow || cgMatch) {
+      const resolved = resolveCgroupSubscription(cgSubId, meta.memberPhones || null);
+      cgroupOwnerPhone = resolved?.ownerPhone || "";
+      const label = cgName || (cgSubId ? "FERRA " + cgSubId : "Customer group");
+      cgroupBanner = `<div class="info-section" style="padding-bottom:6px;">
+        <div style="font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; margin-bottom:2px;">Customer group</div>
+        <div style="font-weight:600;">${cgSubId ? `<span class="cg-subid">${escapeHtml(cgSubId)}</span>` : ""}${escapeHtml(label)}</div>
+        ${cgroupOwnerPhone ? "" : `<div style="font-size:12px; color:var(--muted); margin-top:6px;">Couldn't match this group to a subscription yet.</div>`}
+      </div>`;
+      if (!cgroupOwnerPhone) { infoBody.innerHTML = cgroupBanner; return; }
+      // owner resolved → fall through with the owner's phone
+    } else {
+      infoBody.innerHTML = `<div class="info-empty">Customer info isn't shown for group chats — a group has many members.</div>`;
+      return;
+    }
   }
-  const phone = meta.phone || "";
+  const phone = cgroupOwnerPhone || meta.phone || "";
   // v1.245: don't gate the entire drawer on findFerraUserByPhone (which only
   // checks ferraHabitData/v1/users). New customers who've subscribed but
   // haven't done any workouts yet are NOT in habitUsers — but ARE in
@@ -6401,7 +6459,7 @@ function renderInfoDrawer() {
     </div>
   ` : "";
 
-  infoBody.innerHTML = `
+  infoBody.innerHTML = cgroupBanner + `
     <div class="info-section">
       <div style="font-size:16px; font-weight:600; margin-bottom:4px;">${escapeHtml(displayName)}</div>
       <div style="color:var(--muted); font-size:12px; margin-bottom:8px;">${escapeHtml(phone)}${ageGenderSuffix}</div>
