@@ -6314,9 +6314,12 @@ async function handleCgroupsMatrix(env, ctx) {
         const m = CGROUP_NAME_RE.exec(name);
         if (!m) continue;
         if (!groups[chatId]) {
-          groups[chatId] = { chatId, subId: m[1], groupName: name, customerName: m[2], seenBy: new Set() };
+          groups[chatId] = { chatId, subId: m[1], groupName: name, customerName: m[2], seenBy: new Set(), inviteLink: null };
         }
         groups[chatId].seenBy.add(key);
+        // invite_link is only returned to a line that ADMINS the group; capture
+        // the first non-null we see across the x1/x2/x3 list passes (free here).
+        if (!groups[chatId].inviteLink && c.invite_link) groups[chatId].inviteLink = c.invite_link;
       }
       if (arr.length < 200) break;
       offset += 200;
@@ -6339,7 +6342,7 @@ async function handleCgroupsMatrix(env, ctx) {
       const subIn = subMembers.every((p) => inSet.has(p));
       reuse = xIn && subIn; // fully settled + fresh → trust cache, skip group/info
     }
-    if (reuse) newCache[g.subId] = prev;
+    if (reuse) newCache[g.subId] = { ...prev, inviteLink: g.inviteLink || prev.inviteLink || null };
     else toCheck.push(g);
   }
   // 3. Fresh group/info only for new / unsettled / stale groups. The members
@@ -6370,6 +6373,7 @@ async function handleCgroupsMatrix(env, ctx) {
       x2: { member: inSet.has(CGMATRIX_PHONES.x2), admin: adm(CGMATRIX_PHONES.x2) },
       x3: { member: inSet.has(CGMATRIX_PHONES.x3), admin: adm(CGMATRIX_PHONES.x3) },
       inGroupPhones,
+      inviteLink: g.inviteLink || prevCache[g.subId]?.inviteLink || null,
       checkedAt: now,
     };
   }

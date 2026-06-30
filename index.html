@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.348</title>
+<title>CommonCommunication v1.349</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -1952,10 +1952,10 @@
   /* v1.343: All Groups table — subId · Customer · Owner · User1-6 · x1/x2/x3 */
   .ag-row {
     display: grid;
-    grid-template-columns: 48px 30px 1.15fr 1.15fr repeat(6, 0.72fr) 46px 46px 46px 104px;
+    grid-template-columns: 48px 30px 32px 1.15fr 1.15fr repeat(6, 0.72fr) 44px 44px 44px 100px;
     align-items: center; gap: 6px; padding: 7px 10px;
     border-bottom: 1px solid var(--border); font-size: 12.5px;
-    min-width: 1080px;
+    min-width: 1106px;
   }
   .ag-row:last-child { border-bottom: none; }
   .ag-row.head {
@@ -1968,6 +1968,10 @@
   /* v1.347: owner/User cells coloured by REAL group membership (not invite). */
   .ag-row .cell.ag-mem.in  { color: #15803d; font-weight: 600; }
   .ag-row .cell.ag-mem.out { color: #c2410c; }
+  /* v1.349: copy-invite-link icon button per group row */
+  .ag-row .ag-link { background: none; border: none; cursor: pointer; font-size: 14px; line-height: 1; padding: 2px 4px; border-radius: 5px; }
+  .ag-row .ag-link:hover { background: #eef2ff; }
+  .ag-row .ag-link.copied { color: #15803d; }
   .ag-legend { display: flex; gap: 14px; align-items: center; font-size: 11px; color: #6b7280; margin: 2px 0 8px; flex-wrap: wrap; }
   .ag-legend b { font-weight: 600; }
   .ag-legend .in  { color: #15803d; }
@@ -3110,7 +3114,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.348";
+const APP_VERSION = "v1.349";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -6325,7 +6329,7 @@ function renderAllGroups() {
   };
 
   let html = `<div class="ag-row head">
-    <div>Sub</div><div title="Subscription status">St</div><div>Customer</div><div>Owner</div>
+    <div>Sub</div><div title="Subscription status">St</div><div title="Copy WhatsApp group invite link">Link</div><div>Customer</div><div>Owner</div>
     <div>User 1</div><div>User 2</div><div>User 3</div><div>User 4</div><div>User 5</div><div>User 6</div>
     <div>x1</div><div>x2</div><div>x3</div><div>Action</div>
   </div>`;
@@ -6341,6 +6345,7 @@ function renderAllGroups() {
     html += `<div class="ag-row${r.formed ? "" : " notformed"}">
       <div class="ag-subid">${escapeHtml(r.subDisplay)}</div>
       <div>${agStatusBadge(r.status)}</div>
+      <div>${r.cell?.inviteLink ? `<button class="ag-link" title="Copy WhatsApp invite link — send it to anyone you want to add" data-link="${escapeHtml(r.cell.inviteLink)}">🔗</button>` : ""}</div>
       <div class="cell">${escapeHtml(r.customer)}</div>
       <div class="cell${memClass(r.ownerPhone, hasCell, inSet)}"${memTip(r.ownerPhone, hasCell, inSet)}>${escapeHtml(r.owner)}</div>
       ${userCells(r.users, hasCell, inSet)}
@@ -6357,6 +6362,25 @@ function renderAllGroups() {
   agTable.querySelectorAll(".ag-add-btn").forEach((b) => {
     b.onclick = () => addMissingLines(b.dataset.docid);
   });
+  agTable.querySelectorAll(".ag-link").forEach((b) => {
+    b.onclick = () => copyGroupInvite(b.dataset.link, b);
+  });
+}
+
+// Copy a group's WhatsApp invite link to the clipboard for manual adds, with a
+// gentle in-place ✓ confirmation. Falls back to a prompt if clipboard is blocked.
+async function copyGroupInvite(link, el) {
+  if (!link) return;
+  try {
+    await navigator.clipboard.writeText(link);
+    if (el) {
+      el.textContent = "✓";
+      el.classList.add("copied");
+      setTimeout(() => { el.textContent = "🔗"; el.classList.remove("copied"); }, 1200);
+    }
+  } catch (e) {
+    prompt("Copy this WhatsApp invite link:", link);
+  }
 }
 
 // Group-provisioning defaults: live listener (once) + accessor with fallback.
