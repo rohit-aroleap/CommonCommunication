@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.343</title>
+<title>CommonCommunication v1.344</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -1952,10 +1952,10 @@
   /* v1.343: All Groups table — subId · Customer · Owner · User1-6 · x1/x2/x3 */
   .ag-row {
     display: grid;
-    grid-template-columns: 56px 1.1fr 1.1fr repeat(6, 0.9fr) 58px 58px 58px;
+    grid-template-columns: 54px 1.05fr 1.05fr repeat(6, 0.85fr) 54px 54px 54px 116px;
     align-items: center; gap: 8px; padding: 7px 10px;
     border-bottom: 1px solid var(--border); font-size: 12.5px;
-    min-width: 1120px;
+    min-width: 1220px;
   }
   .ag-row:last-child { border-bottom: none; }
   .ag-row.head {
@@ -2768,10 +2768,26 @@
       <input id="agSearch" placeholder="Search subId / name…" style="padding:5px 9px; border:1px solid var(--border); border-radius:6px; font-size:12px; width:200px;" />
       <div style="display:flex; gap:4px;" id="agFilters"></div>
       <a href="#" id="agRefresh" style="font-size:12px;">↻ refresh</a>
+      <a href="#" id="agSettings" title="Group defaults" style="font-size:15px; text-decoration:none;">⚙️</a>
     </div>
     <div id="agTable" class="tt-table" style="flex:1; overflow:auto;"></div>
     <div class="actions" style="margin-top:12px;">
       <button class="btn btn-secondary" id="agClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-back" id="groupsSettingsModal">
+  <div class="modal" style="width:540px; max-width:94vw; display:flex; flex-direction:column;">
+    <h3 style="margin-bottom:6px;">⚙️ Group defaults</h3>
+    <div style="font-size:12px; color:var(--muted); margin-bottom:12px; line-height:1.5;">
+      Every new group always includes <b>x3</b> (creator/admin), <b>x1</b> &amp; <b>x2</b> (admins), and the subscription's owner &amp; members. The extra default numbers below are added to every new group too — tick <b>Admin</b> to make them admins.
+    </div>
+    <div id="gsList"></div>
+    <button class="btn btn-secondary" id="gsAdd" style="margin-top:8px; align-self:flex-start;">＋ Add number</button>
+    <div class="actions" style="margin-top:16px; display:flex; gap:8px;">
+      <button class="btn" id="gsSave">Save</button>
+      <button class="btn btn-secondary" id="gsClose">Close</button>
     </div>
   </div>
 </div>
@@ -3076,7 +3092,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.343";
+const APP_VERSION = "v1.344";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -3196,7 +3212,13 @@ const agStats = $("agStats");
 const agSearch = $("agSearch");
 const agFilters = $("agFilters");
 const agRefresh = $("agRefresh");
+const agSettings = $("agSettings");
 const agClose = $("agClose");
+const groupsSettingsModal = $("groupsSettingsModal");
+const gsList = $("gsList");
+const gsAdd = $("gsAdd");
+const gsSave = $("gsSave");
+const gsClose = $("gsClose");
 const templatesBtn = $("templatesBtn");
 const watiTemplatesBtn = $("watiTemplatesBtn");
 const watiTemplatesModal = $("watiTemplatesModal");
@@ -3238,6 +3260,14 @@ let cgMatrixLoading = false;
 let cgMatrixError = null;
 let agSearchTerm = "";
 let agFormedFilter = "all";   // all | formed | notformed
+// v1.344: group-provisioning defaults. x1/x2 are always added as admins (our
+// lines); x3 is the creator. These are the EXTRA default numbers added to every
+// new group, editable via the ⚙️ settings. Stored at commonComm/config/cgroupDefaults.
+const CGROUP_X1 = "919187651332";
+const CGROUP_X2 = "918287116066";
+const CGROUP_DEFAULT_NUMS = [{ phone: "919667329123", admin: true }, { phone: "919650854161", admin: true }];
+let cgroupDefaults = null;    // null = not loaded → falls back to CGROUP_DEFAULT_NUMS
+let cgDefaultsListening = false;
 const watiComposerPanel = $("watiComposerPanel");
 const watiParamPanel = $("watiParamPanel");
 const watiTemplateSelect = $("watiTemplateSelect");
@@ -6142,6 +6172,7 @@ agRefresh.onclick = (e) => { e.preventDefault(); cgMatrix = null; loadCgMatrix()
 agSearch.oninput = () => { agSearchTerm = agSearch.value.trim().toLowerCase(); renderAllGroups(); };
 
 function openGroupsModal() {
+  ensureCgroupDefaults();
   groupsModal.classList.add("visible");
   renderAllGroups();
 }
@@ -6193,7 +6224,7 @@ function renderAllGroups() {
   for (const [sub, cell] of Object.entries(cgMatrix || {})) matrixByDigits[_agDigits(sub)] = cell;
 
   const rows = [];
-  for (const sub of Object.values(subsObj)) {
+  for (const [docId, sub] of Object.entries(subsObj)) {
     if (!sub) continue;
     const subDigits = _agDigits(sub.customerId);
     const cell = subDigits ? matrixByDigits[subDigits] : null;
@@ -6208,9 +6239,11 @@ function renderAllGroups() {
       users.push(memberNames[i] || memberPhones[i] || "");
     }
     rows.push({
+      docId,
       subDisplay: sub.customerId ? String(sub.customerId).replace(/^FERRA-?/i, "") : "—",
       customer: cell ? cell.customerName || "" : "",
       owner: sub.customerName || (ownerPhone ? formatPhoneDisplay(ownerPhone) : ""),
+      hasOwner: !!sub.customerName,
       users, cell, formed,
     });
   }
@@ -6245,9 +6278,12 @@ function renderAllGroups() {
   let html = `<div class="ag-row head">
     <div>Sub</div><div>Customer</div><div>Owner</div>
     <div>User 1</div><div>User 2</div><div>User 3</div><div>User 4</div><div>User 5</div><div>User 6</div>
-    <div>x1</div><div>x2</div><div>x3</div>
+    <div>x1</div><div>x2</div><div>x3</div><div>Action</div>
   </div>`;
   for (const r of view) {
+    const action = r.formed
+      ? `<span class="ag-state member">✓ group</span>`
+      : `<button class="btn ag-make-btn" data-docid="${escapeHtml(r.docId)}" style="padding:3px 8px; font-size:11px;">Make group</button>`;
     html += `<div class="ag-row${r.formed ? "" : " notformed"}">
       <div class="ag-subid">${escapeHtml(r.subDisplay)}</div>
       <div class="cell">${escapeHtml(r.customer)}</div>
@@ -6256,9 +6292,115 @@ function renderAllGroups() {
       <div>${stateCell(r.cell?.x1)}</div>
       <div>${stateCell(r.cell?.x2)}</div>
       <div>${stateCell(r.cell?.x3)}</div>
+      <div>${action}</div>
     </div>`;
   }
   agTable.innerHTML = html;
+  agTable.querySelectorAll(".ag-make-btn").forEach((b) => {
+    b.onclick = () => makeGroupForSub(b.dataset.docid);
+  });
+}
+
+// Group-provisioning defaults: live listener (once) + accessor with fallback.
+function ensureCgroupDefaults() {
+  if (cgDefaultsListening) return;
+  cgDefaultsListening = true;
+  onValue(ref(db, `${ROOT}/config/cgroupDefaults`), (snap) => {
+    const v = snap.val();
+    cgroupDefaults = Array.isArray(v) ? v : null;
+    if (groupsSettingsModal.classList.contains("visible")) renderGroupSettings();
+  });
+}
+function cgDefaultNums() {
+  return (Array.isArray(cgroupDefaults) ? cgroupDefaults : CGROUP_DEFAULT_NUMS).filter((n) => n && n.phone);
+}
+
+// v1.344: provision a customer group from the All Groups table (x3 creates,
+// x1/x2 + default numbers promoted to admin). Owner is required.
+async function makeGroupForSub(docId) {
+  const sub = sharedSubs?.bySubscription?.[docId];
+  if (!sub) return;
+  const subDigits = _agDigits(sub.customerId);
+  const ownerName = String(sub.customerName || "").trim();
+  const ownerPhone = String(sub.customerPhone || "").replace(/\D/g, "");
+  if (!ownerName || !ownerPhone) {
+    alert("Subscription owner doesn't exist — WhatsApp group cannot be created.");
+    return;
+  }
+  if (!subDigits) {
+    alert("This subscription has no FERRA id yet — can't name the group. Try again after the next Ferra sync.");
+    return;
+  }
+  const groupName = `FERRA ${subDigits} ${ownerName}`;
+  const defs = cgDefaultNums();
+  const ownerNorm = normalizePhone(ownerPhone);
+  const memberPhones = (Array.isArray(sub.memberPhones) ? sub.memberPhones : [])
+    .map((p) => String(p || "").replace(/\D/g, ""))
+    .filter((p) => p.length >= 10 && normalizePhone(p) !== ownerNorm);
+  const dphones = defs.map((d) => String(d.phone).replace(/\D/g, ""));
+  const addPhones = [...new Set([CGROUP_X1, CGROUP_X2, ...dphones, ownerPhone, ...memberPhones])].filter(Boolean);
+  const adminPhones = [...new Set([CGROUP_X1, CGROUP_X2, ...defs.filter((d) => d.admin).map((d) => String(d.phone).replace(/\D/g, ""))])].filter(Boolean);
+
+  const adminDefs = defs.filter((d) => d.admin).length;
+  if (!confirm(
+    `Create WhatsApp group:\n\n"${groupName}"\n\n` +
+    `Adds ${addPhones.length} numbers — x1, x2, ${defs.length} default${defs.length === 1 ? "" : "s"}, the owner` +
+    `${memberPhones.length ? ` + ${memberPhones.length} member${memberPhones.length === 1 ? "" : "s"}` : ""}.\n` +
+    `Admins: x3 (creator), x1, x2${adminDefs ? ` + ${adminDefs} default` : ""}.\n\nProceed?`
+  )) return;
+
+  const btns = agTable.querySelectorAll(`.ag-make-btn[data-docid="${docId}"]`);
+  btns.forEach((b) => { b.disabled = true; b.textContent = "Creating…"; });
+  try {
+    const r = await fetch(`${WORKER_URL}/cgroups-create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ subId: subDigits, groupName, addPhones, adminPhones }),
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    alert(`Created "${groupName}".`);
+    cgMatrix = null;
+    loadCgMatrix();
+  } catch (e) {
+    alert("Couldn't create the group: " + (e.message || e));
+    btns.forEach((b) => { b.disabled = false; b.textContent = "Make group"; });
+  }
+}
+
+// ⚙️ Group defaults editor.
+let _gsDraft = null;
+if (agSettings) agSettings.onclick = (e) => {
+  e.preventDefault();
+  _gsDraft = cgDefaultNums().map((n) => ({ phone: String(n.phone), admin: !!n.admin }));
+  groupsSettingsModal.classList.add("visible");
+  renderGroupSettings();
+};
+if (gsClose) gsClose.onclick = () => groupsSettingsModal.classList.remove("visible");
+if (gsAdd) gsAdd.onclick = () => { _gsDraft.push({ phone: "", admin: true }); renderGroupSettings(); };
+if (gsSave) gsSave.onclick = async () => {
+  const clean = (_gsDraft || [])
+    .map((n) => ({ phone: String(n.phone || "").replace(/\D/g, ""), admin: !!n.admin }))
+    .filter((n) => n.phone.length >= 10);
+  try {
+    await set(ref(db, `${ROOT}/config/cgroupDefaults`), clean);
+    cgroupDefaults = clean;
+    groupsSettingsModal.classList.remove("visible");
+  } catch (e) {
+    alert("Couldn't save: " + (e.message || e));
+  }
+};
+function renderGroupSettings() {
+  if (!_gsDraft) _gsDraft = cgDefaultNums().map((n) => ({ phone: String(n.phone), admin: !!n.admin }));
+  gsList.innerHTML = _gsDraft.map((n, i) => `
+    <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+      <input class="gs-phone" data-i="${i}" value="${escapeHtml(n.phone)}" placeholder="91XXXXXXXXXX" style="flex:1; padding:5px 8px; border:1px solid var(--border); border-radius:6px; font-size:13px;" />
+      <label style="font-size:12px; display:flex; align-items:center; gap:4px; white-space:nowrap;"><input type="checkbox" class="gs-admin" data-i="${i}" ${n.admin ? "checked" : ""}/> Admin</label>
+      <button class="btn btn-secondary gs-del" data-i="${i}" style="padding:3px 8px; font-size:11px;">✕</button>
+    </div>`).join("") || `<div style="font-size:12px; color:var(--muted);">No extra default numbers — x1, x2, x3 are always included.</div>`;
+  gsList.querySelectorAll(".gs-phone").forEach((el) => { el.oninput = () => { _gsDraft[+el.dataset.i].phone = el.value; }; });
+  gsList.querySelectorAll(".gs-admin").forEach((el) => { el.onchange = () => { _gsDraft[+el.dataset.i].admin = el.checked; }; });
+  gsList.querySelectorAll(".gs-del").forEach((el) => { el.onclick = () => { _gsDraft.splice(+el.dataset.i, 1); renderGroupSettings(); }; });
 }
 
 ticketsBtn.onclick = openTicketsModal;

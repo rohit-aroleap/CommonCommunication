@@ -394,6 +394,10 @@ export default {
       if (url.pathname === "/cgroups-matrix" && request.method === "GET") {
         return cors(env, await handleCgroupsMatrix(env, ctx));
       }
+      // v1.344: provision a customer group (x3 creates, x1/x2/defaults promoted).
+      if (url.pathname === "/cgroups-create" && request.method === "POST") {
+        return cors(env, await handleCgroupsCreate(request, env));
+      }
       // v1.280: Exotel click-to-call. Trainer taps Call on a customer chat;
       // Exotel rings the trainer's own phone first, then bridges to the
       // customer (who sees the Ferra virtual CallerId). Allowlist + the
@@ -6326,6 +6330,75 @@ async function handleCgroupsMatrix(env, ctx) {
   const payload = { ok: true, count: Object.keys(matrix).length, matrix };
   _cgMatrixCache = { at: Date.now(), payload };
   return json(payload);
+}
+
+// ---------- /cgroups-create (All Groups tab: provision a customer group) ----------
+// v1.344: x3 (916361073558) CREATES the group (so it's the admin), adds all
+// requested phones in the create call, then PROMOTES the requested admin phones
+// (x1, x2, and the configured default numbers). The web computes the rosters
+// (owner + members + config defaults) and the group name; this just executes.
+async function handleCgroupsCreate(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const subId = String(body.subId || "").trim();
+  const groupName = String(body.groupName || "").trim();
+  const addPhones = (Array.isArray(body.addPhones) ? body.addPhones : [])
+    .map((p) => String(p || "").replace(/\D/g, "")).filter((p) => p.length >= 10);
+  const adminPhones = (Array.isArray(body.adminPhones) ? body.adminPhones : [])
+    .map((p) => String(p || "").replace(/\D/g, "")).filter((p) => p.length >= 10);
+  if (!groupName) return json({ error: "missing_groupName" }, 400);
+  if (!addPhones.length) return json({ error: "missing_phones" }, 400);
+
+  // 1. Create as x3 → x3 is the group admin.
+  const createRes = await env.PERISKOPE_GATEWAY.fetch(
+    new Request("https://gateway/group/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ groupName, phones: addPhones, dashboard: "commoncomm", from: "x3" }),
+    }),
+  );
+  const createJson = await safeJson(createRes);
+  if (!createRes.ok) {
+    return json({ error: "create_failed", status: createRes.status, detail: createJson }, 502);
+  }
+  // Find the new group's chatId — from the create response, else by listing
+  // x3's groups and matching the exact name we just created.
+  let chatId =
+    createJson?.chat_id || createJson?.id || createJson?.chatId ||
+    createJson?.chat?.chat_id || null;
+  if (!chatId) {
+    try {
+      const listRes = await env.PERISKOPE_GATEWAY.fetch(
+        new Request("https://gateway/group/list?dashboard=commoncomm&limit=200&from=x3", { method: "GET" }),
+      );
+      const lj = await safeJson(listRes);
+      const arr = Array.isArray(lj) ? lj : lj?.chats || lj?.data || lj?.result || [];
+      const hit = (arr || []).find((c) => String(c.chat_name || "") === groupName);
+      chatId = hit ? hit.chat_id || hit.id : null;
+    } catch { /* ignore */ }
+  }
+
+  // 2. Promote the admin phones (x3 is already admin as creator).
+  let promote = null;
+  if (chatId && adminPhones.length) {
+    const promRes = await env.PERISKOPE_GATEWAY.fetch(
+      new Request("https://gateway/group/promote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chatId, phones: adminPhones, dashboard: "commoncomm", from: "x3" }),
+      }),
+    );
+    promote = await safeJson(promRes);
+  }
+
+  // 3. Registry + bust the matrix cache so the table reflects the new group.
+  if (chatId && subId) {
+    await fbPatchRoot(env, {
+      [`${ROOT}/config/cgroups/${subId}`]: { chatId, groupName, createdAt: Date.now() },
+    }).catch(() => {});
+  }
+  _cgMatrixCache = { at: 0, payload: null };
+
+  return json({ ok: true, chatId, create: createJson, promote });
 }
 
 // ---------- /cohort-list + /cohort-add (daily WhatsApp groups) ----------
