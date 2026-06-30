@@ -6252,13 +6252,46 @@ async function handleCgroupsList(env) {
 // carries is_admin for everyone). Keyed by FERRA subId so the web can left-join
 // it onto the full subscription list. Cached 60s (group/info fan-out).
 const CGMATRIX_PHONES = { x1: "919187651332", x2: "918287116066", x3: "916361073558" };
-const CGMATRIX_TTL_MS = 60 * 1000;
-let _cgMatrixCache = { at: 0, payload: null };
+// Short in-memory payload cache (dedupes rapid re-opens) + a PERSISTENT
+// per-group cache. We re-call group/info for a group only when it's new,
+// not yet "settled" (some line OR subscription member still missing — they
+// might join later), the subscription roster grew, or it's >24h stale (a
+// daily safety pass). Groups where everyone is already in are trusted from
+// cache and never re-hit on open.
+const CGMATRIX_MEM_TTL = 60 * 1000;
+const CGMATRIX_ROSTER_TTL = 10 * 60 * 1000;
+const CGMATRIX_RECHECK_TTL = 24 * 60 * 60 * 1000;
+let _cgMatrixMem = { at: 0, payload: null };
+let _cgSubRoster = { at: 0, map: null };
+
+// subId(digits) → Set of the subscription's phones (owner + members). Cached
+// in memory ~10min so we don't re-read the (large) subscriptions feed per open.
+async function cgSubRosterMap(env) {
+  if (_cgSubRoster.map && Date.now() - _cgSubRoster.at < CGMATRIX_ROSTER_TTL) return _cgSubRoster.map;
+  const bySub = (await fbGet(env, "ferraSubscriptions/v1/bySubscription")) || {};
+  const map = {};
+  for (const k in bySub) {
+    const s = bySub[k];
+    if (!s) continue;
+    const digits = String(s.customerId || "").replace(/\D/g, "");
+    if (!digits) continue;
+    const set = map[digits] || (map[digits] = new Set());
+    const op = String(s.customerPhone || "").replace(/\D/g, "");
+    if (op.length >= 10) set.add(op);
+    for (const p of s.memberPhones || []) {
+      const d = String(p || "").replace(/\D/g, "");
+      if (d.length >= 10) set.add(d);
+    }
+  }
+  _cgSubRoster = { at: Date.now(), map };
+  return map;
+}
 
 async function handleCgroupsMatrix(env, ctx) {
-  if (_cgMatrixCache.payload && Date.now() - _cgMatrixCache.at < CGMATRIX_TTL_MS) {
-    return json(_cgMatrixCache.payload);
+  if (_cgMatrixMem.payload && Date.now() - _cgMatrixMem.at < CGMATRIX_MEM_TTL) {
+    return json(_cgMatrixMem.payload);
   }
+  const now = Date.now();
   // 1. Discover the FERRA customer groups each line can see (union by chatId).
   const groups = {}; // chatId -> { chatId, subId, groupName, customerName, seenBy:Set }
   for (const key of ["x1", "x2", "x3"]) {
@@ -6289,51 +6322,64 @@ async function handleCgroupsMatrix(env, ctx) {
       offset += 200;
     }
   }
-  // 2. Authoritative member+admin per group via group/info (one call per group,
-  // from a line known to be a member — its members map covers all three).
+  // 2. Decide which groups need a fresh group/info call vs a cached reuse.
+  const roster = await cgSubRosterMap(env);
+  const prevCache = (await fbGet(env, `${ROOT}/config/cgroupsMatrixCache`)) || {};
+  const xPhones = Object.values(CGMATRIX_PHONES);
   const list = Object.values(groups);
-  const matrix = {};
+  const newCache = {};
+  const toCheck = [];
+  for (const g of list) {
+    const prev = prevCache[g.subId];
+    let reuse = false;
+    if (prev && Array.isArray(prev.inGroupPhones) && now - (prev.checkedAt || 0) < CGMATRIX_RECHECK_TTL) {
+      const inSet = new Set(prev.inGroupPhones);
+      const xIn = xPhones.every((p) => inSet.has(p));
+      const subMembers = roster[g.subId] ? [...roster[g.subId]] : [];
+      const subIn = subMembers.every((p) => inSet.has(p));
+      reuse = xIn && subIn; // fully settled + fresh → trust cache, skip group/info
+    }
+    if (reuse) newCache[g.subId] = prev;
+    else toCheck.push(g);
+  }
+  // 3. Fresh group/info only for new / unsettled / stale groups. The members
+  // map is the authoritative roster (an INVITE is NOT in it until they join).
   async function infoFor(g) {
     const fromKey = g.seenBy.has("x1") ? "x1" : [...g.seenBy][0] || "x1";
-    const cell = {
+    let members = null;
+    try {
+      const res = await env.PERISKOPE_GATEWAY.fetch(
+        new Request(`https://gateway/group/info?chatId=${encodeURIComponent(g.chatId)}&dashboard=commoncomm&from=${fromKey}`, { method: "GET" }),
+      );
+      const j = await safeJson(res);
+      if (res.ok && j && typeof j.members === "object") members = j.members;
+    } catch { /* ignore */ }
+    const inGroupPhones = members
+      ? Object.keys(members).map((k) => String(k).replace(/@c\.us$/i, "").replace(/\D/g, "")).filter(Boolean)
+      : (prevCache[g.subId]?.inGroupPhones || []);
+    const inSet = new Set(inGroupPhones);
+    const adm = (p) => {
+      const m = members && members[`${p}@c.us`];
+      return !!(m && (m.is_admin ?? m.isAdmin ?? m.admin));
+    };
+    newCache[g.subId] = {
       chatId: g.chatId,
       groupName: g.groupName,
       customerName: g.customerName,
-      x1: { member: false, admin: false },
-      x2: { member: false, admin: false },
-      x3: { member: false, admin: false },
+      x1: { member: inSet.has(CGMATRIX_PHONES.x1), admin: adm(CGMATRIX_PHONES.x1) },
+      x2: { member: inSet.has(CGMATRIX_PHONES.x2), admin: adm(CGMATRIX_PHONES.x2) },
+      x3: { member: inSet.has(CGMATRIX_PHONES.x3), admin: adm(CGMATRIX_PHONES.x3) },
+      inGroupPhones,
+      checkedAt: now,
     };
-    try {
-      const res = await env.PERISKOPE_GATEWAY.fetch(
-        new Request(
-          `https://gateway/group/info?chatId=${encodeURIComponent(g.chatId)}&dashboard=commoncomm&from=${fromKey}`,
-          { method: "GET" },
-        ),
-      );
-      const j = await safeJson(res);
-      const members = res.ok && j && typeof j.members === "object" ? j.members : null;
-      if (members) {
-        for (const [line, phone] of Object.entries(CGMATRIX_PHONES)) {
-          const m = members[`${phone}@c.us`];
-          if (m) {
-            cell[line].member = true;
-            cell[line].admin = !!(m.is_admin ?? m.isAdmin ?? m.admin);
-          }
-        }
-      } else {
-        // group/info failed → fall back to list-based membership (no admin).
-        for (const k of g.seenBy) cell[k].member = true;
-      }
-    } catch {
-      for (const k of g.seenBy) cell[k].member = true;
-    }
-    matrix[g.subId] = cell;
   }
-  for (let i = 0; i < list.length; i += 6) {
-    await Promise.all(list.slice(i, i + 6).map(infoFor));
+  for (let i = 0; i < toCheck.length; i += 6) {
+    await Promise.all(toCheck.slice(i, i + 6).map(infoFor));
   }
-  const payload = { ok: true, count: Object.keys(matrix).length, matrix };
-  _cgMatrixCache = { at: Date.now(), payload };
+  // 4. Persist the rebuilt cache (prunes groups that no longer exist).
+  ctx.waitUntil(fbPatchRoot(env, { [`${ROOT}/config/cgroupsMatrixCache`]: newCache }).catch(() => {}));
+  const payload = { ok: true, count: Object.keys(newCache).length, matrix: newCache, rechecked: toCheck.length };
+  _cgMatrixMem = { at: now, payload };
   return json(payload);
 }
 
@@ -6409,7 +6455,7 @@ async function handleCgroupsCreate(request, env) {
       [`${ROOT}/config/cgroups/${subId}`]: { chatId, groupName, createdAt: Date.now() },
     }).catch(() => {});
   }
-  _cgMatrixCache = { at: 0, payload: null };
+  _cgMatrixMem = { at: 0, payload: null };
 
   return json({ ok: true, chatId, create: createJson, promote });
 }
@@ -6448,7 +6494,7 @@ async function handleCgroupsAdd(request, env) {
     );
     prom = await safeJson(pr);
   }
-  _cgMatrixCache = { at: 0, payload: null };
+  _cgMatrixMem = { at: 0, payload: null };
   return json({ ok: true, add: addJson, promote: prom });
 }
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.346</title>
+<title>CommonCommunication v1.347</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -1965,6 +1965,13 @@
   }
   .ag-row.notformed { background: #fff7ed; }
   .ag-row .cell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* v1.347: owner/User cells coloured by REAL group membership (not invite). */
+  .ag-row .cell.ag-mem.in  { color: #15803d; font-weight: 600; }
+  .ag-row .cell.ag-mem.out { color: #c2410c; }
+  .ag-legend { display: flex; gap: 14px; align-items: center; font-size: 11px; color: #6b7280; margin: 2px 0 8px; flex-wrap: wrap; }
+  .ag-legend b { font-weight: 600; }
+  .ag-legend .in  { color: #15803d; }
+  .ag-legend .out { color: #c2410c; }
   .ag-subid { font-weight: 700; }
   .ag-state {
     display: inline-block; padding: 1px 6px; border-radius: 10px;
@@ -2780,6 +2787,7 @@
       <a href="#" id="agRefresh" style="font-size:12px;">↻ refresh</a>
       <a href="#" id="agSettings" title="Group defaults" style="font-size:15px; text-decoration:none;">⚙️</a>
     </div>
+    <div class="ag-legend">Owner / Users: <span class="in">● in the WhatsApp group</span><span class="out">● in subscription, not in group</span></div>
     <div id="agTable" class="tt-table" style="flex:1; overflow:auto;"></div>
     <div class="actions" style="margin-top:12px;">
       <button class="btn btn-secondary" id="agClose">Close</button>
@@ -3102,7 +3110,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.346";
+const APP_VERSION = "v1.347";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -6259,13 +6267,14 @@ function renderAllGroups() {
     const users = [];
     for (let i = 0; i < memberPhones.length && users.length < 6; i++) {
       if (normalizePhone(memberPhones[i]) === ownerNorm) continue; // holder shown in Owner col
-      users.push(memberNames[i] || memberPhones[i] || "");
+      users.push({ name: memberNames[i] || memberPhones[i] || "", phone: String(memberPhones[i] || "").replace(/\D/g, "") });
     }
     rows.push({
       docId,
       subDisplay: sub.customerId ? String(sub.customerId).replace(/^FERRA-?/i, "") : "—",
       customer: cell ? cell.customerName || "" : "",
       owner: sub.customerName || (ownerPhone ? formatPhoneDisplay(ownerPhone) : ""),
+      ownerPhone: String(ownerPhone || "").replace(/\D/g, ""),
       hasOwner: !!sub.customerName,
       status: sharedSubs?.customerDetails?.[normalizeFerraPhone(ownerPhone)]?.status || sub.status || "",
       users, cell, formed, exists,
@@ -6281,7 +6290,7 @@ function renderAllGroups() {
       r.subDisplay.toLowerCase().includes(agSearchTerm) ||
       (r.owner || "").toLowerCase().includes(agSearchTerm) ||
       (r.customer || "").toLowerCase().includes(agSearchTerm) ||
-      r.users.some((u) => (u || "").toLowerCase().includes(agSearchTerm)));
+      r.users.some((u) => (u.name || "").toLowerCase().includes(agSearchTerm)));
   }
   // Actionable first: no-group (need Make) → incomplete (need Add) → complete.
   const agRank = (r) => (r.formed ? 2 : r.exists ? 1 : 0);
@@ -6297,9 +6306,21 @@ function renderAllGroups() {
     x && x.admin ? `<span class="ag-state admin">admin</span>`
       : x && x.member ? `<span class="ag-state member">member</span>`
       : `<span class="ag-state absent">·</span>`;
-  const userCells = (users) => {
+  // Highlight membership: green = actually in the WhatsApp group, amber = in
+  // the subscription but NOT in the group. This is based on the group's real
+  // member roster (cell.inGroupPhones), NOT on whether an invite was sent — an
+  // invited-not-joined number stays amber. No colour when no group exists.
+  const memClass = (phone, hasCell, inSet) =>
+    hasCell && phone ? (inSet.has(phone) ? " ag-mem in" : " ag-mem out") : "";
+  const memTip = (phone, hasCell, inSet) =>
+    !hasCell || !phone ? "" : (inSet.has(phone) ? ' title="In the WhatsApp group"' : ' title="In the subscription, not yet in the WhatsApp group"');
+  const userCells = (users, hasCell, inSet) => {
     let h = "";
-    for (let i = 0; i < 6; i++) h += `<div class="cell">${escapeHtml(users[i] || "")}</div>`;
+    for (let i = 0; i < 6; i++) {
+      const u = users[i];
+      if (!u || !u.name) { h += `<div class="cell"></div>`; continue; }
+      h += `<div class="cell${memClass(u.phone, hasCell, inSet)}"${memTip(u.phone, hasCell, inSet)}>${escapeHtml(u.name)}</div>`;
+    }
     return h;
   };
 
@@ -6315,12 +6336,14 @@ function renderAllGroups() {
       : r.formed
         ? `<span class="ag-state member">✓ all</span>`
         : `<button class="btn ag-add-btn" data-docid="${escapeHtml(r.docId)}" style="padding:3px 8px; font-size:11px;">＋ Add lines</button>`;
+    const inSet = new Set(r.cell?.inGroupPhones || []);
+    const hasCell = !!r.cell;
     html += `<div class="ag-row${r.formed ? "" : " notformed"}">
       <div class="ag-subid">${escapeHtml(r.subDisplay)}</div>
       <div>${agStatusBadge(r.status)}</div>
       <div class="cell">${escapeHtml(r.customer)}</div>
-      <div class="cell">${escapeHtml(r.owner)}</div>
-      ${userCells(r.users)}
+      <div class="cell${memClass(r.ownerPhone, hasCell, inSet)}"${memTip(r.ownerPhone, hasCell, inSet)}>${escapeHtml(r.owner)}</div>
+      ${userCells(r.users, hasCell, inSet)}
       <div>${stateCell(r.cell?.x1)}</div>
       <div>${stateCell(r.cell?.x2)}</div>
       <div>${stateCell(r.cell?.x3)}</div>
