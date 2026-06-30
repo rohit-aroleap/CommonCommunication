@@ -408,6 +408,15 @@ export default {
       if (url.pathname === "/cgroups-add" && request.method === "POST") {
         return cors(env, await handleCgroupsAdd(request, env));
       }
+      // Promote specific numbers to admin in ONE group (per-cell "make admin").
+      if (url.pathname === "/cgroups-promote" && request.method === "POST") {
+        return cors(env, await handleCgroupsPromote(request, env, ctx));
+      }
+      // Bulk: promote x1/x2/x3/Mukim/Rohit to admin across all groups where
+      // they're members-not-admins (top "Make admins" button).
+      if (url.pathname === "/cgroups-make-admins" && request.method === "POST") {
+        return cors(env, await handleCgroupsMakeAdmins(env, ctx));
+      }
       // v1.280: Exotel click-to-call. Trainer taps Call on a customer chat;
       // Exotel rings the trainer's own phone first, then bridges to the
       // customer (who sees the Ferra virtual CallerId). Allowlist + the
@@ -6257,6 +6266,11 @@ async function handleCgroupsList(env) {
 // carries is_admin for everyone). Keyed by FERRA subId so the web can left-join
 // it onto the full subscription list. Cached 60s (group/info fan-out).
 const CGMATRIX_PHONES = { x1: "919187651332", x2: "918287116066", x3: "916361073558" };
+// The two default team members auto-added to every group (also tracked in the
+// matrix as their own columns): m1 = Mukim, m2 = Rohit.
+const CGMATRIX_DEFAULT_ADMINS = { m1: "919667329123", m2: "919650854161" };
+// All 5 numbers that SHOULD be admins of every group (top "Make admins" button).
+const CGMATRIX_SHOULD_ADMIN = { ...CGMATRIX_PHONES, ...CGMATRIX_DEFAULT_ADMINS };
 // Short in-memory payload cache (dedupes rapid re-opens) + a PERSISTENT
 // per-group cache. We re-call group/info for a group only when it's new,
 // not yet "settled" (some line OR subscription member still missing — they
@@ -6342,7 +6356,7 @@ async function buildCgMatrix(env, ctx) {
   for (const g of list) {
     const prev = prevCache[g.subId];
     let reuse = false;
-    if (prev && Array.isArray(prev.inGroupPhones) && now - (prev.checkedAt || 0) < CGMATRIX_RECHECK_TTL) {
+    if (prev && Array.isArray(prev.inGroupPhones) && prev.m1 && prev.m2 && now - (prev.checkedAt || 0) < CGMATRIX_RECHECK_TTL) {
       const inSet = new Set(prev.inGroupPhones);
       const xIn = xPhones.every((p) => inSet.has(p));
       const subMembers = roster[g.subId] ? [...roster[g.subId]] : [];
@@ -6379,6 +6393,8 @@ async function buildCgMatrix(env, ctx) {
       x1: { member: inSet.has(CGMATRIX_PHONES.x1), admin: adm(CGMATRIX_PHONES.x1) },
       x2: { member: inSet.has(CGMATRIX_PHONES.x2), admin: adm(CGMATRIX_PHONES.x2) },
       x3: { member: inSet.has(CGMATRIX_PHONES.x3), admin: adm(CGMATRIX_PHONES.x3) },
+      m1: { member: inSet.has(CGMATRIX_DEFAULT_ADMINS.m1), admin: adm(CGMATRIX_DEFAULT_ADMINS.m1) },
+      m2: { member: inSet.has(CGMATRIX_DEFAULT_ADMINS.m2), admin: adm(CGMATRIX_DEFAULT_ADMINS.m2) },
       inGroupPhones,
       inviteLink: g.inviteLink || prevCache[g.subId]?.inviteLink || null,
       checkedAt: now,
@@ -6511,6 +6527,70 @@ async function handleCgroupsAdd(request, env) {
   }
   _cgMatrixMem = { at: 0, payload: null };
   return json({ ok: true, add: addJson, promote: prom });
+}
+
+// ---------- /cgroups-promote + /cgroups-make-admins (admin management) ----------
+// Pick which of our lines (x1/x2/x3) admins a group — only an admin can promote.
+function cgAdminLine(cell) {
+  if (!cell) return null;
+  if (cell.x3 && cell.x3.admin) return "x3";
+  if (cell.x1 && cell.x1.admin) return "x1";
+  if (cell.x2 && cell.x2.admin) return "x2";
+  return null;
+}
+
+async function cgPromote(env, chatId, phones, from) {
+  const pr = await env.PERISKOPE_GATEWAY.fetch(new Request("https://gateway/group/promote", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chatId, phones, dashboard: "commoncomm", from }),
+  }));
+  return { ok: pr.ok, status: pr.status, detail: await safeJson(pr) };
+}
+
+// Promote specific numbers to admin in ONE group (per-cell "make admin"). The
+// numbers must already be members; the promoting line must itself be an admin.
+async function handleCgroupsPromote(request, env, ctx) {
+  const body = await request.json().catch(() => ({}));
+  const chatId = String(body.chatId || "").trim();
+  const phones = (Array.isArray(body.phones) ? body.phones : [])
+    .map((p) => String(p || "").replace(/\D/g, "")).filter((p) => p.length >= 10);
+  if (!chatId) return json({ error: "missing_chatId" }, 400);
+  if (!phones.length) return json({ error: "missing_phones" }, 400);
+  const { matrix } = await buildCgMatrix(env, ctx);
+  const entry = Object.entries(matrix).find(([, c]) => c.chatId === chatId);
+  const from = cgAdminLine(entry && entry[1]);
+  if (!from) return json({ error: "no_admin_line", detail: "none of x1/x2/x3 is an admin of this group" }, 409);
+  const r = await cgPromote(env, chatId, phones, from);
+  _cgMatrixMem = { at: 0, payload: null };
+  if (entry) ctx.waitUntil(fbPatchRoot(env, { [`${ROOT}/config/cgroupsMatrixCache/${entry[0]}`]: null }).catch(() => {}));
+  if (!r.ok) return json({ error: "promote_failed", status: r.status, detail: r.detail }, 502);
+  return json({ ok: true, promoted: phones, from, detail: r.detail });
+}
+
+// Bulk: across every group, promote the 5 should-be-admins (x1/x2/x3 + Mukim +
+// Rohit) who are MEMBERS but not yet admins. Promote-only (never adds absent
+// numbers). Skips groups where none of our lines is an admin.
+async function handleCgroupsMakeAdmins(env, ctx) {
+  const { matrix } = await buildCgMatrix(env, ctx);
+  const wantPhones = Object.values(CGMATRIX_SHOULD_ADMIN);
+  const results = [];
+  for (const [subId, cell] of Object.entries(matrix)) {
+    const inSet = new Set(cell.inGroupPhones || []);
+    const adminOf = {
+      [CGMATRIX_PHONES.x1]: cell.x1, [CGMATRIX_PHONES.x2]: cell.x2, [CGMATRIX_PHONES.x3]: cell.x3,
+      [CGMATRIX_DEFAULT_ADMINS.m1]: cell.m1 || {}, [CGMATRIX_DEFAULT_ADMINS.m2]: cell.m2 || {},
+    };
+    const toPromote = wantPhones.filter((p) => inSet.has(p) && !(adminOf[p] && adminOf[p].admin));
+    if (!toPromote.length) continue;
+    const from = cgAdminLine(cell);
+    if (!from) { results.push({ subId, chatId: cell.chatId, ok: false, skipped: "no_admin_line", wanted: toPromote }); continue; }
+    const r = await cgPromote(env, cell.chatId, toPromote, from);
+    results.push({ subId, chatId: cell.chatId, ok: r.ok, promoted: r.ok ? toPromote : [], ...(r.ok ? {} : { detail: r.detail }) });
+  }
+  _cgMatrixMem = { at: 0, payload: null };
+  ctx.waitUntil(fbPatchRoot(env, { [`${ROOT}/config/cgroupsMatrixCache`]: null }).catch(() => {}));
+  const promotedCount = results.reduce((n, r) => n + ((r.promoted && r.promoted.length) || 0), 0);
+  return json({ ok: true, groupsTouched: results.length, promotedCount, results });
 }
 
 // ---------- /route-automated (CGroups migration) ----------
