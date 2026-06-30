@@ -6607,7 +6607,11 @@ async function handleRouteAutomated(request, env, ctx) {
       const added = await cgAddX2(env, cell.chatId, adminFrom);
       if (!added) { failures.push({ subId: c.subId, chatId: cell.chatId, stage: "x2_add" }); continue; }
     }
-    const sent = await cgSendAsX2(env, cell.chatId, text, kind, dashboard, idem);
+    // Per-group, namespaced idempotency: unique per group (so multi-group
+    // routing isn't deduped against itself) and distinct from the caller's
+    // own key (so an all-groups-failed fallback DM isn't blocked).
+    const gidem = idem ? `grp-${String(cell.chatId).replace(/\D/g, "")}-${idem}` : null;
+    const sent = await cgSendAsX2(env, cell.chatId, text, kind, dashboard, gidem);
     if (sent.ok) delivered.push({ subId: c.subId, chatId: cell.chatId });
     else failures.push({ subId: c.subId, chatId: cell.chatId, stage: "send", detail: sent.detail });
   }
