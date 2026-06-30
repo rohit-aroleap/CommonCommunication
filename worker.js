@@ -394,6 +394,11 @@ export default {
       if (url.pathname === "/cgroups-matrix" && request.method === "GET") {
         return cors(env, await handleCgroupsMatrix(env, ctx));
       }
+      // CGroups migration: route an automated customer message to its WhatsApp
+      // group via x2 when possible, else tell the caller to fall back to Wati.
+      if (url.pathname === "/route-automated" && request.method === "POST") {
+        return cors(env, await handleRouteAutomated(request, env, ctx));
+      }
       // v1.344: provision a customer group (x3 creates, x1/x2/defaults promoted).
       if (url.pathname === "/cgroups-create" && request.method === "POST") {
         return cors(env, await handleCgroupsCreate(request, env));
@@ -6287,9 +6292,11 @@ async function cgSubRosterMap(env) {
   return map;
 }
 
-async function handleCgroupsMatrix(env, ctx) {
+// Returns the matrix payload OBJECT (shared by GET /cgroups-matrix and the
+// automated-message router). Respects the 60s in-memory shield + smart cache.
+async function buildCgMatrix(env, ctx) {
   if (_cgMatrixMem.payload && Date.now() - _cgMatrixMem.at < CGMATRIX_MEM_TTL) {
-    return json(_cgMatrixMem.payload);
+    return _cgMatrixMem.payload;
   }
   const now = Date.now();
   // 1. Discover the FERRA customer groups each line can see (union by chatId).
@@ -6384,7 +6391,11 @@ async function handleCgroupsMatrix(env, ctx) {
   ctx.waitUntil(fbPatchRoot(env, { [`${ROOT}/config/cgroupsMatrixCache`]: newCache }).catch(() => {}));
   const payload = { ok: true, count: Object.keys(newCache).length, matrix: newCache, rechecked: toCheck.length };
   _cgMatrixMem = { at: now, payload };
-  return json(payload);
+  return payload;
+}
+
+async function handleCgroupsMatrix(env, ctx) {
+  return json(await buildCgMatrix(env, ctx));
 }
 
 // ---------- /cgroups-create (All Groups tab: provision a customer group) ----------
@@ -6500,6 +6511,114 @@ async function handleCgroupsAdd(request, env) {
   }
   _cgMatrixMem = { at: 0, payload: null };
   return json({ ok: true, add: addJson, promote: prom });
+}
+
+// ---------- /route-automated (CGroups migration) ----------
+// Decide, for ONE automated customer message, whether to deliver it into the
+// customer's WhatsApp GROUP(s) via x2, or tell the caller to fall back to its
+// existing Wati/Periskope send. Rule locked with Rohit 2026-06-30:
+//   1. phone -> EVERY subscription it's an owner/member of (any status)        [#1,#2]
+//   2. keep subs that have a group AND where the phone is a JOINED member       [#3]
+//      (invited-but-not-joined does NOT count)
+//   3. no such group -> {routed:false} -> caller sends via Wati as before       [#3]
+//   4. for EACH kept group: if x2 isn't in, auto-add + promote x2 via an admin
+//      line; if that fails, skip this group                                     [#4]
+//   5. post the rendered text as PLAIN TEXT (no buttons/media) via x2           [#6]
+//   6. >=1 group delivered -> {routed:true}; all groups failed -> {routed:false}
+//      (caller falls back to Wati) and the failure is logged for a future UI.   [#5]
+// Staff/admin alerts never reach here (their numbers don't match a sub; callers
+// also gate by audience).
+async function phoneToSubIds(env, phoneDigits) {
+  const roster = await cgSubRosterMap(env); // subIdDigits -> Set(phones)
+  const out = [];
+  for (const sid in roster) {
+    if (roster[sid] && roster[sid].has(phoneDigits)) out.push(sid);
+  }
+  return out;
+}
+
+async function cgAddX2(env, chatId, adminFrom) {
+  try {
+    const r = await env.PERISKOPE_GATEWAY.fetch(new Request("https://gateway/group/add", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId, phones: [CGMATRIX_PHONES.x2], dashboard: "commoncomm", from: adminFrom }),
+    }));
+    if (!r.ok) return false;
+    await env.PERISKOPE_GATEWAY.fetch(new Request("https://gateway/group/promote", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId, phones: [CGMATRIX_PHONES.x2], dashboard: "commoncomm", from: adminFrom }),
+    })).catch(() => {});
+    _cgMatrixMem = { at: 0, payload: null }; // membership changed
+    return true;
+  } catch { return false; }
+}
+
+async function cgSendAsX2(env, chatId, text, kind, dashboard, idem) {
+  try {
+    const r = await env.PERISKOPE_GATEWAY.fetch(new Request("https://gateway/send", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ from: "x2", chatId, text, kind, dashboard, idempotencyKey: idem || undefined }),
+    }));
+    const j = await safeJson(r);
+    return r.ok ? { ok: true, detail: j } : { ok: false, detail: j };
+  } catch (e) {
+    return { ok: false, detail: String((e && e.message) || e) };
+  }
+}
+
+async function handleRouteAutomated(request, env, ctx) {
+  const body = await request.json().catch(() => ({}));
+  const phone = String(body.phone || "").replace(/\D/g, "");
+  const text = String(body.text || "").trim();
+  const dashboard = String(body.dashboard || "").trim() || "automated";
+  const kind = String(body.kind || "").trim() || "automated";
+  const idem = body.idempotencyKey ? String(body.idempotencyKey) : null;
+  const dryRun = body.dryRun === true;
+  if (!phone || phone.length < 10) return json({ routed: false, reason: "bad_phone" });
+  if (!text) return json({ routed: false, reason: "empty_text" });
+
+  const subIds = await phoneToSubIds(env, phone);
+  if (!subIds.length) return json({ routed: false, reason: "no_subscription" });
+
+  const { matrix } = await buildCgMatrix(env, ctx);
+  const candidates = [];
+  for (const sid of subIds) {
+    const cell = matrix[sid];
+    if (!cell || !cell.chatId) continue;
+    if (!(cell.inGroupPhones || []).includes(phone)) continue; // require joined (#3)
+    candidates.push({ subId: sid, cell });
+  }
+  if (!candidates.length) return json({ routed: false, reason: "no_joined_group" });
+
+  if (dryRun) {
+    return json({
+      routed: true, dryRun: true,
+      groups: candidates.map((c) => ({ subId: c.subId, chatId: c.cell.chatId, groupName: c.cell.groupName, x2In: !!c.cell.x2.member })),
+    });
+  }
+
+  const delivered = [];
+  const failures = [];
+  for (const c of candidates) {
+    const cell = c.cell;
+    if (!cell.x2.member) {
+      const adminFrom = cell.x3.admin ? "x3" : cell.x1.admin ? "x1" : null;
+      if (!adminFrom) { failures.push({ subId: c.subId, chatId: cell.chatId, stage: "x2_add", reason: "no_admin_line" }); continue; }
+      const added = await cgAddX2(env, cell.chatId, adminFrom);
+      if (!added) { failures.push({ subId: c.subId, chatId: cell.chatId, stage: "x2_add" }); continue; }
+    }
+    const sent = await cgSendAsX2(env, cell.chatId, text, kind, dashboard, idem);
+    if (sent.ok) delivered.push({ subId: c.subId, chatId: cell.chatId });
+    else failures.push({ subId: c.subId, chatId: cell.chatId, stage: "send", detail: sent.detail });
+  }
+
+  const routed = delivered.length > 0;
+  ctx.waitUntil(fbPush(env, `${ROOT}/automatedRouteLog`, {
+    phone, kind, dashboard, routed, delivered, failures, at: Date.now(),
+  }).catch(() => {}));
+
+  if (routed) return json({ routed: true, delivered, failures });
+  return json({ routed: false, reason: "all_groups_failed", failures }); // caller -> Wati (#5)
 }
 
 // ---------- /cohort-list + /cohort-add (daily WhatsApp groups) ----------
