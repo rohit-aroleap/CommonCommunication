@@ -6355,7 +6355,7 @@ async function handleCgroupsCreate(request, env) {
 
   // Ferra group icon. Defaults to the hosted Ferra mark; override any time by
   // setting commonComm/config/cgroupIconUrl (a live image URL or base64).
-  let icon = "https://rohit-aroleap.github.io/CommonCommunication/ferra-group-icon.png";
+  let icon = "https://rohit-aroleap.github.io/CommonCommunication/ferra-group-icon-v2.png";
   try {
     const c = String((await fbGet(env, `${ROOT}/config/cgroupIconUrl`)) || "").trim();
     if (c) icon = c;
