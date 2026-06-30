@@ -392,14 +392,40 @@ export function ChatsScreen() {
     if (cgroupsMode) {
       const all = cgroups || [];
       const q = search.trim().toLowerCase();
-      const rows = q
-        ? all.filter(
-            (g) =>
-              g.customerName.toLowerCase().includes(q) ||
-              g.subId.toLowerCase().includes(q) ||
-              (g.lastMessage?.body || "").toLowerCase().includes(q),
-          )
-        : all;
+      let rows = all;
+      if (q) {
+        // v1.351 parity: search the group AND its subscription — owner name/
+        // phone + every member's name/phone + the subId — so typing a customer
+        // or any user (by name or number) surfaces their group, not just a
+        // group-name match. Phone search is digit-normalized.
+        const qDigits = q.replace(/\D/g, "");
+        const subById: Record<string, any> = {};
+        subsByPhone.forEach((list) => {
+          for (const s of list) {
+            const d = String(s.customerId || "").replace(/\D/g, "");
+            if (d && !subById[d]) subById[d] = s;
+          }
+        });
+        const haystack = (g: CgroupRow) => {
+          const parts: (string | undefined)[] = [
+            g.customerName,
+            g.subId,
+            g.lastMessage?.body,
+          ];
+          const sub = subById[String(g.subId || "").replace(/\D/g, "")];
+          if (sub) {
+            parts.push(sub.customerName, sub.customerPhone);
+            if (Array.isArray(sub.memberNames)) parts.push(...sub.memberNames);
+            if (Array.isArray(sub.memberPhones)) parts.push(...sub.memberPhones);
+          }
+          return parts.filter(Boolean).join(" ").toLowerCase();
+        };
+        rows = all.filter((g) => {
+          const text = haystack(g);
+          if (text.includes(q)) return true;
+          return qDigits.length >= 3 && text.replace(/\D/g, "").includes(qDigits);
+        });
+      }
       return rows.map((g) => ({ kind: "cgroup", key: g.chatId, cg: g }));
     }
     // v1.330: Wati mode shows a pure Wati-recency list — no ticket/favorite
@@ -459,7 +485,7 @@ export function ChatsScreen() {
       items.push({ kind: "row", key: r.row.chatKey, item: r });
     }
     return items;
-  }, [filtered, myFavorites, myTicketChatKeys, favoritesOnly, watiMode, watiActivityFor, cgroupsMode, cgroups, search]);
+  }, [filtered, myFavorites, myTicketChatKeys, favoritesOnly, watiMode, watiActivityFor, cgroupsMode, cgroups, search, subsByPhone]);
 
   // v1.163: edges={[]} — was edges={["top"]} which double-counted the
   // status-bar inset on Android. The React Navigation Stack header
