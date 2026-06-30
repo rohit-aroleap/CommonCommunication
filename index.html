@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.350</title>
+<title>CommonCommunication v1.351</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -3118,7 +3118,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.350";
+const APP_VERSION = "v1.351";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -10571,14 +10571,37 @@ function renderCgroupsList() {
     return;
   }
   const all = cgroupsRows || [];
-  // Honor the shared search box (filters by name, subId, or preview).
+  // Honor the shared search box. v1.351: search the group AND its subscription —
+  // owner name/phone + EVERY member's name/phone + the subId — so typing a
+  // customer's (or any user's) name or phone surfaces their group, not just a
+  // group-name match. Matches surface at the top because non-matches drop out.
   const term = (searchInput?.value || "").trim().toLowerCase();
-  const rows = term
-    ? all.filter(g =>
-        (g.customerName || "").toLowerCase().includes(term) ||
-        (g.subId || "").toLowerCase().includes(term) ||
-        (g.lastMessage?.body || "").toLowerCase().includes(term))
-    : all;
+  let rows = all;
+  if (term) {
+    const termDigits = term.replace(/\D/g, "");
+    const bySub = sharedSubs?.bySubscription || {};
+    const subIndex = {}; // subId(digits) -> subscription record
+    for (const k in bySub) {
+      const d = String(bySub[k]?.customerId || "").replace(/\D/g, "");
+      if (d) subIndex[d] = bySub[k];
+    }
+    const haystack = (g) => {
+      const parts = [g.customerName, g.subId, g.groupName, g.lastMessage?.body];
+      const sub = subIndex[String(g.subId || "").replace(/\D/g, "")];
+      if (sub) {
+        parts.push(sub.customerName, sub.customerPhone);
+        if (Array.isArray(sub.memberNames)) parts.push(...sub.memberNames);
+        if (Array.isArray(sub.memberPhones)) parts.push(...sub.memberPhones);
+      }
+      return parts.filter(Boolean).join(" ").toLowerCase();
+    };
+    rows = all.filter((g) => {
+      const text = haystack(g);
+      if (text.includes(term)) return true; // name / subId / preview / formatted
+      // Phone search: compare digits-only so "+91 98765…" matches "919876…".
+      return termDigits.length >= 3 && text.replace(/\D/g, "").includes(termDigits);
+    });
+  }
   const errHtml = cgroupsError
     ? `<div class="cg-hint" style="color:var(--danger,#c0392b);">⚠ ${escapeHtml(cgroupsError)} — <a href="#" id="cgRetry">retry</a></div>`
     : "";
