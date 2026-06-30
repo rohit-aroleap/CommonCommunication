@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.345</title>
+<title>CommonCommunication v1.346</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -1952,10 +1952,10 @@
   /* v1.343: All Groups table — subId · Customer · Owner · User1-6 · x1/x2/x3 */
   .ag-row {
     display: grid;
-    grid-template-columns: 54px 1.05fr 1.05fr repeat(6, 0.85fr) 54px 54px 54px 116px;
+    grid-template-columns: 54px 34px 1.05fr 1.05fr repeat(6, 0.85fr) 54px 54px 54px 116px;
     align-items: center; gap: 8px; padding: 7px 10px;
     border-bottom: 1px solid var(--border); font-size: 12.5px;
-    min-width: 1220px;
+    min-width: 1254px;
   }
   .ag-row:last-child { border-bottom: none; }
   .ag-row.head {
@@ -1973,6 +1973,16 @@
   .ag-state.admin  { background: #dbeafe; color: #1e40af; }
   .ag-state.member { background: #d1fae5; color: #065f46; }
   .ag-state.absent { background: #f3f4f6; color: #9ca3af; }
+  /* v1.346: subscription-status badge (A active / C cancelled / P paused) */
+  .ag-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; border-radius: 50%;
+    font-size: 11px; font-weight: 800;
+  }
+  .ag-badge.a { background: #16a34a; color: #fff; }
+  .ag-badge.c { background: #dc2626; color: #fff; }
+  .ag-badge.p { background: #facc15; color: #713f12; }
+  .ag-badge.u { background: #e5e7eb; color: #6b7280; }
   .tt-actions {
     display: flex; gap: 4px;
     min-width: 0;
@@ -3092,7 +3102,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.345";
+const APP_VERSION = "v1.346";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -6199,6 +6209,16 @@ async function loadCgMatrix() {
 
 function _agDigits(v) { return String(v || "").replace(/\D/g, ""); }
 
+// v1.346: subscription-status badge. A (green) active, C (red) cancelled,
+// P (yellow) paused, ? (grey) unknown/missing.
+function agStatusBadge(status) {
+  const s = String(status || "").toLowerCase();
+  if (/cancel/.test(s)) return `<span class="ag-badge c" title="Cancelled">C</span>`;
+  if (/pause/.test(s)) return `<span class="ag-badge p" title="Paused">P</span>`;
+  if (/active|initial/.test(s)) return `<span class="ag-badge a" title="Active">A</span>`;
+  return `<span class="ag-badge u" title="${escapeHtml(status || "Unknown")}">?</span>`;
+}
+
 function renderAgFilters() {
   const opts = [["all", "All"], ["nogroup", "No group"], ["incomplete", "Missing a line"], ["formed", "Complete"]];
   agFilters.innerHTML = opts.map(([v, l]) =>
@@ -6247,6 +6267,7 @@ function renderAllGroups() {
       customer: cell ? cell.customerName || "" : "",
       owner: sub.customerName || (ownerPhone ? formatPhoneDisplay(ownerPhone) : ""),
       hasOwner: !!sub.customerName,
+      status: sharedSubs?.customerDetails?.[normalizeFerraPhone(ownerPhone)]?.status || sub.status || "",
       users, cell, formed, exists,
     });
   }
@@ -6283,7 +6304,7 @@ function renderAllGroups() {
   };
 
   let html = `<div class="ag-row head">
-    <div>Sub</div><div>Customer</div><div>Owner</div>
+    <div>Sub</div><div title="Subscription status">St</div><div>Customer</div><div>Owner</div>
     <div>User 1</div><div>User 2</div><div>User 3</div><div>User 4</div><div>User 5</div><div>User 6</div>
     <div>x1</div><div>x2</div><div>x3</div><div>Action</div>
   </div>`;
@@ -6296,6 +6317,7 @@ function renderAllGroups() {
         : `<button class="btn ag-add-btn" data-docid="${escapeHtml(r.docId)}" style="padding:3px 8px; font-size:11px;">＋ Add lines</button>`;
     html += `<div class="ag-row${r.formed ? "" : " notformed"}">
       <div class="ag-subid">${escapeHtml(r.subDisplay)}</div>
+      <div>${agStatusBadge(r.status)}</div>
       <div class="cell">${escapeHtml(r.customer)}</div>
       <div class="cell">${escapeHtml(r.owner)}</div>
       ${userCells(r.users)}
