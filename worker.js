@@ -6353,12 +6353,17 @@ async function handleCgroupsCreate(request, env) {
   if (!groupName) return json({ error: "missing_groupName" }, 400);
   if (!addPhones.length) return json({ error: "missing_phones" }, 400);
 
+  // Optional Ferra group icon — a live image URL or base64 at
+  // commonComm/config/cgroupIconUrl. Set once; every new group gets it.
+  let icon = "";
+  try { icon = String((await fbGet(env, `${ROOT}/config/cgroupIconUrl`)) || "").trim(); } catch { /* ignore */ }
+
   // 1. Create as x3 → x3 is the group admin.
   const createRes = await env.PERISKOPE_GATEWAY.fetch(
     new Request("https://gateway/group/create", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ groupName, phones: addPhones, dashboard: "commoncomm", from: "x3" }),
+      body: JSON.stringify({ groupName, phones: addPhones, dashboard: "commoncomm", from: "x3", ...(icon ? { image: icon } : {}) }),
     }),
   );
   const createJson = await safeJson(createRes);
