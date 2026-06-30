@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.344</title>
+<title>CommonCommunication v1.345</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -3092,7 +3092,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.344";
+const APP_VERSION = "v1.345";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -3265,6 +3265,7 @@ let agFormedFilter = "all";   // all | formed | notformed
 // new group, editable via the ⚙️ settings. Stored at commonComm/config/cgroupDefaults.
 const CGROUP_X1 = "919187651332";
 const CGROUP_X2 = "918287116066";
+const CGROUP_X3 = "916361073558";
 const CGROUP_DEFAULT_NUMS = [{ phone: "919667329123", admin: true }, { phone: "919650854161", admin: true }];
 let cgroupDefaults = null;    // null = not loaded → falls back to CGROUP_DEFAULT_NUMS
 let cgDefaultsListening = false;
@@ -6199,7 +6200,7 @@ async function loadCgMatrix() {
 function _agDigits(v) { return String(v || "").replace(/\D/g, ""); }
 
 function renderAgFilters() {
-  const opts = [["all", "All"], ["notformed", "No group"], ["formed", "Formed"]];
+  const opts = [["all", "All"], ["nogroup", "No group"], ["incomplete", "Missing a line"], ["formed", "Complete"]];
   agFilters.innerHTML = opts.map(([v, l]) =>
     `<button class="filter-pill ${v === agFormedFilter ? "active" : ""}" data-ag="${v}" type="button">${l}</button>`).join("");
   agFilters.querySelectorAll("button").forEach((b) => {
@@ -6228,6 +6229,8 @@ function renderAllGroups() {
     if (!sub) continue;
     const subDigits = _agDigits(sub.customerId);
     const cell = subDigits ? matrixByDigits[subDigits] : null;
+    // exists = a group is there (≥1 of our lines is a member). formed = all 3.
+    const exists = !!(cell && (cell.x1.member || cell.x2.member || cell.x3.member));
     const formed = !!(cell && cell.x1.member && cell.x2.member && cell.x3.member);
     const ownerPhone = sub.customerPhone || "";
     const ownerNorm = normalizePhone(ownerPhone);
@@ -6244,13 +6247,14 @@ function renderAllGroups() {
       customer: cell ? cell.customerName || "" : "",
       owner: sub.customerName || (ownerPhone ? formatPhoneDisplay(ownerPhone) : ""),
       hasOwner: !!sub.customerName,
-      users, cell, formed,
+      users, cell, formed, exists,
     });
   }
 
   let view = rows;
   if (agFormedFilter === "formed") view = view.filter((r) => r.formed);
-  else if (agFormedFilter === "notformed") view = view.filter((r) => !r.formed);
+  else if (agFormedFilter === "nogroup") view = view.filter((r) => !r.exists);
+  else if (agFormedFilter === "incomplete") view = view.filter((r) => r.exists && !r.formed);
   if (agSearchTerm) {
     view = view.filter((r) =>
       r.subDisplay.toLowerCase().includes(agSearchTerm) ||
@@ -6258,11 +6262,14 @@ function renderAllGroups() {
       (r.customer || "").toLowerCase().includes(agSearchTerm) ||
       r.users.some((u) => (u || "").toLowerCase().includes(agSearchTerm)));
   }
-  // Not-formed first (actionable), then by subId.
-  view.sort((a, b) => (a.formed === b.formed ? a.subDisplay.localeCompare(b.subDisplay) : a.formed ? 1 : -1));
+  // Actionable first: no-group (need Make) → incomplete (need Add) → complete.
+  const agRank = (r) => (r.formed ? 2 : r.exists ? 1 : 0);
+  view.sort((a, b) => (agRank(a) !== agRank(b) ? agRank(a) - agRank(b) : a.subDisplay.localeCompare(b.subDisplay)));
 
+  const existsCount = rows.filter((r) => r.exists).length;
   const formedCount = rows.filter((r) => r.formed).length;
-  agStats.innerHTML = `${rows.length} subscriptions · <b>${formedCount}</b> groups formed · ${rows.length - formedCount} without a group${cgMatrixError ? ` · <span style="color:var(--danger,#c0392b);">⚠ ${escapeHtml(cgMatrixError)}</span>` : ""}`;
+  const incompleteCount = existsCount - formedCount;
+  agStats.innerHTML = `${rows.length} subscriptions · <b>${existsCount}</b> with a group${incompleteCount ? ` (<b>${incompleteCount}</b> missing a line)` : ""} · ${rows.length - existsCount} without a group${cgMatrixError ? ` · <span style="color:var(--danger,#c0392b);">⚠ ${escapeHtml(cgMatrixError)}</span>` : ""}`;
   renderAgFilters();
 
   const stateCell = (x) =>
@@ -6281,9 +6288,12 @@ function renderAllGroups() {
     <div>x1</div><div>x2</div><div>x3</div><div>Action</div>
   </div>`;
   for (const r of view) {
-    const action = r.formed
-      ? `<span class="ag-state member">✓ group</span>`
-      : `<button class="btn ag-make-btn" data-docid="${escapeHtml(r.docId)}" style="padding:3px 8px; font-size:11px;">Make group</button>`;
+    // No group at all → Make. Group exists but missing a line → Add. All in → ✓.
+    const action = !r.exists
+      ? `<button class="btn ag-make-btn" data-docid="${escapeHtml(r.docId)}" style="padding:3px 8px; font-size:11px;">Make group</button>`
+      : r.formed
+        ? `<span class="ag-state member">✓ all</span>`
+        : `<button class="btn ag-add-btn" data-docid="${escapeHtml(r.docId)}" style="padding:3px 8px; font-size:11px;">＋ Add lines</button>`;
     html += `<div class="ag-row${r.formed ? "" : " notformed"}">
       <div class="ag-subid">${escapeHtml(r.subDisplay)}</div>
       <div class="cell">${escapeHtml(r.customer)}</div>
@@ -6298,6 +6308,9 @@ function renderAllGroups() {
   agTable.innerHTML = html;
   agTable.querySelectorAll(".ag-make-btn").forEach((b) => {
     b.onclick = () => makeGroupForSub(b.dataset.docid);
+  });
+  agTable.querySelectorAll(".ag-add-btn").forEach((b) => {
+    b.onclick = () => addMissingLines(b.dataset.docid);
   });
 }
 
@@ -6365,6 +6378,43 @@ async function makeGroupForSub(docId) {
   } catch (e) {
     alert("Couldn't create the group: " + (e.message || e));
     btns.forEach((b) => { b.disabled = false; b.textContent = "Make group"; });
+  }
+}
+
+// v1.345: add the missing x1/x2/x3 line(s) to an EXISTING group (via an admin
+// line — only admins can add). The added lines are promoted to admin too.
+async function addMissingLines(docId) {
+  const sub = sharedSubs?.bySubscription?.[docId];
+  if (!sub) return;
+  const subDigits = _agDigits(sub.customerId);
+  const cell = subDigits ? (cgMatrix || {})[subDigits] : null;
+  if (!cell || !cell.chatId) { alert("Couldn't locate this group — refresh and try again."); return; }
+  const linePhone = { x1: CGROUP_X1, x2: CGROUP_X2, x3: CGROUP_X3 };
+  const missing = ["x1", "x2", "x3"].filter((k) => !cell[k].member);
+  if (!missing.length) return;
+  // Need an admin line (of x1/x2/x3) to perform the add. Prefer x3, then x2, x1.
+  const fromLine = ["x3", "x2", "x1"].find((k) => cell[k].member && cell[k].admin);
+  if (!fromLine) {
+    alert(`None of x1/x2/x3 is an admin of this group, so they can't add members. Ask the group's admin to add: ${missing.join(", ")}.`);
+    return;
+  }
+  const phones = missing.map((k) => linePhone[k]);
+  if (!confirm(`Add ${missing.join(", ")} to "${cell.groupName}" as admin (via ${fromLine})?`)) return;
+  const btns = agTable.querySelectorAll(`.ag-add-btn[data-docid="${docId}"]`);
+  btns.forEach((b) => { b.disabled = true; b.textContent = "Adding…"; });
+  try {
+    const r = await fetch(`${WORKER_URL}/cgroups-add`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId: cell.chatId, from: fromLine, phones }),
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    cgMatrix = null;
+    loadCgMatrix();
+  } catch (e) {
+    alert("Couldn't add: " + (e.message || e));
+    btns.forEach((b) => { b.disabled = false; b.textContent = "＋ Add lines"; });
   }
 }
 

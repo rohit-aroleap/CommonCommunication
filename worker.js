@@ -398,6 +398,11 @@ export default {
       if (url.pathname === "/cgroups-create" && request.method === "POST") {
         return cors(env, await handleCgroupsCreate(request, env));
       }
+      // v1.345: add (+ promote) missing lines to an EXISTING group, via an
+      // admin line — for groups that exist but are missing one of x1/x2/x3.
+      if (url.pathname === "/cgroups-add" && request.method === "POST") {
+        return cors(env, await handleCgroupsAdd(request, env));
+      }
       // v1.280: Exotel click-to-call. Trainer taps Call on a customer chat;
       // Exotel rings the trainer's own phone first, then bridges to the
       // customer (who sees the Ferra virtual CallerId). Allowlist + the
@@ -6399,6 +6404,44 @@ async function handleCgroupsCreate(request, env) {
   _cgMatrixCache = { at: 0, payload: null };
 
   return json({ ok: true, chatId, create: createJson, promote });
+}
+
+// v1.345: add (+ promote) lines to an EXISTING group. `from` is an admin line
+// of that group (only admins can add); `phones` are the missing lines to add.
+async function handleCgroupsAdd(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const chatId = String(body.chatId || "").trim();
+  const from = ["x1", "x2", "x3"].includes(body.from) ? body.from : null;
+  const phones = (Array.isArray(body.phones) ? body.phones : [])
+    .map((p) => String(p || "").replace(/\D/g, "")).filter((p) => p.length >= 10);
+  const promote = body.promote !== false;
+  if (!chatId) return json({ error: "missing_chatId" }, 400);
+  if (!from) return json({ error: "missing_from" }, 400);
+  if (!phones.length) return json({ error: "missing_phones" }, 400);
+
+  const addRes = await env.PERISKOPE_GATEWAY.fetch(
+    new Request("https://gateway/group/add", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId, phones, dashboard: "commoncomm", from }),
+    }),
+  );
+  const addJson = await safeJson(addRes);
+  if (!addRes.ok) return json({ error: "add_failed", status: addRes.status, detail: addJson }, 502);
+
+  let prom = null;
+  if (promote) {
+    const pr = await env.PERISKOPE_GATEWAY.fetch(
+      new Request("https://gateway/group/promote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chatId, phones, dashboard: "commoncomm", from }),
+      }),
+    );
+    prom = await safeJson(pr);
+  }
+  _cgMatrixCache = { at: 0, payload: null };
+  return json({ ok: true, add: addJson, promote: prom });
 }
 
 // ---------- /cohort-list + /cohort-add (daily WhatsApp groups) ----------
