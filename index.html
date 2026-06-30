@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.349</title>
+<title>CommonCommunication v1.350</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -1952,10 +1952,10 @@
   /* v1.343: All Groups table — subId · Customer · Owner · User1-6 · x1/x2/x3 */
   .ag-row {
     display: grid;
-    grid-template-columns: 48px 30px 32px 1.15fr 1.15fr repeat(6, 0.72fr) 44px 44px 44px 100px;
+    grid-template-columns: 44px 28px 30px 1.08fr 1.08fr repeat(6, 0.58fr) 44px 44px 44px 48px 48px 90px;
     align-items: center; gap: 6px; padding: 7px 10px;
     border-bottom: 1px solid var(--border); font-size: 12.5px;
-    min-width: 1106px;
+    min-width: 1120px;
   }
   .ag-row:last-child { border-bottom: none; }
   .ag-row.head {
@@ -1984,6 +1984,9 @@
   .ag-state.admin  { background: #dbeafe; color: #1e40af; }
   .ag-state.member { background: #d1fae5; color: #065f46; }
   .ag-state.absent { background: #f3f4f6; color: #9ca3af; }
+  /* v1.350: a member pill is clickable to promote that line to admin */
+  .ag-state.member.ag-promote { cursor: pointer; }
+  .ag-state.member.ag-promote:hover { background: #fde68a; color: #92400e; }
   /* v1.346: subscription-status badge (A active / C cancelled / P paused) */
   .ag-badge {
     display: inline-flex; align-items: center; justify-content: center;
@@ -2788,6 +2791,7 @@
       <div style="flex:1;"></div>
       <input id="agSearch" placeholder="Search subId / name…" style="padding:5px 9px; border:1px solid var(--border); border-radius:6px; font-size:12px; width:200px;" />
       <div style="display:flex; gap:4px;" id="agFilters"></div>
+      <button id="agMakeAdmins" class="btn" title="Promote x1, x2, x3, Mukim & Rohit to admin in every group where they're members but not admins" style="padding:4px 10px; font-size:11px;">👑 Make admins</button>
       <a href="#" id="agRefresh" style="font-size:12px;">↻ refresh</a>
       <a href="#" id="agSettings" title="Group defaults" style="font-size:15px; text-decoration:none;">⚙️</a>
     </div>
@@ -3114,7 +3118,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.349";
+const APP_VERSION = "v1.350";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -3235,6 +3239,7 @@ const agSearch = $("agSearch");
 const agFilters = $("agFilters");
 const agRefresh = $("agRefresh");
 const agSettings = $("agSettings");
+const agMakeAdmins = $("agMakeAdmins");
 const agClose = $("agClose");
 const groupsSettingsModal = $("groupsSettingsModal");
 const gsList = $("gsList");
@@ -3288,6 +3293,9 @@ let agFormedFilter = "all";   // all | formed | notformed
 const CGROUP_X1 = "919187651332";
 const CGROUP_X2 = "918287116066";
 const CGROUP_X3 = "916361073558";
+// Default team members auto-added to every group (tracked as their own columns).
+const CGROUP_MUKIM = "919667329123";
+const CGROUP_ROHIT = "919650854161";
 const CGROUP_DEFAULT_NUMS = [{ phone: "919667329123", admin: true }, { phone: "919650854161", admin: true }];
 let cgroupDefaults = null;    // null = not loaded → falls back to CGROUP_DEFAULT_NUMS
 let cgDefaultsListening = false;
@@ -6192,6 +6200,7 @@ let ttAssigneeFilter = "all";  // "all" | "mine"
 groupsBtn.onclick = openGroupsModal;
 agClose.onclick = () => groupsModal.classList.remove("visible");
 agRefresh.onclick = (e) => { e.preventDefault(); cgMatrix = null; loadCgMatrix(); };
+if (agMakeAdmins) agMakeAdmins.onclick = () => makeAllAdmins(agMakeAdmins);
 agSearch.oninput = () => { agSearchTerm = agSearch.value.trim().toLowerCase(); renderAllGroups(); };
 
 function openGroupsModal() {
@@ -6306,9 +6315,11 @@ function renderAllGroups() {
   agStats.innerHTML = `${rows.length} subscriptions · <b>${existsCount}</b> with a group${incompleteCount ? ` (<b>${incompleteCount}</b> missing a line)` : ""} · ${rows.length - existsCount} without a group${cgMatrixError ? ` · <span style="color:var(--danger,#c0392b);">⚠ ${escapeHtml(cgMatrixError)}</span>` : ""}`;
   renderAgFilters();
 
-  const stateCell = (x) =>
+  // A member pill is clickable → promote that line to admin (confirm popup).
+  // admin = already admin (no action); absent = not a member (can't promote).
+  const stateCell = (x, phone, chatId, label) =>
     x && x.admin ? `<span class="ag-state admin">admin</span>`
-      : x && x.member ? `<span class="ag-state member">member</span>`
+      : x && x.member ? `<span class="ag-state member ag-promote" data-chatid="${escapeHtml(chatId || "")}" data-phone="${phone}" data-label="${escapeHtml(label)}" title="Click to make ${escapeHtml(label)} an admin of this group">member</span>`
       : `<span class="ag-state absent">·</span>`;
   // Highlight membership: green = actually in the WhatsApp group, amber = in
   // the subscription but NOT in the group. This is based on the group's real
@@ -6331,7 +6342,7 @@ function renderAllGroups() {
   let html = `<div class="ag-row head">
     <div>Sub</div><div title="Subscription status">St</div><div title="Copy WhatsApp group invite link">Link</div><div>Customer</div><div>Owner</div>
     <div>User 1</div><div>User 2</div><div>User 3</div><div>User 4</div><div>User 5</div><div>User 6</div>
-    <div>x1</div><div>x2</div><div>x3</div><div>Action</div>
+    <div>x1</div><div>x2</div><div>x3</div><div title="Mukim 919667329123">Mukim</div><div title="Rohit 919650854161">Rohit</div><div>Action</div>
   </div>`;
   for (const r of view) {
     // No group at all → Make. Group exists but missing a line → Add. All in → ✓.
@@ -6349,9 +6360,11 @@ function renderAllGroups() {
       <div class="cell">${escapeHtml(r.customer)}</div>
       <div class="cell${memClass(r.ownerPhone, hasCell, inSet)}"${memTip(r.ownerPhone, hasCell, inSet)}>${escapeHtml(r.owner)}</div>
       ${userCells(r.users, hasCell, inSet)}
-      <div>${stateCell(r.cell?.x1)}</div>
-      <div>${stateCell(r.cell?.x2)}</div>
-      <div>${stateCell(r.cell?.x3)}</div>
+      <div>${stateCell(r.cell?.x1, CGROUP_X1, r.cell?.chatId, "x1")}</div>
+      <div>${stateCell(r.cell?.x2, CGROUP_X2, r.cell?.chatId, "x2")}</div>
+      <div>${stateCell(r.cell?.x3, CGROUP_X3, r.cell?.chatId, "x3")}</div>
+      <div>${stateCell(r.cell?.m1, CGROUP_MUKIM, r.cell?.chatId, "Mukim")}</div>
+      <div>${stateCell(r.cell?.m2, CGROUP_ROHIT, r.cell?.chatId, "Rohit")}</div>
       <div>${action}</div>
     </div>`;
   }
@@ -6365,6 +6378,54 @@ function renderAllGroups() {
   agTable.querySelectorAll(".ag-link").forEach((b) => {
     b.onclick = () => copyGroupInvite(b.dataset.link, b);
   });
+  agTable.querySelectorAll(".ag-promote").forEach((el) => {
+    el.onclick = (e) => { e.stopPropagation(); promoteInGroup(el.dataset.chatid, el.dataset.phone, el.dataset.label); };
+  });
+}
+
+// v1.350: per-cell "make admin" — promote one line/number to admin in a group,
+// after a confirm. Only members (not admins/absent) expose a clickable pill.
+async function promoteInGroup(chatId, phone, label) {
+  if (!chatId || !phone) return;
+  if (!confirm(`Make ${label} an admin of this WhatsApp group?`)) return;
+  try {
+    const r = await fetch(`${WORKER_URL}/cgroups-promote`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId, phones: [phone] }),
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error === "no_admin_line"
+      ? "none of x1/x2/x3 is an admin of this group, so nobody can be promoted"
+      : (j.error || `HTTP ${r.status}`));
+    cgMatrix = null;
+    loadCgMatrix();
+  } catch (e) {
+    alert("Couldn't make admin: " + (e.message || e));
+  }
+}
+
+// v1.350: bulk — promote x1/x2/x3/Mukim/Rohit to admin in every group where
+// they're members but not admins (promote-only; never adds absent numbers).
+async function makeAllAdmins(btn) {
+  if (!confirm("Make x1, x2, x3, Mukim and Rohit admins in every group where they're members but not yet admins?")) return;
+  const orig = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.textContent = "Promoting…"; }
+  try {
+    const r = await fetch(`${WORKER_URL}/cgroups-make-admins`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    const skipped = (j.results || []).filter((x) => x.skipped).length;
+    alert(`Promoted ${j.promotedCount} membership${j.promotedCount === 1 ? "" : "s"} to admin across ${j.groupsTouched} group${j.groupsTouched === 1 ? "" : "s"}.`
+      + (skipped ? `\n\n${skipped} group(s) skipped — none of x1/x2/x3 is an admin there, so nobody can be promoted.` : ""));
+    cgMatrix = null;
+    loadCgMatrix();
+  } catch (e) {
+    alert("Couldn't make admins: " + (e.message || e));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = orig; }
+  }
 }
 
 // Copy a group's WhatsApp invite link to the clipboard for manual adds, with a
