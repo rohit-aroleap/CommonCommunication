@@ -6553,11 +6553,15 @@ async function cgAddX2(env, chatId, adminFrom) {
   } catch { return false; }
 }
 
-async function cgSendAsX2(env, chatId, text, kind, dashboard, idem) {
+async function cgSendAsX2(env, chatId, text, kind, dashboard, idem, dedupWindowMin) {
   try {
     const r = await env.PERISKOPE_GATEWAY.fetch(new Request("https://gateway/send", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ from: "x2", chatId, text, kind, dashboard, idempotencyKey: idem || undefined }),
+      body: JSON.stringify({
+        from: "x2", chatId, text, kind, dashboard,
+        idempotencyKey: idem || undefined,
+        ...(typeof dedupWindowMin === "number" ? { dedupWindowMin } : {}),
+      }),
     }));
     const j = await safeJson(r);
     return r.ok ? { ok: true, detail: j } : { ok: false, detail: j };
@@ -6573,6 +6577,7 @@ async function handleRouteAutomated(request, env, ctx) {
   const dashboard = String(body.dashboard || "").trim() || "automated";
   const kind = String(body.kind || "").trim() || "automated";
   const idem = body.idempotencyKey ? String(body.idempotencyKey) : null;
+  const dedupWindowMin = typeof body.dedupWindowMin === "number" ? body.dedupWindowMin : undefined;
   const dryRun = body.dryRun === true;
   if (!phone || phone.length < 10) return json({ routed: false, reason: "bad_phone" });
   if (!text) return json({ routed: false, reason: "empty_text" });
@@ -6611,7 +6616,7 @@ async function handleRouteAutomated(request, env, ctx) {
     // routing isn't deduped against itself) and distinct from the caller's
     // own key (so an all-groups-failed fallback DM isn't blocked).
     const gidem = idem ? `grp-${String(cell.chatId).replace(/\D/g, "")}-${idem}` : null;
-    const sent = await cgSendAsX2(env, cell.chatId, text, kind, dashboard, gidem);
+    const sent = await cgSendAsX2(env, cell.chatId, text, kind, dashboard, gidem, dedupWindowMin);
     if (sent.ok) delivered.push({ subId: c.subId, chatId: cell.chatId });
     else failures.push({ subId: c.subId, chatId: cell.chatId, stage: "send", detail: sent.detail });
   }
