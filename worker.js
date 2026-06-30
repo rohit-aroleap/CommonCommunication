@@ -390,6 +390,10 @@ export default {
       if (url.pathname === "/cgroups-list" && request.method === "GET") {
         return cors(env, await handleCgroupsList(env));
       }
+      // v1.343: per-subId x1/x2/x3 membership+admin matrix for the All Groups tab.
+      if (url.pathname === "/cgroups-matrix" && request.method === "GET") {
+        return cors(env, await handleCgroupsMatrix(env, ctx));
+      }
       // v1.280: Exotel click-to-call. Trainer taps Call on a customer chat;
       // Exotel rings the trainer's own phone first, then bridges to the
       // customer (who sees the Ferra virtual CallerId). Allowlist + the
@@ -6229,6 +6233,99 @@ async function handleCgroupsList(env) {
   // Newest activity first.
   groups.sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
   return json({ ok: true, count: groups.length, groups });
+}
+
+// ---------- /cgroups-matrix (All Groups tab: x1/x2/x3 membership + admin) ----------
+// v1.343: for each FERRA customer group, report whether each of our three
+// lines (x1 919187651332, x2 918287116066, x3 916361073558) is a member and
+// whether it's an admin. Discovery: group/list for each line (which FERRA
+// groups it can see). Truth: group/info per distinct group (the members map
+// carries is_admin for everyone). Keyed by FERRA subId so the web can left-join
+// it onto the full subscription list. Cached 60s (group/info fan-out).
+const CGMATRIX_PHONES = { x1: "919187651332", x2: "918287116066", x3: "916361073558" };
+const CGMATRIX_TTL_MS = 60 * 1000;
+let _cgMatrixCache = { at: 0, payload: null };
+
+async function handleCgroupsMatrix(env, ctx) {
+  if (_cgMatrixCache.payload && Date.now() - _cgMatrixCache.at < CGMATRIX_TTL_MS) {
+    return json(_cgMatrixCache.payload);
+  }
+  // 1. Discover the FERRA customer groups each line can see (union by chatId).
+  const groups = {}; // chatId -> { chatId, subId, groupName, customerName, seenBy:Set }
+  for (const key of ["x1", "x2", "x3"]) {
+    let offset = 0;
+    for (let page = 0; page < 3; page++) {
+      const res = await env.PERISKOPE_GATEWAY.fetch(
+        new Request(
+          `https://gateway/group/list?dashboard=commoncomm&limit=200&offset=${offset}&from=${key}`,
+          { method: "GET" },
+        ),
+      );
+      const j = await safeJson(res);
+      if (!res.ok) break;
+      const arr = Array.isArray(j) ? j : j?.chats || j?.data || j?.result || [];
+      if (!Array.isArray(arr) || arr.length === 0) break;
+      for (const c of arr) {
+        const chatId = c.chat_id || c.id;
+        const name = String(c.chat_name || "");
+        if (!chatId || !String(chatId).endsWith("@g.us")) continue;
+        const m = CGROUP_NAME_RE.exec(name);
+        if (!m) continue;
+        if (!groups[chatId]) {
+          groups[chatId] = { chatId, subId: m[1], groupName: name, customerName: m[2], seenBy: new Set() };
+        }
+        groups[chatId].seenBy.add(key);
+      }
+      if (arr.length < 200) break;
+      offset += 200;
+    }
+  }
+  // 2. Authoritative member+admin per group via group/info (one call per group,
+  // from a line known to be a member — its members map covers all three).
+  const list = Object.values(groups);
+  const matrix = {};
+  async function infoFor(g) {
+    const fromKey = g.seenBy.has("x1") ? "x1" : [...g.seenBy][0] || "x1";
+    const cell = {
+      chatId: g.chatId,
+      groupName: g.groupName,
+      customerName: g.customerName,
+      x1: { member: false, admin: false },
+      x2: { member: false, admin: false },
+      x3: { member: false, admin: false },
+    };
+    try {
+      const res = await env.PERISKOPE_GATEWAY.fetch(
+        new Request(
+          `https://gateway/group/info?chatId=${encodeURIComponent(g.chatId)}&dashboard=commoncomm&from=${fromKey}`,
+          { method: "GET" },
+        ),
+      );
+      const j = await safeJson(res);
+      const members = res.ok && j && typeof j.members === "object" ? j.members : null;
+      if (members) {
+        for (const [line, phone] of Object.entries(CGMATRIX_PHONES)) {
+          const m = members[`${phone}@c.us`];
+          if (m) {
+            cell[line].member = true;
+            cell[line].admin = !!(m.is_admin ?? m.isAdmin ?? m.admin);
+          }
+        }
+      } else {
+        // group/info failed → fall back to list-based membership (no admin).
+        for (const k of g.seenBy) cell[k].member = true;
+      }
+    } catch {
+      for (const k of g.seenBy) cell[k].member = true;
+    }
+    matrix[g.subId] = cell;
+  }
+  for (let i = 0; i < list.length; i += 6) {
+    await Promise.all(list.slice(i, i + 6).map(infoFor));
+  }
+  const payload = { ok: true, count: Object.keys(matrix).length, matrix };
+  _cgMatrixCache = { at: Date.now(), payload };
+  return json(payload);
 }
 
 // ---------- /cohort-list + /cohort-add (daily WhatsApp groups) ----------

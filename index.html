@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.342</title>
+<title>CommonCommunication v1.343</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -1949,6 +1949,30 @@
   }
   .tt-status.open { background: #fee2e2; color: #991b1b; }
   .tt-status.resolved { background: #d1fae5; color: #065f46; }
+  /* v1.343: All Groups table — subId · Customer · Owner · User1-6 · x1/x2/x3 */
+  .ag-row {
+    display: grid;
+    grid-template-columns: 56px 1.1fr 1.1fr repeat(6, 0.9fr) 58px 58px 58px;
+    align-items: center; gap: 8px; padding: 7px 10px;
+    border-bottom: 1px solid var(--border); font-size: 12.5px;
+    min-width: 1120px;
+  }
+  .ag-row:last-child { border-bottom: none; }
+  .ag-row.head {
+    background: var(--header); font-weight: 600; font-size: 10.5px;
+    color: var(--muted); text-transform: uppercase; letter-spacing: .3px;
+    position: sticky; top: 0; z-index: 1;
+  }
+  .ag-row.notformed { background: #fff7ed; }
+  .ag-row .cell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ag-subid { font-weight: 700; }
+  .ag-state {
+    display: inline-block; padding: 1px 6px; border-radius: 10px;
+    font-size: 10px; font-weight: 700; text-align: center;
+  }
+  .ag-state.admin  { background: #dbeafe; color: #1e40af; }
+  .ag-state.member { background: #d1fae5; color: #065f46; }
+  .ag-state.absent { background: #f3f4f6; color: #9ca3af; }
   .tt-actions {
     display: flex; gap: 4px;
     min-width: 0;
@@ -2338,6 +2362,7 @@
            on load so the existing CSS rules keep working without
            having to rip the .compact selectors out one by one. -->
       <button class="logout" id="ticketsBtn" style="margin-right:6px;" title="All tickets">🎫 All tickets</button>
+      <button class="logout" id="groupsBtn" style="margin-right:6px;" title="All groups">👥 All groups</button>
       <button class="logout" id="templatesBtn" style="display:none; margin-right:6px;" title="Manage quick reply templates">📋 Templates</button>
       <button class="logout" id="watiTemplatesBtn" style="display:none; margin-right:6px;" title="Wati templates & their approval status">📄 Wati Templates</button>
       <button class="logout" id="namesBtn" style="display:none; margin-right:6px;" title="Name unknown contacts">📝 Names</button>
@@ -2734,6 +2759,23 @@
   </div>
 </div>
 
+<div class="modal-back" id="groupsModal">
+  <div class="modal" style="width:1200px; max-width:97vw; height:720px; max-height:90vh; display:flex; flex-direction:column;">
+    <h3 style="margin-bottom:6px;">👥 All groups</h3>
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px; flex-wrap:wrap;">
+      <div id="agStats" style="font-size:12px; color:var(--muted);"></div>
+      <div style="flex:1;"></div>
+      <input id="agSearch" placeholder="Search subId / name…" style="padding:5px 9px; border:1px solid var(--border); border-radius:6px; font-size:12px; width:200px;" />
+      <div style="display:flex; gap:4px;" id="agFilters"></div>
+      <a href="#" id="agRefresh" style="font-size:12px;">↻ refresh</a>
+    </div>
+    <div id="agTable" class="tt-table" style="flex:1; overflow:auto;"></div>
+    <div class="actions" style="margin-top:12px;">
+      <button class="btn btn-secondary" id="agClose">Close</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-back" id="ticketsModal">
   <div class="modal" style="width:920px; max-width:96vw; height:680px; max-height:88vh; display:flex; flex-direction:column;">
     <h3 style="margin-bottom:6px;">All tickets</h3>
@@ -3034,7 +3076,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.342";
+const APP_VERSION = "v1.343";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -3146,6 +3188,15 @@ const threadEmpty = $("threadEmpty");
 const threadActive = $("threadActive");
 const threadContent = $("threadContent");
 const ticketsBtn = $("ticketsBtn");
+// v1.343: All Groups tab
+const groupsBtn = $("groupsBtn");
+const groupsModal = $("groupsModal");
+const agTable = $("agTable");
+const agStats = $("agStats");
+const agSearch = $("agSearch");
+const agFilters = $("agFilters");
+const agRefresh = $("agRefresh");
+const agClose = $("agClose");
 const templatesBtn = $("templatesBtn");
 const watiTemplatesBtn = $("watiTemplatesBtn");
 const watiTemplatesModal = $("watiTemplatesModal");
@@ -3181,6 +3232,12 @@ let watiActivityByTen = {}; // last-10 phone digits -> {lastMsgAt, lastMsgPrevie
 let cgroupsRows = null;       // null = not loaded yet; [] = loaded, empty
 let cgroupsLoading = false;
 let cgroupsError = null;
+// v1.343: All Groups tab — x1/x2/x3 membership+admin matrix (from /cgroups-matrix)
+let cgMatrix = null;          // null = not loaded; {} = loaded (subId → cell)
+let cgMatrixLoading = false;
+let cgMatrixError = null;
+let agSearchTerm = "";
+let agFormedFilter = "all";   // all | formed | notformed
 const watiComposerPanel = $("watiComposerPanel");
 const watiParamPanel = $("watiParamPanel");
 const watiTemplateSelect = $("watiTemplateSelect");
@@ -6074,6 +6131,135 @@ function cssEscape(s) { return String(s).replace(/(["\\])/g, "\\$1"); }
 // ====== CENTRALIZED TICKETS VIEW ======
 let ttStatusFilter = "open";   // "all" | "open" | "resolved"
 let ttAssigneeFilter = "all";  // "all" | "mine"
+
+// ── v1.343: All Groups tab ────────────────────────────────────────────────
+// Read-only table: one row per Ferra subscription, left-joined onto the
+// x1/x2/x3 membership+admin matrix (/cgroups-matrix). Subs with no formed group
+// surface at the top — those are Step-2's "make group" candidates.
+groupsBtn.onclick = openGroupsModal;
+agClose.onclick = () => groupsModal.classList.remove("visible");
+agRefresh.onclick = (e) => { e.preventDefault(); cgMatrix = null; loadCgMatrix(); };
+agSearch.oninput = () => { agSearchTerm = agSearch.value.trim().toLowerCase(); renderAllGroups(); };
+
+function openGroupsModal() {
+  groupsModal.classList.add("visible");
+  renderAllGroups();
+}
+
+async function loadCgMatrix() {
+  if (cgMatrixLoading) return;
+  cgMatrixLoading = true;
+  cgMatrixError = null;
+  renderAllGroups();
+  try {
+    const r = await fetch(`${WORKER_URL}/cgroups-matrix`);
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || "load failed");
+    cgMatrix = j.matrix || {};
+  } catch (e) {
+    cgMatrixError = e.message || "Could not load group matrix";
+    cgMatrix = cgMatrix || {};
+  } finally {
+    cgMatrixLoading = false;
+    renderAllGroups();
+  }
+}
+
+function _agDigits(v) { return String(v || "").replace(/\D/g, ""); }
+
+function renderAgFilters() {
+  const opts = [["all", "All"], ["notformed", "No group"], ["formed", "Formed"]];
+  agFilters.innerHTML = opts.map(([v, l]) =>
+    `<button class="filter-pill ${v === agFormedFilter ? "active" : ""}" data-ag="${v}" type="button">${l}</button>`).join("");
+  agFilters.querySelectorAll("button").forEach((b) => {
+    b.onclick = () => { agFormedFilter = b.dataset.ag; renderAllGroups(); };
+  });
+}
+
+function renderAllGroups() {
+  if (!groupsModal.classList.contains("visible")) return;
+  if (cgMatrix === null && !cgMatrixLoading) { loadCgMatrix(); return; }
+
+  const subsObj = sharedSubs?.bySubscription || null;
+  if (cgMatrixLoading || !subsObj) {
+    agStats.textContent = "";
+    renderAgFilters();
+    agTable.innerHTML = `<div style="padding:30px; text-align:center; color:var(--muted); font-size:13px;">${cgMatrixLoading ? "Loading groups…" : "Loading subscriptions…"}</div>`;
+    return;
+  }
+
+  // Digit-keyed lookup of the matrix (FERRA-0474 ↔ 0474).
+  const matrixByDigits = {};
+  for (const [sub, cell] of Object.entries(cgMatrix || {})) matrixByDigits[_agDigits(sub)] = cell;
+
+  const rows = [];
+  for (const sub of Object.values(subsObj)) {
+    if (!sub) continue;
+    const subDigits = _agDigits(sub.customerId);
+    const cell = subDigits ? matrixByDigits[subDigits] : null;
+    const formed = !!(cell && cell.x1.member && cell.x2.member && cell.x3.member);
+    const ownerPhone = sub.customerPhone || "";
+    const ownerNorm = normalizePhone(ownerPhone);
+    const memberNames = Array.isArray(sub.memberNames) ? sub.memberNames : [];
+    const memberPhones = Array.isArray(sub.memberPhones) ? sub.memberPhones : [];
+    const users = [];
+    for (let i = 0; i < memberPhones.length && users.length < 6; i++) {
+      if (normalizePhone(memberPhones[i]) === ownerNorm) continue; // holder shown in Owner col
+      users.push(memberNames[i] || memberPhones[i] || "");
+    }
+    rows.push({
+      subDisplay: sub.customerId ? String(sub.customerId).replace(/^FERRA-?/i, "") : "—",
+      customer: cell ? cell.customerName || "" : "",
+      owner: sub.customerName || (ownerPhone ? formatPhoneDisplay(ownerPhone) : ""),
+      users, cell, formed,
+    });
+  }
+
+  let view = rows;
+  if (agFormedFilter === "formed") view = view.filter((r) => r.formed);
+  else if (agFormedFilter === "notformed") view = view.filter((r) => !r.formed);
+  if (agSearchTerm) {
+    view = view.filter((r) =>
+      r.subDisplay.toLowerCase().includes(agSearchTerm) ||
+      (r.owner || "").toLowerCase().includes(agSearchTerm) ||
+      (r.customer || "").toLowerCase().includes(agSearchTerm) ||
+      r.users.some((u) => (u || "").toLowerCase().includes(agSearchTerm)));
+  }
+  // Not-formed first (actionable), then by subId.
+  view.sort((a, b) => (a.formed === b.formed ? a.subDisplay.localeCompare(b.subDisplay) : a.formed ? 1 : -1));
+
+  const formedCount = rows.filter((r) => r.formed).length;
+  agStats.innerHTML = `${rows.length} subscriptions · <b>${formedCount}</b> groups formed · ${rows.length - formedCount} without a group${cgMatrixError ? ` · <span style="color:var(--danger,#c0392b);">⚠ ${escapeHtml(cgMatrixError)}</span>` : ""}`;
+  renderAgFilters();
+
+  const stateCell = (x) =>
+    x && x.admin ? `<span class="ag-state admin">admin</span>`
+      : x && x.member ? `<span class="ag-state member">member</span>`
+      : `<span class="ag-state absent">·</span>`;
+  const userCells = (users) => {
+    let h = "";
+    for (let i = 0; i < 6; i++) h += `<div class="cell">${escapeHtml(users[i] || "")}</div>`;
+    return h;
+  };
+
+  let html = `<div class="ag-row head">
+    <div>Sub</div><div>Customer</div><div>Owner</div>
+    <div>User 1</div><div>User 2</div><div>User 3</div><div>User 4</div><div>User 5</div><div>User 6</div>
+    <div>x1</div><div>x2</div><div>x3</div>
+  </div>`;
+  for (const r of view) {
+    html += `<div class="ag-row${r.formed ? "" : " notformed"}">
+      <div class="ag-subid">${escapeHtml(r.subDisplay)}</div>
+      <div class="cell">${escapeHtml(r.customer)}</div>
+      <div class="cell">${escapeHtml(r.owner)}</div>
+      ${userCells(r.users)}
+      <div>${stateCell(r.cell?.x1)}</div>
+      <div>${stateCell(r.cell?.x2)}</div>
+      <div>${stateCell(r.cell?.x3)}</div>
+    </div>`;
+  }
+  agTable.innerHTML = html;
+}
 
 ticketsBtn.onclick = openTicketsModal;
 ttClose.onclick = () => ticketsModal.classList.remove("visible");
