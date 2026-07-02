@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.353</title>
+<title>CommonCommunication v1.354</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -2136,6 +2136,12 @@
     padding: 1px 5px; font-weight: 700;
     border: 1.5px solid var(--side);
   }
+  /* v1.354: claim/ticket status-light avatar — applies in chat rows AND the
+     thread header. blue = claimed, half blue/red = claimed + open ticket,
+     red = unclaimed + open ticket, base green = unclaimed + no ticket. */
+  .avatar.claimed { background: #2563eb; color: #fff; }
+  .avatar.claim-split { background: linear-gradient(90deg, #2563eb 0 50%, #ef4444 50% 100%); color: #fff; }
+  .avatar.has-ticket { background: #ef4444; color: #fff; }
   .chat-row .assignee-tag {
     font-size: 10px; color: #991b1b; font-weight: 600;
     margin-top: 1px;
@@ -2563,6 +2569,7 @@
               <button id="summarizeBtn" class="icon-btn" style="width:32px; height:32px; font-size:16px;" title="AI summary of this chat">🧠</button>
               <button id="aiQueryBtn" class="icon-btn" style="width:32px; height:32px; font-size:16px;" title="Ask AI about this chat">💬</button>
               <button id="privateToggleBtn" class="icon-btn" style="width:32px; height:32px; font-size:16px; display:none;" title="Mark as private (admins only)">🔒</button>
+              <button id="claimBtn" class="icon-btn" style="width:32px; height:32px; font-size:16px; display:none;" title="Claim / assign this chat">🙋</button>
             </div>
             <div class="sub" id="threadSub">—</div>
           </div>
@@ -3118,7 +3125,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.353";
+const APP_VERSION = "v1.354";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -3178,6 +3185,7 @@ let notesExpanded = true; // collapsed mode: shows header bar only, click to exp
 // Tickets
 let ticketsCache = {};            // ticketId -> ticket
 let chatOpenTickets = {};         // chatKey -> [{id, ...}] of OPEN tickets (sorted by createdAt asc)
+let claimsCache = {};             // v1.354: chatKey -> { uid, name, at } — who has claimed a chat (shared)
 let teamUsers = {};               // uid -> { name, email, photoURL }
 let _openPopover = null;          // current ticket popover DOM element
 let myLastSeen = {};              // chatKey -> ts (ms): when I last opened the chat
@@ -3457,6 +3465,7 @@ const infoBody = $("infoBody");
 const editNameBtn = $("editNameBtn");
 const exotelCallBtn = $("exotelCallBtn");
 const privateToggleBtn = $("privateToggleBtn");
+const claimBtn = $("claimBtn");
 const chatBackfillBtn = $("chatBackfillBtn");
 const summarizeBtn = $("summarizeBtn");
 const summaryModal = $("summaryModal");
@@ -5532,6 +5541,12 @@ function listenTickets() {
     if (ticketsModal.classList.contains("visible")) renderTicketsModal();
     if (infoDrawer.classList.contains("open")) renderInfoDrawer();
   });
+  // v1.354: shared per-chat claims. Small flat map (chatKey -> {uid,name,at}).
+  onValue(ref(db, `${ROOT}/claims`), (snap) => {
+    claimsCache = snap.val() || {};
+    renderChatList(lastChatRows);
+    if (currentChatId) updateThreadHeader();
+  });
 }
 
 function rebuildChatOpenTicketsIdx() {
@@ -5562,6 +5577,36 @@ function getInitials(name) {
   if (!name) return "?";
   const parts = String(name).trim().split(/\s+/).slice(0, 2);
   return parts.map(p => (p[0] || "").toUpperCase()).join("") || "?";
+}
+
+// v1.354: claim system. Two-letter tag for the claimer (first letters of the
+// first two words, else first two chars) so single-word names still show 2.
+function claimInitials(name) {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return String(name || "").trim().slice(0, 2).toUpperCase() || "?";
+}
+// The chat avatar is a claim/ticket status light:
+//   green (blank)  = unclaimed, no open ticket
+//   blue + inits   = claimed
+//   half blue/red  = claimed AND open ticket
+//   full red       = unclaimed, open ticket
+function claimAvatarParts(chatKey) {
+  const c = claimsCache[chatKey];
+  const claimed = !!(c && c.uid);
+  const hasTicket = (chatOpenTickets[chatKey] || []).length > 0;
+  if (claimed && hasTicket) return { cls: "avatar claim-split", text: claimInitials(c.name) };
+  if (claimed) return { cls: "avatar claimed", text: claimInitials(c.name) };
+  if (hasTicket) return { cls: "avatar has-ticket", text: "" };
+  return { cls: "avatar", text: "" };
+}
+function claimChat(chatKey, uid, name) {
+  if (!chatKey || !uid) return;
+  set(ref(db, `${ROOT}/claims/${chatKey}`), { uid, name: name || "", at: Date.now() }).catch(() => {});
+}
+function unclaimChat(chatKey) {
+  if (!chatKey) return;
+  remove(ref(db, `${ROOT}/claims/${chatKey}`)).catch(() => {});
 }
 
 function listenContacts() {
@@ -5940,6 +5985,10 @@ function openTicketPicker(anchorEl, msgOrTicket, mode) {
       <div class="nm">${escapeHtml(t.name.split(/[@\s]/)[0])}</div>
     </div>
   `).join("");
+  // v1.354: claim mode gets an Unclaim row when the chat is currently claimed.
+  if (mode === "claim" && claimsCache[msgOrTicket] && claimsCache[msgOrTicket].uid) {
+    pop.innerHTML += `<div class="team-pick" data-uid="" data-name="Unclaim" title="Release this claim"><div class="av">✖</div><div class="nm">Unclaim</div></div>`;
+  }
 
   document.body.appendChild(pop);
 
@@ -5971,6 +6020,7 @@ function openTicketPicker(anchorEl, msgOrTicket, mode) {
       try {
         if (mode === "create") await createTicket(msgOrTicket, uid, name);
         else if (mode === "reassign") await reassignTicket(msgOrTicket, uid, name);
+        else if (mode === "claim") { if (uid) claimChat(msgOrTicket, uid, name); else unclaimChat(msgOrTicket); }
       } catch (e) {
         alert("Ticket action failed: " + (e?.message || e));
       }
@@ -9067,20 +9117,19 @@ function renderChatList(rows) {
     const isGroup = r.chatType === "group";
     const openTix = getOpenTicketsForChat(r.chatKey);
     const hasTicket = openTix.length > 0;
-    // Ticket avatar: red w/ first assignee's initials, +N badge if more
-    let initial, avatarStyle, extraBadge = "";
+    // v1.354: the avatar is now a claim/ticket status light (claimAvatarParts).
+    // The ticket assignee still shows in the assignee-tag below the name.
+    let extraBadge = "";
     let assigneeTag = "";
     if (hasTicket) {
       const firstAssigneeName = openTix[0].assigneeName || "?";
-      initial = getInitials(firstAssigneeName);
-      avatarStyle = "";
       if (openTix.length > 1) extraBadge = `<span class="more">+${openTix.length - 1}</span>`;
       assigneeTag = `<div class="assignee-tag">🎫 ${escapeHtml(firstAssigneeName)}${openTix.length > 1 ? ` +${openTix.length - 1}` : ""}</div>`;
-    } else {
-      initial = isGroup ? "👥" : avatarInitial(r.name);
-      avatarStyle = isGroup ? "background:#6b7280;" : "";
     }
-    const avatarClass = hasTicket ? "avatar has-ticket" : "avatar";
+    const _av = claimAvatarParts(r.chatKey);
+    const initial = _av.text;
+    const avatarStyle = "";
+    const avatarClass = _av.cls;
     // v1.291/v1.292: daily groups render text-only — ALWAYS in the everyday
     // inbox, and per the toggle in the Daily Groups tab. The row then shows
     // the latest TEXT (with sender) + that text's time, not the photo.
@@ -10629,7 +10678,7 @@ function renderCgroupsList() {
   } else {
     const rowsHtml = rows.map(g => {
       const chatKey = encodeKey(g.chatId);
-      const initial = (g.customerName || "?").replace(/^(mr|mrs|ms|dr|prof)\.?\s*/i, "").trim().charAt(0).toUpperCase() || "?";
+      const _av = claimAvatarParts(chatKey);
       const preview = (g.lastMessage?.body || "").replace(/\s+/g, " ").trim();
       const previewWho = g.lastMessage?.fromMe ? `<span class="me">You: </span>` : "";
       const favored = isFavorite(chatKey);
@@ -10642,7 +10691,7 @@ function renderCgroupsList() {
       const cgStagePill = cgStagePillHtml(cgStageTag);
       return `
       <div class="chat-row${active}${favored ? " favored" : ""}" data-key="${escapeHtml(chatKey)}">
-        <div class="avatar">${escapeHtml(initial)}</div>
+        <div class="${_av.cls}">${escapeHtml(_av.text)}</div>
         <div class="meta">
           <div class="top">
             <span class="name"><span class="cg-subid">${escapeHtml(g.subId)}</span>${escapeHtml(g.customerName)}</span>
@@ -10943,9 +10992,11 @@ function updateThreadHeader() {
     const name = row?.name || "(teammate)";
     threadName.textContent = name;
     threadSub.innerHTML = `<span class="dm-badge">INTERNAL</span> Direct chat — won't go through Periscope`;
+    threadAvatar.className = "avatar";
     threadAvatar.textContent = avatarInitial(name);
     threadAvatar.style.background = "#3b82f6";
     privateToggleBtn.style.display = "none";
+    if (claimBtn) claimBtn.style.display = "none"; // internal DMs aren't claimable
     if (exotelCallBtn) exotelCallBtn.style.display = "none"; // no Exotel on DMs
     return;
   }
@@ -10962,8 +11013,18 @@ function updateThreadHeader() {
   threadName.textContent = lockPrefix + name;
   // For groups, no single phone to show — leave subtitle blank.
   threadSub.textContent = isGroup ? "Group" : (meta.phone || "");
-  threadAvatar.textContent = isGroup ? "👥" : avatarInitial(name);
-  threadAvatar.style.background = isGroup ? "#6b7280" : "";
+  // v1.354: claim/ticket status-light avatar (class controls colour).
+  const _tav = claimAvatarParts(currentChatId);
+  threadAvatar.className = _tav.cls;
+  threadAvatar.textContent = _tav.text;
+  threadAvatar.style.background = "";
+  if (claimBtn) {
+    const _c = claimsCache[currentChatId];
+    claimBtn.style.display = "";
+    claimBtn.title = (_c && _c.uid)
+      ? `Claimed by ${_c.name || "someone"} — click to reassign or unclaim`
+      : "Claim this chat (or assign it to a teammate)";
+  }
 
   // Admin-only: show toggle button. Reflect current state in icon + tooltip.
   if (isAdmin(currentUser?.email)) {
@@ -11637,6 +11698,14 @@ privateToggleBtn.onclick = async () => {
   await updateChatMeta(currentChatId, {
     private: isPrivate ? null : true,
   });
+};
+
+// v1.354: Claim button — open the team picker in "claim" mode. Clicking your
+// own name claims for you; another teammate assigns the claim to them; the
+// Unclaim row (shown when claimed) releases it.
+if (claimBtn) claimBtn.onclick = () => {
+  if (!currentChatId || isDmKey(currentChatId)) return;
+  openTicketPicker(claimBtn, currentChatId, "claim");
 };
 
 // Pencil button in thread header — set/edit a manual customer name.
