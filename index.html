@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.352</title>
+<title>CommonCommunication v1.353</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -3118,7 +3118,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.352";
+const APP_VERSION = "v1.353";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -10564,6 +10564,14 @@ async function loadCgroups() {
   }
 }
 
+// v1.353: journey-stage pill for a CGroup row (stage only — no daily-cohort
+// "no group" pill, which would be confusing here). Mirrors renderFerraPills.
+function cgStagePillHtml(tag) {
+  if (!tag) return "";
+  const stage = FERRA_TAG_STAGE[tag] || "setup";
+  const short = FERRA_TAG_SHORT[tag] || tag;
+  return `<span class="pill-sm stage-${stage}" title="${escapeHtml(tag)}">${escapeHtml(short)}</span>`;
+}
 function renderCgroupsList() {
   if (!chatList) return;
   if (cgroupsLoading && (cgroupsRows === null || cgroupsRows.length === 0)) {
@@ -10576,18 +10584,21 @@ function renderCgroupsList() {
   // customer's (or any user's) name or phone surfaces their group, not just a
   // group-name match. Matches surface at the top because non-matches drop out.
   const term = (searchInput?.value || "").trim().toLowerCase();
+  // subId(digits) -> subscription record — reused for both search and the
+  // per-row journey-stage pill.
+  const cgBySub = sharedSubs?.bySubscription || {};
+  const cgSubIndex = {};
+  for (const k in cgBySub) {
+    const d = String(cgBySub[k]?.customerId || "").replace(/\D/g, "");
+    if (d) cgSubIndex[d] = cgBySub[k];
+  }
+  const cgSubFor = (g) => cgSubIndex[String(g.subId || "").replace(/\D/g, "")] || null;
   let rows = all;
   if (term) {
     const termDigits = term.replace(/\D/g, "");
-    const bySub = sharedSubs?.bySubscription || {};
-    const subIndex = {}; // subId(digits) -> subscription record
-    for (const k in bySub) {
-      const d = String(bySub[k]?.customerId || "").replace(/\D/g, "");
-      if (d) subIndex[d] = bySub[k];
-    }
     const haystack = (g) => {
       const parts = [g.customerName, g.subId, g.groupName, g.lastMessage?.body];
-      const sub = subIndex[String(g.subId || "").replace(/\D/g, "")];
+      const sub = cgSubFor(g);
       if (sub) {
         parts.push(sub.customerName, sub.customerPhone);
         if (Array.isArray(sub.memberNames)) parts.push(...sub.memberNames);
@@ -10623,6 +10634,12 @@ function renderCgroupsList() {
       const previewWho = g.lastMessage?.fromMe ? `<span class="me">You: </span>` : "";
       const favored = isFavorite(chatKey);
       const active = chatKey === currentChatId ? " active" : "";
+      // Journey-stage pill from the group's owner subscription (same source as
+      // Trainer 1). Falls back to the sub record's status if byPhone misses.
+      const cgSub = cgSubFor(g);
+      const cgOwnerPhone = cgSub?.customerPhone || "";
+      const cgStageTag = (cgOwnerPhone && getSubscriptionTag(cgOwnerPhone)) || cgSub?.status || null;
+      const cgStagePill = cgStagePillHtml(cgStageTag);
       return `
       <div class="chat-row${active}${favored ? " favored" : ""}" data-key="${escapeHtml(chatKey)}">
         <div class="avatar">${escapeHtml(initial)}</div>
@@ -10635,6 +10652,7 @@ function renderCgroupsList() {
             <span class="preview">${previewWho}${escapeHtml(preview)}</span>
             <button class="star-btn${favored ? " on" : ""}" data-fav-key="${escapeHtml(chatKey)}" title="${favored ? "Remove from favorites" : "Add to favorites"}">${favored ? "★" : "☆"}</button>
           </div>
+          ${cgStagePill ? `<div class="pills">${cgStagePill}</div>` : ""}
         </div>
       </div>`;
     }).join("");

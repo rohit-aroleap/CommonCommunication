@@ -386,6 +386,41 @@ export function ChatsScreen() {
     | { kind: "divider"; key: string }
     | { kind: "cgroup"; key: string; cg: CgroupRow };
 
+  // v1.353: subId(digits) -> journey-stage bucket, for the CGroups stage pill.
+  const cgStageBySubId = useMemo<Record<string, string>>(() => {
+    const m: Record<string, string> = {};
+    subsByPhone.forEach((list) => {
+      for (const s of list) {
+        const d = String(s.customerId || "").replace(/\D/g, "");
+        if (!d || m[d]) continue;
+        const ph = s.customerPhone ? normalizeFerraPhone(s.customerPhone) : "";
+        const tag = (ph && sharedSubsByPhone?.[ph]) || s.status || "";
+        const stage = tag ? FERRA_TAG_STAGE[tag] : "";
+        if (stage) m[d] = stage;
+      }
+    });
+    return m;
+  }, [subsByPhone, sharedSubsByPhone]);
+
+  // CGroups journey-stage pill (bucket-level, matches Trainer 1; hides "active").
+  const renderCgStagePill = (stage: string | null) => {
+    if (!stage || stage === "active") return null;
+    const map: Record<string, { pill: any; txt: any }> = {
+      setup: { pill: styles.cgStageSetup, txt: styles.cgStageSetupTxt },
+      onboarding: { pill: styles.cgStageOnboarding, txt: styles.cgStageOnboardingTxt },
+      sa: { pill: styles.cgStageSa, txt: styles.cgStageSaTxt },
+      offboarding: { pill: styles.cgStageOffboarding, txt: styles.cgStageOffboardingTxt },
+    };
+    const c = map[stage];
+    if (!c) return null;
+    const label = stage[0].toUpperCase() + stage.slice(1);
+    return (
+      <View style={[styles.cgStagePill, c.pill]}>
+        <Text style={[styles.cgStagePillTxt, c.txt]}>{label}</Text>
+      </View>
+    );
+  };
+
   const listData = useMemo<ListItem[]>(() => {
     // v1.341: CGroups mode renders the live per-customer-group list (a separate
     // dataset, not the Periskope chat index), filtered by the search box.
@@ -569,6 +604,8 @@ export function ChatsScreen() {
             const g = item.cg;
             const chatKey = encodeKey(g.chatId);
             const favored = !!myFavorites[chatKey];
+            const cgStage =
+              cgStageBySubId[String(g.subId || "").replace(/\D/g, "")] || null;
             const cleanName = g.customerName
               .replace(/^(mr|mrs|ms|dr|prof)\.?\s*/i, "")
               .trim();
@@ -605,6 +642,7 @@ export function ChatsScreen() {
                     {g.lastMessage?.fromMe ? "You: " : ""}
                     {preview}
                   </Text>
+                  {renderCgStagePill(cgStage)}
                 </View>
                 <TouchableOpacity
                   onPress={() => toggleFavorite(chatKey)}
@@ -923,5 +961,21 @@ function makeStyles(colors: Colors) {
     cgStar: { paddingHorizontal: 4, paddingVertical: 4 },
     cgStarTxt: { fontSize: 20, color: colors.muted },
     cgStarOn: { color: "#f5b400" },
+    cgStagePill: {
+      alignSelf: "flex-start",
+      marginTop: 4,
+      paddingHorizontal: 7,
+      paddingVertical: 2,
+      borderRadius: 6,
+    },
+    cgStagePillTxt: { fontSize: 10.5, fontWeight: "700" },
+    cgStageSetup: { backgroundColor: colors.pillStageSetupBg },
+    cgStageSetupTxt: { color: colors.pillStageSetupFg },
+    cgStageOnboarding: { backgroundColor: colors.pillStageOnboardingBg },
+    cgStageOnboardingTxt: { color: colors.pillStageOnboardingFg },
+    cgStageSa: { backgroundColor: colors.pillStageSaBg },
+    cgStageSaTxt: { color: colors.pillStageSaFg },
+    cgStageOffboarding: { backgroundColor: colors.pillStageOffboardingBg },
+    cgStageOffboardingTxt: { color: colors.pillStageOffboardingFg },
   });
 }
