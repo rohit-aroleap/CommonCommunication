@@ -2019,10 +2019,14 @@ async function handleWebhook(request, env) {
 
   // Best-effort: if this is a group we haven't named yet, fetch the group name
   // from Periskope and write it. Webhook payloads don't include chat_name.
+  // Also capture the name into groupDisplayName so the push notification below
+  // can title itself with the customer/group name instead of a bare number.
+  let groupDisplayName = "";
   if (isGroup) {
     try {
       const existingMeta = await fbGet(env, `${ROOT}/chats/${encodeKey(chatId)}/meta`);
-      if (!existingMeta?.groupName) {
+      groupDisplayName = existingMeta?.groupName || "";
+      if (!groupDisplayName) {
         const cr = await fetch(`${PERISKOPE_BASE}/chats/${encodeURIComponent(chatId)}`, {
           headers: periskopeHeaders(env),
         });
@@ -2030,6 +2034,7 @@ async function handleWebhook(request, env) {
           const cj = await safeJson(cr);
           const chat = cj?.chat || cj;
           if (chat?.chat_name) {
+            groupDisplayName = chat.chat_name;
             await patchChatMeta(env, encodeKey(chatId), { groupName: chat.chat_name });
           }
         }
@@ -2097,9 +2102,16 @@ async function handleWebhook(request, env) {
   // ensures first-touch chats now have a ticket assigned to the admin
   // before this fanout fires.
   if (!isFromMe) {
-    const senderLabel = (!isGroup && senderName) ? senderName :
-                        (isGroup ? `Group ${chatIdToPhone(chatId)}` : chatIdToPhone(chatId));
-    const bodyText = mediaPreview(media, messageType, text);
+    // Group push title: prefer the customer name from the group name ("FERRA
+    // <sub> <name>" → "<name>"), falling back to the full group name, then the
+    // bare number. The body is prefixed with the individual sender.
+    const groupTitle = groupDisplayName
+      ? (groupDisplayName.replace(/^FERRA[\s-]+\d+\s+/i, "").trim() || groupDisplayName)
+      : `Group ${chatIdToPhone(chatId)}`;
+    const senderLabel = isGroup ? groupTitle
+                        : (senderName || chatIdToPhone(chatId));
+    const rawBody = mediaPreview(media, messageType, text);
+    const bodyText = (isGroup && senderName) ? `${senderName}: ${rawBody}` : rawBody;
     if (typeof globalThis.queueMicrotask === "function") {
       globalThis.queueMicrotask(() => {
         fanoutPush(env, {

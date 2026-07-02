@@ -426,6 +426,13 @@ export function ChatsScreen() {
           return qDigits.length >= 3 && text.replace(/\D/g, "").includes(qDigits);
         });
       }
+      // v1.352: pin starred groups to the top (mirrors Trainer 1), preserving
+      // updatedAt order within each partition.
+      const favTop: CgroupRow[] = [];
+      const favRest: CgroupRow[] = [];
+      for (const g of rows)
+        (myFavorites[encodeKey(g.chatId)] ? favTop : favRest).push(g);
+      rows = favTop.concat(favRest);
       return rows.map((g) => ({ kind: "cgroup", key: g.chatId, cg: g }));
     }
     // v1.330: Wati mode shows a pure Wati-recency list — no ticket/favorite
@@ -561,6 +568,7 @@ export function ChatsScreen() {
           if (item.kind === "cgroup") {
             const g = item.cg;
             const chatKey = encodeKey(g.chatId);
+            const favored = !!myFavorites[chatKey];
             const cleanName = g.customerName
               .replace(/^(mr|mrs|ms|dr|prof)\.?\s*/i, "")
               .trim();
@@ -598,6 +606,15 @@ export function ChatsScreen() {
                     {preview}
                   </Text>
                 </View>
+                <TouchableOpacity
+                  onPress={() => toggleFavorite(chatKey)}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  style={styles.cgStar}
+                >
+                  <Text style={[styles.cgStarTxt, favored && styles.cgStarOn]}>
+                    {favored ? "★" : "☆"}
+                  </Text>
+                </TouchableOpacity>
               </TouchableOpacity>
             );
           }
@@ -903,5 +920,8 @@ function makeStyles(colors: Colors) {
     cgName: { flex: 1, fontSize: 15, fontWeight: "600", color: colors.text },
     cgTime: { fontSize: 11, color: colors.muted, marginLeft: 6 },
     cgPreview: { fontSize: 13, color: colors.muted, marginTop: 2 },
+    cgStar: { paddingHorizontal: 4, paddingVertical: 4 },
+    cgStarTxt: { fontSize: 20, color: colors.muted },
+    cgStarOn: { color: "#f5b400" },
   });
 }

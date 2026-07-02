@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CommonCommunication v1.351</title>
+<title>CommonCommunication v1.352</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%AC%3C/text%3E%3C/svg%3E" />
 <style>
   :root {
@@ -3118,7 +3118,7 @@ const firebaseConfig = {
 const WORKER_URL = "https://common-communication.rohitpatel-mailid297.workers.dev";
 
 const ROOT = "commonComm";
-const APP_VERSION = "v1.351";
+const APP_VERSION = "v1.352";
 // v1.243: paint APP_VERSION into the two visible header/login chips at
 // load time so we have ONE source of truth — APP_VERSION above — instead
 // of three independently-edited strings that silently drifted (the
@@ -10602,10 +10602,17 @@ function renderCgroupsList() {
       return termDigits.length >= 3 && text.replace(/\D/g, "").includes(termDigits);
     });
   }
+  // v1.352: pin starred groups to the top (mirrors Trainer 1), preserving
+  // updatedAt order within each partition.
+  {
+    const favTop = [], favRest = [];
+    for (const g of rows) (isFavorite(encodeKey(g.chatId)) ? favTop : favRest).push(g);
+    rows = favTop.concat(favRest);
+  }
   const errHtml = cgroupsError
     ? `<div class="cg-hint" style="color:var(--danger,#c0392b);">⚠ ${escapeHtml(cgroupsError)} — <a href="#" id="cgRetry">retry</a></div>`
     : "";
-  const headHtml = `<div class="cg-hint">${all.length} customer group${all.length === 1 ? "" : "s"} on +91 91876 51332 · <a href="#" id="cgRefresh">refresh</a></div>`;
+  const headHtml = `<div class="cg-hint">${all.length} customer group${all.length === 1 ? "" : "s"} on +91 91876 51332 · <a href="#" id="cgNewGroup">+ New group</a> · <a href="#" id="cgRefresh">refresh</a></div>`;
   if (rows.length === 0 && !cgroupsError) {
     chatList.innerHTML = headHtml + `<div class="empty">${term ? "No CGroups match your search." : "No customer groups yet."}</div>`;
   } else {
@@ -10614,9 +10621,10 @@ function renderCgroupsList() {
       const initial = (g.customerName || "?").replace(/^(mr|mrs|ms|dr|prof)\.?\s*/i, "").trim().charAt(0).toUpperCase() || "?";
       const preview = (g.lastMessage?.body || "").replace(/\s+/g, " ").trim();
       const previewWho = g.lastMessage?.fromMe ? `<span class="me">You: </span>` : "";
+      const favored = isFavorite(chatKey);
       const active = chatKey === currentChatId ? " active" : "";
       return `
-      <div class="chat-row${active}" data-key="${escapeHtml(chatKey)}">
+      <div class="chat-row${active}${favored ? " favored" : ""}" data-key="${escapeHtml(chatKey)}">
         <div class="avatar">${escapeHtml(initial)}</div>
         <div class="meta">
           <div class="top">
@@ -10625,6 +10633,7 @@ function renderCgroupsList() {
           </div>
           <div class="bottom">
             <span class="preview">${previewWho}${escapeHtml(preview)}</span>
+            <button class="star-btn${favored ? " on" : ""}" data-fav-key="${escapeHtml(chatKey)}" title="${favored ? "Remove from favorites" : "Add to favorites"}">${favored ? "★" : "☆"}</button>
           </div>
         </div>
       </div>`;
@@ -10634,6 +10643,14 @@ function renderCgroupsList() {
   chatList.querySelectorAll(".chat-row").forEach(el => {
     el.onclick = () => openChat(el.dataset.key);
   });
+  // Star toggles pin the group to the top AND opt the trainer into push
+  // notifications for it (worker resolvePushTargetUids reads the same favorites).
+  chatList.querySelectorAll(".star-btn").forEach(btn => {
+    btn.onclick = (e) => { e.stopPropagation(); toggleFavorite(btn.dataset.favKey); };
+  });
+  // "+ New group" reuses the All Groups console (create / add lines / make admins).
+  const newGroupLink = document.getElementById("cgNewGroup");
+  if (newGroupLink) newGroupLink.onclick = (e) => { e.preventDefault(); openGroupsModal(); };
   const refreshLink = document.getElementById("cgRefresh");
   if (refreshLink) refreshLink.onclick = (e) => { e.preventDefault(); cgroupsRows = null; loadCgroups(); };
   const retryLink = document.getElementById("cgRetry");
