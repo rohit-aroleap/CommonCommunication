@@ -5,11 +5,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, FlatList, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { space, useStyles, type Colors } from "@/theme";
+import { space, useStyles, useTheme, type Colors } from "@/theme";
 import { useAppData, isDailyGroup, type CgroupRow } from "@/data/AppDataContext";
 import { useAuth } from "@/auth/AuthContext";
 import { resolveDisplayName } from "@/lib/displayName";
-import { ChatRowItem } from "@/components/ChatRow";
+import { ChatRowItem, claimInitials, CLAIM_BLUE } from "@/components/ChatRow";
 import { cohortPhoneKey, useCohorts } from "@/lib/cohorts";
 import { useDailyTextOnly } from "@/lib/dailyTextOnly";
 import { FilterBar } from "@/components/FilterBar";
@@ -67,6 +67,7 @@ export function ChatsScreen() {
     cgroups,
     cgroupsLoading,
     loadCgroups,
+    claims,
   } = useAppData();
   const { user } = useAuth();
 
@@ -119,6 +120,7 @@ export function ChatsScreen() {
   // v1.196: limited-trainer "Add customer" modal state.
   const [addCustomerOpen, setAddCustomerOpen] = useState(false);
   const styles = useStyles(makeStyles);
+  const { colors } = useTheme(); // v1.355: claim status-light avatar colours
 
   // v1.146: warn the user if their phone doesn't have a Groq API key set.
   // Without it, voice-note transcription silently falls back to the slow
@@ -609,7 +611,23 @@ export function ChatsScreen() {
             const cleanName = g.customerName
               .replace(/^(mr|mrs|ms|dr|prof)\.?\s*/i, "")
               .trim();
-            const initial = (cleanName || "?").charAt(0).toUpperCase() || "?";
+            // v1.355: claim/ticket status-light avatar (parity with web).
+            const cgClaim = claims[chatKey];
+            const cgClaimed = !!cgClaim?.uid;
+            const cgHasTicket = Object.values(tickets).some(
+              (t) =>
+                t &&
+                t.status === "open" &&
+                String(t.anchorChatId || "").replace(/[.#$\[\]\/]/g, "_") ===
+                  chatKey,
+            );
+            const cgSplit = cgClaimed && cgHasTicket;
+            const cgAvatarBg = cgHasTicket
+              ? colors.red
+              : cgClaimed
+                ? CLAIM_BLUE
+                : colors.green;
+            const initial = cgClaimed ? claimInitials(cgClaim?.name || "") : "";
             const preview = (g.lastMessage?.body || "").replace(/\s+/g, " ").trim();
             const when = g.updatedAt ? new Date(g.updatedAt).getTime() : undefined;
             return (
@@ -623,7 +641,8 @@ export function ChatsScreen() {
                   })
                 }
               >
-                <View style={styles.cgAvatar}>
+                <View style={[styles.cgAvatar, { backgroundColor: cgAvatarBg }]}>
+                  {cgSplit && <View style={styles.cgAvatarSplitLeft} />}
                   <Text style={styles.cgAvatarTxt}>{initial}</Text>
                 </View>
                 <View style={styles.cgBody}>
@@ -712,6 +731,7 @@ export function ChatsScreen() {
               stage={stage}
               hasOpenTicket={hasOpenTicket}
               myTicket={myTicket}
+              claim={claims[r.chatKey] || null}
               unread={unread}
               isFavorite={isFavorite}
               suggestPin={suggestPin}
@@ -930,6 +950,16 @@ function makeStyles(colors: Colors) {
       backgroundColor: colors.green,
       alignItems: "center",
       justifyContent: "center",
+      overflow: "hidden", // clips the half-blue claim overlay to the circle
+    },
+    // v1.355: left half painted blue over the red base = claimed + open ticket.
+    cgAvatarSplitLeft: {
+      position: "absolute",
+      left: 0,
+      top: 0,
+      bottom: 0,
+      width: 22,
+      backgroundColor: CLAIM_BLUE,
     },
     cgAvatarTxt: { color: "white", fontSize: 18, fontWeight: "700" },
     cgBody: { flex: 1, minWidth: 0 },

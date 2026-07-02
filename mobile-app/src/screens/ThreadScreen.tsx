@@ -94,6 +94,7 @@ import { MessageBubble } from "@/components/MessageBubble";
 import { TicketBanner } from "@/components/TicketBanner";
 import { CreateTicketModal } from "@/components/CreateTicketModal";
 import { ReassignModal } from "@/components/ReassignModal";
+import { ClaimModal } from "@/components/ClaimModal";
 import { SummaryModal } from "@/components/SummaryModal";
 import { MediaViewerModal } from "@/components/MediaViewerModal";
 import { ActivityIndicator } from "react-native";
@@ -194,6 +195,7 @@ export function ThreadScreen({ route, navigation }: Props) {
     templates,
     channelAccess,
     watiTemplateAllowed,
+    claims,
   } = useAppData();
 
   // v1.188: orphan-free teamUsers for assignee pickers. See lib/teamFilter
@@ -413,6 +415,8 @@ export function ThreadScreen({ route, navigation }: Props) {
   // possible future use.
   const [ticketCreateFor, setTicketCreateFor] = useState<Message | null>(null);
   const [reassignTicket, setReassignTicket] = useState<Ticket | null>(null);
+  // v1.355: claim picker (🙋 header button).
+  const [claimOpen, setClaimOpen] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [attachBusy, setAttachBusy] = useState(false);
   // v1.184: composer selection tracking for the contextual format toolbar.
@@ -732,6 +736,14 @@ export function ThreadScreen({ route, navigation }: Props) {
                   <Text style={styles.headerPillTxt}>Details</Text>
                 </TouchableOpacity>
               )}
+              {/* v1.355: claim / assign this chat (parity with web's 🙋). */}
+              <TouchableOpacity
+                accessibilityLabel="Claim chat"
+                onPress={() => setClaimOpen(true)}
+                style={styles.headerBtn}
+              >
+                <Text style={styles.headerBtnTxt}>🙋</Text>
+              </TouchableOpacity>
               <TouchableOpacity
                 accessibilityLabel="Summarize"
                 onPress={() => setSummaryOpen(true)}
@@ -2782,6 +2794,17 @@ export function ThreadScreen({ route, navigation }: Props) {
         teamUsers={teamUsersAllowed}
         teamMembers={teamMembers}
         onClose={() => setReassignTicket(null)}
+      />
+
+      <ClaimModal
+        visible={claimOpen}
+        chatKey={chatKey}
+        claim={claims[chatKey] || null}
+        currentUid={user?.uid ?? ""}
+        currentName={user?.displayName || user?.email || ""}
+        teamUsers={teamUsersAllowed}
+        teamMembers={teamMembers}
+        onClose={() => setClaimOpen(false)}
       />
 
       <SummaryModal

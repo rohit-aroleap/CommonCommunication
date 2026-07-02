@@ -158,6 +158,14 @@ export interface Message {
   raw?: any;
 }
 
+// v1.355: per-chat claim — who has taken ownership of a chat (separate from
+// tickets). Lives at commonComm/claims/{chatKey}; shared with the web app.
+export interface ChatClaim {
+  uid: string;
+  name?: string;
+  at?: number;
+}
+
 export interface Ticket {
   id: string;
   title: string;

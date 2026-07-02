@@ -12,7 +12,18 @@ import {
   type ViewStyle,
 } from "react-native";
 import { space, useStyles, useTheme, type Colors } from "@/theme";
-import type { ChatRow as ChatRowT } from "@/types";
+import type { ChatClaim, ChatRow as ChatRowT } from "@/types";
+
+// v1.355: two-letter tag for the claimer — first letters of the first two
+// words, else the first two chars (single-word names still show 2 letters).
+export function claimInitials(name: string): string {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return String(name || "").trim().slice(0, 2).toUpperCase() || "?";
+}
+
+// Shared claim-avatar blue (matches web's #2563eb).
+export const CLAIM_BLUE = "#2563eb";
 
 interface Props {
   row: ChatRowT;
@@ -21,6 +32,8 @@ interface Props {
   stage: string | null;
   hasOpenTicket: boolean;
   myTicket: boolean;
+  // v1.355: who claimed this chat (null/undefined = unclaimed).
+  claim?: ChatClaim | null;
   unread: boolean;
   isFavorite: boolean;
   suggestPin: boolean;
@@ -42,6 +55,7 @@ export function ChatRowItem({
   stage,
   hasOpenTicket,
   myTicket,
+  claim,
   unread,
   isFavorite,
   suggestPin,
@@ -53,14 +67,21 @@ export function ChatRowItem({
   const { colors } = useTheme();
   const styles = useStyles(makeStyles);
   const isGroup = row.chatType === "group";
+  // v1.355: the avatar is a claim/ticket status light (matches web v1.354):
+  //   green (blank)      = unclaimed, no open ticket
+  //   blue + 2 letters   = claimed (claimer's initials)
+  //   half blue/red      = claimed AND open ticket
+  //   full red (blank)   = unclaimed, open ticket
+  const claimed = !!claim?.uid;
+  const claimSplit = claimed && hasOpenTicket;
   const avatarBg: ViewStyle = {
     backgroundColor: hasOpenTicket
       ? colors.red
-      : isGroup
-      ? "#6b7280"
+      : claimed
+      ? CLAIM_BLUE
       : colors.green,
   };
-  const avatarChar = isGroup ? "👥" : initial(name);
+  const avatarChar = claimed ? claimInitials(claim?.name || "") : "";
 
   // v1.291: Text-only mode shows the latest TEXT (+ its sender) and that
   // text's timestamp, instead of the latest photo.
@@ -109,6 +130,7 @@ export function ChatRowItem({
   return (
     <TouchableOpacity onPress={onPress} style={styles.row} activeOpacity={0.6}>
       <View style={[styles.avatar, avatarBg]}>
+        {claimSplit && <View style={styles.avatarSplitLeft} />}
         <Text style={styles.avatarTxt}>{avatarChar}</Text>
       </View>
       <View style={styles.col}>
@@ -312,8 +334,18 @@ function makeStyles(colors: Colors) {
       borderRadius: 22,
       alignItems: "center",
       justifyContent: "center",
+      overflow: "hidden", // clips the half-blue claim overlay to the circle
     },
-    avatarTxt: { color: "white", fontSize: 18, fontWeight: "500" },
+    // v1.355: left half painted blue over the red base = claimed + open ticket.
+    avatarSplitLeft: {
+      position: "absolute",
+      left: 0,
+      top: 0,
+      bottom: 0,
+      width: 22,
+      backgroundColor: CLAIM_BLUE,
+    },
+    avatarTxt: { color: "white", fontSize: 18, fontWeight: "600" },
     col: { flex: 1, minWidth: 0, gap: 2 },
     topLine: { flexDirection: "row", alignItems: "center" },
     // v1.167: name was flex:1 which forced it to consume all horizontal

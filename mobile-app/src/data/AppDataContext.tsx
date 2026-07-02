@@ -33,6 +33,7 @@ import { nextSendActivity } from "@/lib/favorites";
 import { resolveTeammateName } from "@/lib/teamFilter";
 import { cacheGet, cacheSet } from "@/data/cache";
 import type {
+  ChatClaim,
   ChatMeta,
   ChatRow,
   ChatType,
@@ -76,6 +77,8 @@ interface AppDataValue {
   chatRows: ChatRow[];
   chatMetaByKey: Record<string, ChatMeta>;
   tickets: Record<string, Ticket>;
+  // v1.355: chatKey -> claim (who owns this chat). Shared with web.
+  claims: Record<string, ChatClaim>;
   teamUsers: Record<string, TeamUser>;
   teamMembers: Record<string, TeamMember>;
   teamPhones: Set<string>; // digits-only normalized phones from teamMembers
@@ -236,6 +239,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
   const [cgroups, setCgroups] = useState<CgroupRow[] | null>(null);
   const [cgroupsLoading, setCgroupsLoading] = useState(false);
   const [tickets, setTickets] = useState<Record<string, Ticket>>({});
+  const [claims, setClaims] = useState<Record<string, ChatClaim>>({});
   const [teamUsers, setTeamUsers] = useState<Record<string, TeamUser>>({});
   const [teamMembers, setTeamMembers] = useState<Record<string, TeamMember>>({});
   // v1.196: my own /userGrants subtree. Used by the limited-trainer chat
@@ -360,6 +364,12 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
           const v = (s.val() || {}) as Record<string, Ticket>;
           setTickets(v);
           cacheSet(uid, "tickets", v);
+        }),
+      );
+      // v1.355: per-chat claims — small flat map, shared with the web app.
+      unsubs.push(
+        onValue(ref(db, `${ROOT}/claims`), (s) => {
+          setClaims((s.val() || {}) as Record<string, ChatClaim>);
         }),
       );
       unsubs.push(
@@ -844,6 +854,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       chatRows,
       chatMetaByKey,
       tickets,
+      claims,
       teamUsers,
       teamMembers,
       teamPhones,
@@ -883,6 +894,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       chatRows,
       chatMetaByKey,
       tickets,
+      claims,
       teamUsers,
       teamMembers,
       teamPhones,
