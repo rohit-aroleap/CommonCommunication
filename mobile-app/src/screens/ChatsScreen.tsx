@@ -388,21 +388,27 @@ export function ChatsScreen() {
     | { kind: "divider"; key: string }
     | { kind: "cgroup"; key: string; cg: CgroupRow };
 
-  // v1.353: subId(digits) -> journey-stage bucket, for the CGroups stage pill.
-  const cgStageBySubId = useMemo<Record<string, string>>(() => {
-    const m: Record<string, string> = {};
+  // v1.353: subId(digits) -> journey-stage bucket for the CGroups stage pill.
+  // v1.356: also carries the owner's subscription STATUS so the FilterBar's
+  // status + stage filters work on the CGroups tab like they do on Trainer 1.
+  const cgMetaBySubId = useMemo<
+    Record<string, { stage: string | null; status: string | null }>
+  >(() => {
+    const m: Record<string, { stage: string | null; status: string | null }> =
+      {};
     subsByPhone.forEach((list) => {
       for (const s of list) {
         const d = String(s.customerId || "").replace(/\D/g, "");
         if (!d || m[d]) continue;
         const ph = s.customerPhone ? normalizeFerraPhone(s.customerPhone) : "";
         const tag = (ph && sharedSubsByPhone?.[ph]) || s.status || "";
-        const stage = tag ? FERRA_TAG_STAGE[tag] : "";
-        if (stage) m[d] = stage;
+        const stage = (tag && FERRA_TAG_STAGE[tag]) || null;
+        const status = (ph && ferraIndex.phoneToStatus[ph]) || null;
+        m[d] = { stage, status };
       }
     });
     return m;
-  }, [subsByPhone, sharedSubsByPhone]);
+  }, [subsByPhone, sharedSubsByPhone, ferraIndex]);
 
   // CGroups journey-stage pill (bucket-level, matches Trainer 1; hides "active").
   const renderCgStagePill = (stage: string | null) => {
@@ -430,6 +436,27 @@ export function ChatsScreen() {
       const all = cgroups || [];
       const q = search.trim().toLowerCase();
       let rows = all;
+      // v1.356: honor the FilterBar on CGroups too (was search-only). Stage +
+      // status resolve via the group's owner subscription; ⭐ Favorites keeps
+      // only starred groups. The "Daily Groups" status sentinel doesn't apply
+      // to customer groups — ignore it rather than blanking the list.
+      if (favoritesOnly) {
+        rows = rows.filter((g) => myFavorites[encodeKey(g.chatId)]);
+      }
+      if (statusFilter && statusFilter !== DAILY_SENTINEL) {
+        rows = rows.filter(
+          (g) =>
+            cgMetaBySubId[String(g.subId || "").replace(/\D/g, "")]?.status ===
+            statusFilter,
+        );
+      }
+      if (stageFilter) {
+        rows = rows.filter(
+          (g) =>
+            cgMetaBySubId[String(g.subId || "").replace(/\D/g, "")]?.stage ===
+            stageFilter,
+        );
+      }
       if (q) {
         // v1.351 parity: search the group AND its subscription — owner name/
         // phone + every member's name/phone + the subId — so typing a customer
@@ -529,7 +556,7 @@ export function ChatsScreen() {
       items.push({ kind: "row", key: r.row.chatKey, item: r });
     }
     return items;
-  }, [filtered, myFavorites, myTicketChatKeys, favoritesOnly, watiMode, watiActivityFor, cgroupsMode, cgroups, search, subsByPhone]);
+  }, [filtered, myFavorites, myTicketChatKeys, favoritesOnly, watiMode, watiActivityFor, cgroupsMode, cgroups, search, subsByPhone, stageFilter, statusFilter, cgMetaBySubId]);
 
   // v1.163: edges={[]} — was edges={["top"]} which double-counted the
   // status-bar inset on Android. The React Navigation Stack header
@@ -607,7 +634,8 @@ export function ChatsScreen() {
             const chatKey = encodeKey(g.chatId);
             const favored = !!myFavorites[chatKey];
             const cgStage =
-              cgStageBySubId[String(g.subId || "").replace(/\D/g, "")] || null;
+              cgMetaBySubId[String(g.subId || "").replace(/\D/g, "")]?.stage ||
+              null;
             const cleanName = g.customerName
               .replace(/^(mr|mrs|ms|dr|prof)\.?\s*/i, "")
               .trim();
